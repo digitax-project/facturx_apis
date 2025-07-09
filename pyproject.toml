@@ -1,0 +1,46 @@
+[project]
+name = "factur-x"
+version = "3.6"
+description = "Factur-X and Order-X: electronic invoicing and ordering standards"
+authors = [{name = "Alexis de Lattre", email = "alexis.delattre@akretion.com"}]
+readme = "README.rst"
+classifiers = [
+    "Programming Language :: Python",
+    "Topic :: Office/Business :: Financial :: Accounting",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+keywords = ["e-invoice", "ZUGFeRD", "Factur-X", "Order-X", "e-procurement"]
+license = {file = "LICENSE"}
+requires-python = ">=3.7"
+dynamic = ["dependencies"]
+
+# Needed if we enable facturx-webservice
+# [project.optional-dependencies]
+# web = [
+#    "flask"
+# ]
+
+[project.urls]
+Homepage = "https://github.com/akretion/factur-x"
+Source = "https://github.com/akretion/factur-x"
+Issues = "https://github.com/akretion/factur-x/issues"
+
+[project.scripts]
+facturx-pdfgen = "facturx.scripts.pdfgen:main"
+facturx-pdfextractxml = "facturx.scripts.pdfextractxml:main"
+facturx-xmlcheck = "facturx.scripts.xmlcheck:main"
+# I consider the webservice scripts as a proof of concept, not real clean code
+# facturx-webservice = "facturx.scripts.webservice:main"
+
+[build-system]
+requires = ["hatchling", "hatch-requirements-txt"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["requirements.txt"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["facturx"]
