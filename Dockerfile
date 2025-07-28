@@ -15,6 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the code
 COPY . .
 
+# Set environment variables for Docker
+ENV FACTURX_HOST=0.0.0.0
+ENV FACTURX_PORT=6969
+
 # Expose the API port (adjust if needed)
 EXPOSE 6969
 
