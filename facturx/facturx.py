@@ -41,8 +41,12 @@ import mimetypes
 import hashlib
 import logging
 
-
-VERSION = importlib.metadata.version("factur-x")
+try:
+    VERSION = importlib.metadata.version("factur-x")
+except importlib.metadata.PackageNotFoundError:
+    # Fallback version when package is not installed (development mode)
+    VERSION = "3.6"
+    
 FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger('factur-x')
