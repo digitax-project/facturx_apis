@@ -25,6 +25,7 @@ unversioned n8n code.
 | DOC-004 | Source hash is recorded and duplicate intake is detected | deterministic |
 | DOC-005 | Structured, hybrid-PDF, plain-PDF, and unsupported input are distinguished | Factur-X/API |
 | DOC-006 | Malware/security scan completed where configured | security service |
+| DOC-007 | Overall extraction confidence is sufficient for a reliable assessment, independent of any individual field's confidence | API (control profile) |
 
 ### Structured e-invoice controls
 

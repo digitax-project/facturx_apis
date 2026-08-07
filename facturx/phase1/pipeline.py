@@ -24,6 +24,7 @@ from .controls.executor import (
     ControlResult,
     evaluate_content_controls,
     evaluate_doc_001,
+    evaluate_extraction_confidence,
     evaluate_org_001,
     evaluate_str_003,
     not_run_result,
@@ -123,6 +124,21 @@ def _is_format_supported(inspection: DocumentInspection) -> bool:
     return inspection.detected_format in ("factur-x", "pdf")
 
 
+# EN16931 is the only Factur-X profile the starter control profile has been
+# tested against (per the reviewed Stage 1 decision). minimum/basicwl/basic/
+# extended are legitimately valid Factur-X -- distinct from an unsupported
+# *format* like xrechnung -- just not yet processable here; see DOC-001's
+# UNSUPPORTED_PROFILE reason code and capabilities.py's recognized vs.
+# processable levels.
+_PROCESSABLE_FACTURX_PROFILES = ("EN16931",)
+
+
+def _is_profile_supported(inspection: DocumentInspection) -> bool:
+    if inspection.detected_format != "factur-x":
+        return True
+    return inspection.profile in _PROCESSABLE_FACTURX_PROFILES
+
+
 @dataclass
 class _ExtractionOutcome:
     canonical_invoice: dict
@@ -208,6 +224,8 @@ def process_invoice(
         inspection.encrypted,
         _is_format_supported(inspection),
         inspection.detected_format,
+        _is_profile_supported(inspection),
+        inspection.profile,
     )
 
     if doc_001.outcome != "passed":
@@ -227,6 +245,9 @@ def process_invoice(
         return outcome.canonical_invoice, report
 
     controls = [doc_001, evaluate_str_003(outcome.structured_validation)]
+    controls.append(
+        evaluate_extraction_confidence(outcome.canonical_invoice["extraction"]["overallConfidence"])
+    )
     controls += evaluate_content_controls(outcome.invoice, outcome.field_evidence)
     controls.append(evaluate_org_001(outcome.invoice, outcome.field_evidence, master_data))
 
@@ -243,6 +264,12 @@ def normalize_invoice(
 ) -> dict:
     """Returns a schema-valid canonical_invoice only -- no controls, no
     organization context required (POST /v1/invoices/normalize)."""
+    # Deliberately NOT profile-gated here (unlike process_invoice): this
+    # endpoint runs no controls and produces no aggregated report, so the
+    # "only EN16931 is processable" restriction -- which is about whether
+    # the starter control profile has been tested against a given profile
+    # -- doesn't apply. A recognized Factur-X document at any profile level
+    # can still be normalized.
     inspection = inspect_document(file_bytes, filename, content_type)
     doc_001 = evaluate_doc_001(
         inspection.readable,

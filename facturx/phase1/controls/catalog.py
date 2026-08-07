@@ -34,6 +34,13 @@ CATALOG: dict[str, ControlDefinition] = {
         "1.07.2",
         selected_in_starter_profile=True,
     ),
+    "DOC-007": ControlDefinition(
+        "DOC-007",
+        "Overall extraction confidence sufficient for reliable assessment",
+        "blocking",
+        "1.0.0",
+        selected_in_starter_profile=True,
+    ),
     "STR-004": ControlDefinition(
         "STR-004",
         "Official structured business rules (Schematron) satisfied",

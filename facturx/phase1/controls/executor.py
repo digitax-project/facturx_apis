@@ -55,7 +55,14 @@ def not_run_result(control_id: str, message: str) -> ControlResult:
     )
 
 
-def evaluate_doc_001(readable: bool, encrypted: bool, format_supported: bool = True, detected_format: str = "") -> ControlResult:
+def evaluate_doc_001(
+    readable: bool,
+    encrypted: bool,
+    format_supported: bool = True,
+    detected_format: str = "",
+    profile_supported: bool = True,
+    profile: str | None = None,
+) -> ControlResult:
     definition = CATALOG["DOC-001"]
     if not readable:
         return ControlResult(
@@ -76,6 +83,20 @@ def evaluate_doc_001(readable: bool, encrypted: bool, format_supported: bool = T
             message=f"detectedFormat={detected_format!r} is not supported by the "
             "Phase 1 starter profile.",
         )
+    if not profile_supported:
+        # Distinct from UNSUPPORTED_FORMAT: the format itself (Factur-X) is
+        # recognized, but only the EN16931 profile is processable by the
+        # starter control profile for now -- minimum/basicwl/basic/extended
+        # invoices are legitimately valid Factur-X, just not yet supported
+        # by our content controls (see docs/invoice_phase1/control_catalog.md
+        # profile-applicability note). XRechnung stays on the separate
+        # UNSUPPORTED_FORMAT path above, unaffected by this check.
+        return ControlResult(
+            "DOC-001", definition.title, "failed", definition.failure_severity,
+            reason_codes=["UNSUPPORTED_PROFILE"], rule_version=definition.rule_version,
+            message=f"profile={profile!r} is not yet processable; only EN16931 is "
+            "supported by the Phase 1 starter profile.",
+        )
     return ControlResult("DOC-001", definition.title, "passed", "none", rule_version=definition.rule_version)
 
 
@@ -93,6 +114,29 @@ def evaluate_str_003(structured_validation: StructuredValidationResult | None) -
         reason_codes=["XSD_INVALID"], rule_version=definition.rule_version,
         message=structured_validation.xsd_message,
     )
+
+
+def evaluate_extraction_confidence(
+    overall_confidence: float, threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
+) -> ControlResult:
+    """Defense in depth alongside the per-field confidence checks: an
+    extraction adapter could in principle report high confidence on every
+    individual field while its own overall confidence signal says the
+    extraction as a whole shouldn't be trusted (a systemic scan-quality
+    issue, a partial/garbled read, an adapter bug). Per-field checks alone
+    wouldn't catch that -- this does, using the same 0.70 floor as
+    everything else, per the reviewed decision to not lower it without
+    benchmark evidence.
+    """
+    definition = CATALOG["DOC-007"]
+    if overall_confidence < threshold:
+        return ControlResult(
+            "DOC-007", definition.title, "not_reliable", definition.failure_severity,
+            reason_codes=["LOW_OVERALL_CONFIDENCE"], rule_version=definition.rule_version,
+            message=f"Overall extraction confidence {overall_confidence:.2f} is below "
+            f"the {threshold:.2f} reliability threshold.",
+        )
+    return ControlResult("DOC-007", definition.title, "passed", "none", rule_version=definition.rule_version)
 
 
 def _confidence(field_evidence: dict, key: str) -> float:
@@ -322,7 +366,8 @@ def evaluate_org_001(invoice: dict, field_evidence: dict, master_data: dict, thr
     buyer_street = _check(address["street"], field_evidence, "invoice.buyer.address.street", threshold)
     buyer_postal = _check(address["postalCode"], field_evidence, "invoice.buyer.address.postalCode", threshold)
     buyer_city = _check(address["city"], field_evidence, "invoice.buyer.address.city", threshold)
-    combined = _combine([buyer_name, buyer_street, buyer_postal, buyer_city])
+    buyer_country = _check(address["countryCode"], field_evidence, "invoice.buyer.address.countryCode", threshold)
+    combined = _combine([buyer_name, buyer_street, buyer_postal, buyer_city, buyer_country])
     if combined[0] != "passed":
         return _build("ORG-001", *combined)
 
@@ -331,6 +376,7 @@ def evaluate_org_001(invoice: dict, field_evidence: dict, master_data: dict, thr
         and _normalize_for_match(address["street"]) == _normalize_for_match(master_data["street"])
         and _normalize_for_match(address["postalCode"]) == _normalize_for_match(master_data["postalCode"])
         and _normalize_for_match(address["city"]) == _normalize_for_match(master_data["city"])
+        and _normalize_for_match(address["countryCode"]) == _normalize_for_match(master_data["countryCode"])
     )
     if not matches:
         return _build("ORG-001", "failed", ["MASTER_DATA_MISMATCH"], combined[2])

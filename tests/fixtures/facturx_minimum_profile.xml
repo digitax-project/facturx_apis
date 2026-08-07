@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- A well-formed Factur-X document declaring the MINIMUM profile via its
+     Guideline ID. This fixture exists to test profile narrowing: only
+     EN16931 is processable by the Phase 1 starter control profile (see
+     evaluate_doc_001's UNSUPPORTED_PROFILE branch), so this must be rejected
+     before structured validation/normalization ever runs; it does not
+     need to be valid against the (much sparser) MINIMUM XSD, since that
+     check is never reached. -->
+<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100" xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:factur-x.eu:1p0:minimum</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+  <rsm:ExchangedDocument>
+    <ram:ID>UX-MIN-001</ram:ID>
+    <ram:TypeCode>380</ram:TypeCode>
+    <ram:IssueDateTime>
+      <udt:DateTimeString format="102">20260805</udt:DateTimeString>
+    </ram:IssueDateTime>
+  </rsm:ExchangedDocument>
+</rsm:CrossIndustryInvoice>

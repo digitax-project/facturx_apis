@@ -365,3 +365,126 @@ def test_pdf_field_never_extracted_is_not_reliable_not_missing(client, blank_pdf
     cal_002 = next(c for c in report["controls"] if c["controlId"] == "CAL-002")
     assert cal_002["outcome"] == "not_reliable"
     assert "MISSING_FIELD" not in cal_002["reasonCodes"]
+
+
+def test_overall_confidence_forces_nicht_pruefbar_even_when_every_field_looks_confident(
+    client, blank_pdf_bytes
+):
+    """Defense in depth: an adapter could in principle report high
+    confidence on every individual field while its own overall-confidence
+    signal says the extraction as a whole shouldn't be trusted (garbled
+    scan, partial read, adapter bug). Per-field checks alone wouldn't catch
+    that -- DOC-007 (evaluate_extraction_confidence) must."""
+    fields = _happy_path_fields()  # every field individually high-confidence
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.5, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, blank_pdf_bytes)
+
+    report = body["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    assert report["routing"] == "prioritized_review"
+    doc_007 = next(c for c in report["controls"] if c["controlId"] == "DOC-007")
+    assert doc_007["outcome"] == "not_reliable"
+    assert "LOW_OVERALL_CONFIDENCE" in doc_007["reasonCodes"]
+    # and every per-field control genuinely did pass on its own -- proves
+    # this is DOC-007 catching something the per-field checks would have missed
+    frm_005 = next(c for c in report["controls"] if c["controlId"] == "FRM-005")
+    assert frm_005["outcome"] == "passed"
+
+
+def test_cal002_low_confidence_charge_is_not_reliable_not_a_false_green(client, blank_pdf_bytes):
+    """A low-confidence but non-zero chargeTotal must not be silently
+    ignored (treated as absent -> 0 -> CAL-002 runs its normal check and
+    could pass) nor silently trusted as a real 0. It must route to
+    not_reliable, same as any other low-confidence amount."""
+    fields = _happy_path_fields()
+    fields["invoice.totals.chargeTotal"] = _f(5.0, confidence=0.4)
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.85, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, blank_pdf_bytes)
+
+    report = body["phase1ControlReport"]
+    cal_002 = next(c for c in report["controls"] if c["controlId"] == "CAL-002")
+    assert cal_002["outcome"] == "not_reliable"
+    assert cal_002["outcome"] not in ("passed", "not_applicable")
+    assert "LOW_CONFIDENCE_EXTRACTION" in cal_002["reasonCodes"]
+    assert report["status"] == "nicht_pruefbar"
+
+
+def test_org001_buyer_country_mismatch_fails(client, blank_pdf_bytes):
+    """ORG-001 must compare buyer countryCode too, not just
+    name/street/postalCode/city -- a foreign buyer address with an otherwise
+    matching name/street/postal/city text is still not the same organization."""
+    fields = _happy_path_fields()
+    fields["invoice.buyer.address.countryCode"] = _f("FR", confidence=0.95)
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, blank_pdf_bytes)
+
+    report = body["phase1ControlReport"]
+    org_001 = next(c for c in report["controls"] if c["controlId"] == "ORG-001")
+    assert org_001["outcome"] == "failed"
+    assert "MASTER_DATA_MISMATCH" in org_001["reasonCodes"]
+    assert report["status"] == "klaerung_erforderlich"
+
+
+def test_factur_x_minimum_profile_is_unsupported_profile_not_unsupported_format(client):
+    """Only EN16931 is processable by the starter control profile (reviewed
+    Stage 1 decision). A recognized-but-not-yet-processable Factur-X profile
+    (MINIMUM here) must get its own UNSUPPORTED_PROFILE reason code --
+    distinct from UNSUPPORTED_FORMAT, which is for formats that aren't
+    recognized as Factur-X at all (e.g. XRechnung, unknown XML)."""
+    xml_bytes = (Path(__file__).parent / "fixtures" / "facturx_minimum_profile.xml").read_bytes()
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", xml_bytes, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    doc_001 = next(c for c in report["controls"] if c["controlId"] == "DOC-001")
+    assert doc_001["outcome"] == "failed"
+    assert "UNSUPPORTED_PROFILE" in doc_001["reasonCodes"]
+    assert "UNSUPPORTED_FORMAT" not in doc_001["reasonCodes"]
+
+
+def test_capabilities_distinguishes_recognized_from_processable_profiles(client):
+    response = client.get("/capabilities")
+    assert response.status_code == 200
+    factur_x = response.json()["structuredFormats"]["factur-x"]
+    assert factur_x["processableLevels"] == ["en16931"]
+    assert set(factur_x["recognizedLevels"]) == {
+        "minimum", "basicwl", "basic", "en16931", "extended",
+    }
+    assert set(factur_x["processableLevels"]).issubset(set(factur_x["recognizedLevels"]))
