@@ -37,9 +37,70 @@ API for Factur-X PDF generation, XML extraction and validation.
 
 ## API Endpoints
 
+### Legacy Factur-X/Order-X endpoints
+
 - `/facturx-pdfgen` - Generate a Factur-X or Order-X PDF
 - `/facturx-pdfextractxml` - Extract XML from a Factur-X or Order-X PDF
 - `/facturx-xmlcheck` - Validate Factur-X or Order-X XML
+
+### DigiTax Phase 1 invoice-preprocessing endpoints
+
+See `docs/invoice_phase1/` for the full specification. These endpoints
+inspect, validate, and normalize a Factur-X/ZUGFeRD or plain-PDF invoice into
+a shared canonical contract, run the same starter control profile against
+both, and return a schema-valid control report. They never approve, reject,
+book, pay, or contact a supplier -- Phase 1 ends at a report for human
+review.
+
+- `GET /health`
+- `GET /capabilities` - supported formats/versions, the active control
+  profile, and known limitations (see below)
+- `POST /v1/invoices/inspect` - detect source type, format, and version
+- `POST /v1/invoices/normalize` - extract/normalize into `canonicalInvoice`
+  only, no controls run, no organization context required
+- `POST /v1/invoices/validate` - XSD findings for a structured document
+  (`applicable: false` for a plain PDF); Schematron reported as
+  `"not_implemented"`, never silently omitted
+- `POST /v1/invoices/process` - the full pipeline; multipart form with
+  `file`, plus either `organizationId=unternehmen-x-demo` or
+  `demoMode=true` (there is no silent fallback to demo master data).
+  Returns `{"canonicalInvoice": ..., "phase1ControlReport": ...}` on success.
+  400/422 for a malformed request (including missing organization context),
+  415 if the file isn't recognizable as a PDF or XML at all, 200 with a
+  classified report (which may itself be `nicht_pruefbar`) for every
+  anticipated content outcome, and 5xx with a stable `error_code` only for a
+  genuinely unexpected technical failure.
+
+```bash
+curl -X POST "http://localhost:6969/v1/invoices/process" \
+  -F "file=@invoice.pdf" \
+  -F "organizationId=unternehmen-x-demo"
+```
+
+#### Known limitations (also reported by `/capabilities`)
+
+- **XSD baseline is Factur-X 1.07.2 / ZUGFeRD 2.3.2**, not the current
+  ZUGFeRD 2.5 / Factur-X 1.09 package. `/capabilities` flags this
+  explicitly as `legacyBaseline: true`. The upgrade is tracked as a
+  separate follow-up issue (see `docs/invoice_phase1/service_gap_analysis.md`).
+- **Schematron/official business-rule validation is not implemented.** No
+  Schematron artifacts are bundled or fetched. The corresponding control
+  (`STR-004`) is defined in the candidate catalog but deliberately left out
+  of the starter control profile, not reported as passed or run.
+- **Plain-PDF extraction uses a mock adapter**, not real OCR/LLM. It exists
+  to prove the field-evidence/confidence contract a real adapter must
+  satisfy (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via
+  FastAPI dependency injection.
+- **CAL-002/CAL-003 (arithmetic controls) assume a simple invoice.**
+  `CAL-002` becomes `not_applicable` whenever a document-level charge or
+  allowance is present, rather than silently computing a wrong verdict.
+- **Only one organization context is supported**: the fictional
+  `unternehmen-x-demo` snapshot. Real multi-tenant master-data loading is
+  future work.
+- **`examples/n8n/digitax_invoice_intake.json`** is a sanitized reference
+  export of the existing DigiTax draft workflow, real-import-verified via
+  the official `n8nio/n8n` Docker image -- see `examples/n8n/README.md`. It
+  is not yet rewired to call the endpoints above.
 
 ## Features
 
@@ -86,6 +147,15 @@ curl -X POST "http://localhost:6969/facturx-pdfextractxml" \
   -F "accept_any_filename=true" \
   > extracted.xml
 ```
+
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+CI runs the same suite on every push/PR (`.github/workflows/test.yaml`).
 
 ## Troubleshooting
 

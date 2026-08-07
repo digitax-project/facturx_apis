@@ -53,6 +53,25 @@
 - optional `REQELI_API_BASE_URL`
 - evidence repository credential
 
+The current `examples/n8n/digitax_invoice_intake.json` draft (not yet rewired
+to the endpoints above) additionally requires, since sanitization replaced
+its hardcoded values:
+
+- `TCMS_FRAMEWORK_BASE_URL`, `TCMS_ORGANIZATION_ID`, `TCMS_PROCESS_ID` -- the
+  TCMS-Framework webhook target (was `host.docker.internal:3000`)
+- `REQELI_API_BASE_URL` -- the Reqeli analysis endpoint (was
+  `host.docker.internal:8090`)
+- `REQELI_ENABLED` -- must be the string `"true"` to allow Reqeli to run at
+  all; disabled by default per AGENTS.md, ANDed with the workflow's own
+  business-rule trigger
+
+The Reqeli request body no longer carries database credentials of any kind
+(an earlier sanitization pass replaced the hardcoded DSN with an
+env-var-templated one, which still shipped a live DB password over HTTP on
+every call -- caught in review). It now sends `connection_ref: "tcms-primary"`,
+an opaque reference; Reqeli must resolve it against its own server-side
+credential configuration, not receive a connection string from n8n at all.
+
 ## Output
 
 The workflow returns `canonicalInvoice`, `phase1ControlReport`, and

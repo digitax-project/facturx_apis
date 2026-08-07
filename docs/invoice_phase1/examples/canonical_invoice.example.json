@@ -39,7 +39,7 @@
       "periodStart": null,
       "periodEnd": null
     },
-    "totals": { "lineNet": 100, "taxBasis": 100, "taxAmount": 19, "grossAmount": 119, "payableAmount": 119 },
+    "totals": { "lineNet": 100, "taxBasis": 100, "taxAmount": 19, "grossAmount": 119, "payableAmount": 119, "chargeTotal": 0, "allowanceTotal": 0, "prepaidAmount": 0, "roundingAmount": 0 },
     "lineItems": [
       { "description": "Synthetic consulting service", "quantity": 1, "netAmount": 100, "vatRate": 19 }
     ]

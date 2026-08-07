@@ -11,11 +11,13 @@ from .facturx import (
     get_xml_from_pdf,
     xml_check_xsd,
     generate_from_file,
+    extract_any_xml_from_pdf,
     ALL_FILENAMES,  # Import this to see all supported filenames
     FACTURX_FILENAME,
     ZUGFERD_FILENAMES,
     ORDERX_FILENAME
 )
+from .phase1.api import router as phase1_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,8 +27,9 @@ logger = logging.getLogger("facturx-api")
 logger.info(f"Supported XML filenames: {ALL_FILENAMES}")
 logger.info(f"ZUGFeRD filenames: {ZUGFERD_FILENAMES}")
 
-app = FastAPI(title="Factur-X API", 
+app = FastAPI(title="Factur-X API",
               description="API for Factur-X PDF generation, XML extraction and validation")
+app.include_router(phase1_router)
 
 class FlavorEnum(str, Enum):
     facturx = "factur-x"
@@ -361,86 +364,6 @@ def cleanup_temp_files(file_paths):
                 logger.debug(f"Cleaned up temporary file: {path}")
         except Exception as e:
             logger.error(f"Error cleaning up file {path}: {str(e)}")
-
-def extract_any_xml_from_pdf(pdf_file, check_xsd=True):
-    """
-    Extract any XML file from a PDF document, regardless of filename.
-    This function will extract the first XML file it finds.
-    
-    :param pdf_file: PDF file object
-    :param check_xsd: Whether to validate the XML against XSD
-    :return: Tuple of (filename, content)
-    """
-    from pypdf import PdfReader
-    from lxml import etree
-    
-    # Get functions from facturx library to reuse code
-    from .facturx import _get_dict_entry, _get_embeddedfiles
-    
-    try:
-        pdf = PdfReader(pdf_file)
-        pdf_root = pdf.trailer['/Root']  # = Catalog
-        
-        catalog_name = _get_dict_entry(pdf_root, '/Names')
-        if not catalog_name:
-            logger.info('No Names entry in Catalog')
-            return (None, None)
-        
-        embeddedfiles_node = _get_dict_entry(catalog_name, '/EmbeddedFiles')
-        if not embeddedfiles_node:
-            logger.info('No EmbeddedFiles entry in the /Names of the Catalog')
-            return (None, None)
-        
-        embeddedfiles = _get_embeddedfiles(embeddedfiles_node)
-        if not embeddedfiles:
-            return (None, None)
-        
-        embeddedfiles_by_two = list(zip(embeddedfiles, embeddedfiles[1:]))[::2]
-        
-        # Try to find any XML file
-        for (filename, file_obj) in embeddedfiles_by_two:
-            logger.debug(f'Examining embedded file: {filename}')
-            
-            # Check if the file might be XML (by extension or type)
-            if isinstance(filename, str) and (filename.lower().endswith('.xml') or 'xml' in filename.lower()):
-                xml_file_dict = file_obj.get_object()
-                tmp_xml_bytes = xml_file_dict['/EF']['/F'].get_data()
-                
-                # Try to parse as XML to verify it's actually XML
-                try:
-                    etree.fromstring(tmp_xml_bytes)
-                    logger.info(f'Found XML file: {filename}')
-                    
-                    # Skip XSD validation if requested or if it fails
-                    if check_xsd:
-                        try:
-                            xml_check_xsd(tmp_xml_bytes, flavor='autodetect')
-                        except Exception as e:
-                            logger.warning(f"XML validation failed but returning XML anyway: {e}")
-                    
-                    return (filename, tmp_xml_bytes)
-                except Exception as e:
-                    logger.debug(f"File {filename} is not valid XML: {e}")
-                    continue
-        
-        # If we get here, try any embedded file and check if it's XML
-        for (filename, file_obj) in embeddedfiles_by_two:
-            xml_file_dict = file_obj.get_object()
-            tmp_xml_bytes = xml_file_dict['/EF']['/F'].get_data()
-            
-            # Try to parse as XML to verify it's actually XML
-            try:
-                etree.fromstring(tmp_xml_bytes)
-                logger.info(f'Found embedded file that appears to be XML: {filename}')
-                return (filename, tmp_xml_bytes)
-            except Exception:
-                continue
-                
-        return (None, None)
-        
-    except Exception as e:
-        logger.error(f'Error while trying to extract any XML file: {e}')
-        return (None, None)
 
 if __name__ == "__main__":
     print("Starting Factur-X API server on http://localhost:6969")

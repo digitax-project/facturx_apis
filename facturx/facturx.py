@@ -381,6 +381,79 @@ def get_xml_from_pdf(pdf_file, check_xsd=True, filenames=[]):
     return (xml_filename, xml_bytes)
 
 
+def extract_any_xml_from_pdf(pdf_file, check_xsd=True):
+    """
+    Extract any XML file embedded in a PDF document, regardless of filename.
+    Unlike get_xml_from_pdf(), this does not require the embedded file to use
+    one of the well-known Factur-X/ZUGFeRD/Order-X filenames: it returns the
+    first embedded file that parses as XML.
+
+    :param pdf_file: PDF file object or bytes
+    :param check_xsd: if True, attempt XSD validation on the found XML, but
+    don't fail extraction if that validation raises (only log a warning).
+    :return: Tuple of (filename, content) or (None, None) if nothing found.
+    """
+    if isinstance(pdf_file, (str, bytes)):
+        pdf_file = BytesIO(pdf_file)
+    try:
+        pdf = PdfReader(pdf_file)
+        pdf_root = pdf.trailer['/Root']  # = Catalog
+
+        catalog_name = _get_dict_entry(pdf_root, '/Names')
+        if not catalog_name:
+            logger.info('No Names entry in Catalog')
+            return (None, None)
+
+        embeddedfiles_node = _get_dict_entry(catalog_name, '/EmbeddedFiles')
+        if not embeddedfiles_node:
+            logger.info('No EmbeddedFiles entry in the /Names of the Catalog')
+            return (None, None)
+
+        embeddedfiles = _get_embeddedfiles(embeddedfiles_node)
+        if not embeddedfiles:
+            return (None, None)
+
+        embeddedfiles_by_two = list(zip(embeddedfiles, embeddedfiles[1:]))[::2]
+
+        for (filename, file_obj) in embeddedfiles_by_two:
+            logger.debug('Examining embedded file: %s', filename)
+            if isinstance(filename, str) and (
+                    filename.lower().endswith('.xml') or 'xml' in filename.lower()):
+                xml_file_dict = file_obj.get_object()
+                tmp_xml_bytes = xml_file_dict['/EF']['/F'].get_data()
+                try:
+                    etree.fromstring(tmp_xml_bytes)
+                    logger.info('Found XML file: %s', filename)
+                    if check_xsd:
+                        try:
+                            xml_check_xsd(tmp_xml_bytes, flavor='autodetect')
+                        except Exception as e:
+                            logger.warning(
+                                "XML validation failed but returning XML anyway: %s", e)
+                    return (filename, tmp_xml_bytes)
+                except Exception as e:
+                    logger.debug('File %s is not valid XML: %s', filename, e)
+                    continue
+
+        # If we get here, try any embedded file and check if it's XML
+        for (filename, file_obj) in embeddedfiles_by_two:
+            xml_file_dict = file_obj.get_object()
+            tmp_xml_bytes = xml_file_dict['/EF']['/F'].get_data()
+            try:
+                etree.fromstring(tmp_xml_bytes)
+                logger.info(
+                    'Found embedded file that appears to be XML: %s', filename)
+                return (filename, tmp_xml_bytes)
+            except Exception:
+                continue
+
+        return (None, None)
+
+    except Exception as e:
+        logger.error('Error while trying to extract any XML file: %s', e)
+        return (None, None)
+
+
 def _get_pdf_timestamp(date=None):
     if date is None:
         date = datetime.now()
