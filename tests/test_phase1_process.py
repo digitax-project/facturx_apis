@@ -431,6 +431,141 @@ def test_cal002_low_confidence_charge_is_not_reliable_not_a_false_green(client, 
     assert report["status"] == "nicht_pruefbar"
 
 
+@pytest.mark.parametrize("field_name", ["chargeTotal", "allowanceTotal"])
+def test_cal002_reliable_nonzero_charge_or_allowance_cannot_produce_green_report(
+    client, blank_pdf_bytes, field_name
+):
+    """CAL-002's Σ(netAmount×vatRate) formula does not account for
+    document-level charges/allowances. A RELIABLY reported (high-confidence)
+    non-zero charge or allowance must not be reported as not_applicable
+    (which aggregate() treats as compatible with unauffaellig -- a false
+    green result for a calculation this implementation genuinely cannot
+    perform). It must route to not_reliable/CONTROL_SCOPE_UNSUPPORTED and
+    force nicht_pruefbar, end to end through /v1/invoices/process."""
+    fields = _happy_path_fields()
+    fields[f"invoice.totals.{field_name}"] = _f(10.0, confidence=0.95)
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, blank_pdf_bytes)
+
+    report = body["phase1ControlReport"]
+    cal_002 = next(c for c in report["controls"] if c["controlId"] == "CAL-002")
+    assert cal_002["outcome"] == "not_reliable"
+    assert cal_002["outcome"] not in ("passed", "not_applicable")
+    assert "CONTROL_SCOPE_UNSUPPORTED" in cal_002["reasonCodes"]
+    assert cal_002["message"]
+    assert report["status"] == "nicht_pruefbar"
+    assert report["status"] != "unauffaellig"
+
+
+def test_cal_and_org_findings_expose_expected_actual_difference_and_formula(client):
+    """Rich-finding requirement: arithmetic mismatches must expose expected
+    value, actual value, difference, tolerance, and formula -- reason codes
+    alone don't tell a reviewer what was actually wrong."""
+    xml_bytes = (
+        Path(__file__).parent / "fixtures" / "facturx_valid_en16931.xml"
+    ).read_bytes()
+    # Mutate the line total so CAL-001 fails with a known, checkable mismatch.
+    mutated = xml_bytes.replace(b"<ram:LineTotalAmount>100.00</ram:LineTotalAmount>",
+                                 b"<ram:LineTotalAmount>105.00</ram:LineTotalAmount>", 1)
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", mutated, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    cal_001 = next(c for c in report["controls"] if c["controlId"] == "CAL-001")
+    assert cal_001["outcome"] == "failed"
+    assert cal_001["message"]
+    details = cal_001["details"]
+    assert details is not None
+    assert details["formula"]
+    # The line item's own net amount was mutated to 105.00; the header
+    # lineNet total (100.00) was left untouched -- so the sum of line items
+    # (105) is what CAL-001 "expects" the header lineNet to equal, and the
+    # header's actual reported value (100) is what it found.
+    assert details["expected"] == 105.0
+    assert details["actual"] == 100.0
+    assert details["difference"] == -5.0
+    assert details["tolerance"] is not None
+
+
+def test_org001_mismatch_details_identify_which_fields_differ(client, blank_pdf_bytes):
+    fields = _happy_path_fields()
+    fields["invoice.buyer.address.city"] = _f("Munich", confidence=0.95)
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    org_001 = next(c for c in report["controls"] if c["controlId"] == "ORG-001")
+    assert org_001["outcome"] == "failed"
+    assert org_001["message"]
+    details = org_001["details"]
+    assert details is not None
+    mismatches = details["mismatches"]
+    fields_that_differ = {m["field"] for m in mismatches}
+    assert "invoice.buyer.address.city" in fields_that_differ
+    city_mismatch = next(m for m in mismatches if m["field"] == "invoice.buyer.address.city")
+    assert city_mismatch["actual"] == "Munich"
+    assert city_mismatch["expected"] == "Leipzig"
+    # unaffected fields must not show up as mismatches
+    assert "invoice.buyer.name" not in fields_that_differ
+
+
+def test_pdf_field_states_are_persisted_in_field_evidence(client, blank_pdf_bytes):
+    """The extracted/confirmed_missing/not_extracted distinction must survive
+    normalization into fieldEvidence, not just exist internally in
+    PdfFieldValue -- reviewers and n8n need to see it in the actual response."""
+    fields = _happy_path_fields()
+    fields["invoice.invoiceNumber"] = _f(None, confidence=0.95, state=FieldState.CONFIRMED_MISSING)
+    del fields["invoice.supply.description"]  # never processed -> NOT_EXTRACTED
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    evidence = response.json()["canonicalInvoice"]["fieldEvidence"]
+    assert evidence["invoice.invoiceNumber"]["state"] == "confirmed_missing"
+    assert evidence["invoice.supply.description"]["state"] == "not_extracted"
+    assert evidence["invoice.buyer.name"]["state"] == "extracted"
+
+
+def test_xml_field_evidence_state_is_extracted(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    evidence = response.json()["canonicalInvoice"]["fieldEvidence"]
+    assert evidence["invoice.invoiceNumber"]["state"] == "extracted"
+
+
 def test_org001_buyer_country_mismatch_fails(client, blank_pdf_bytes):
     """ORG-001 must compare buyer countryCode too, not just
     name/street/postalCode/city -- a foreign buyer address with an otherwise

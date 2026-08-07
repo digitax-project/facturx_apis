@@ -4,7 +4,9 @@ API for Factur-X PDF generation, XML extraction and validation.
 
 ## Setup and Installation
 
-1. Make sure you have Python 3.7 or higher installed.
+1. Make sure you have Python 3.10 or higher installed (the `facturx/phase1/`
+   package uses PEP 604 union syntax, which raises the floor from the core
+   library's historical 3.7+).
 
 2. Install the package and its dependencies:
 

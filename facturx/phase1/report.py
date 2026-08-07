@@ -42,6 +42,7 @@ def build_report(
                 "evidenceRefs": c.evidence_refs,
                 "ruleVersion": c.rule_version,
                 "message": c.message,
+                "details": c.details,
             }
             for c in controls
         ],

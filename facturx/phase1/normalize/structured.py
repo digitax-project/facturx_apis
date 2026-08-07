@@ -55,11 +55,18 @@ def _number(node, path: str) -> Optional[float]:
 
 
 def _evidence(locator: str, raw_value, confidence: float = 1.0, method: str = "xml"):
+    # An evidence entry is only ever created here when the source XML
+    # element was actually present and read -- there's no "the parser
+    # didn't look" state on the structured path, so this is always
+    # "extracted", matching the PDF path's FieldState vocabulary
+    # (facturx/phase1/normalize/pdf_adapter.py) for a consistent contract
+    # across both extraction methods.
     return {
         "method": method,
         "confidence": confidence,
         "locator": locator,
         "rawValue": raw_value,
+        "state": "extracted",
     }
 
 

@@ -6,7 +6,7 @@
     "mimeType": "application/pdf",
     "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "detectedFormat": "factur-x",
-    "formatVersion": "1.09",
+    "formatVersion": null,
     "profile": "EN16931"
   },
   "extraction": {
@@ -45,7 +45,7 @@
     ]
   },
   "fieldEvidence": {
-    "invoice.invoiceNumber": { "method": "xml", "confidence": 1, "locator": "BT-1", "rawValue": "UX-2026-001" },
-    "invoice.buyer.name": { "method": "xml", "confidence": 1, "locator": "BT-44", "rawValue": "Unternehmen X" }
+    "invoice.invoiceNumber": { "method": "xml", "confidence": 1, "locator": "BT-1", "rawValue": "UX-2026-001", "state": "extracted" },
+    "invoice.buyer.name": { "method": "xml", "confidence": 1, "locator": "BT-44", "rawValue": "Unternehmen X", "state": "extracted" }
   }
 }

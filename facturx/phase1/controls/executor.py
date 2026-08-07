@@ -15,8 +15,14 @@ for PDF-sourced data. That's what lets FRM-00x tell a confidently-missing
 field (`failed`, blocking) apart from a merely low-confidence OR
 never-attempted one (`not_reliable`, which routes the whole run to
 nicht_pruefbar per AGENTS.md) -- see pdf_adapter.py's FieldState docstring.
+
+Every non-`passed` outcome carries a human-readable `message` and, for
+arithmetic/master-data findings, a structured `details` object (expected/
+actual/difference/tolerance/formula, or a per-field `mismatches` list) --
+reason codes alone don't tell a reviewer what was actually wrong.
 """
 from dataclasses import dataclass, field as dc_field
+from typing import Optional
 
 from .catalog import CATALOG
 from ..validate.structured import StructuredValidationResult
@@ -34,6 +40,7 @@ class ControlResult:
     evidence_refs: list[str] = dc_field(default_factory=list)
     rule_version: str = "1.0.0"
     message: str | None = None
+    details: Optional[dict] = None
 
 
 def _severity_for(control_id: str, outcome: str) -> str:
@@ -135,6 +142,7 @@ def evaluate_extraction_confidence(
             reason_codes=["LOW_OVERALL_CONFIDENCE"], rule_version=definition.rule_version,
             message=f"Overall extraction confidence {overall_confidence:.2f} is below "
             f"the {threshold:.2f} reliability threshold.",
+            details={"expected": f">= {threshold:.2f}", "actual": round(overall_confidence, 2)},
         )
     return ControlResult("DOC-007", definition.title, "passed", "none", rule_version=definition.rule_version)
 
@@ -161,28 +169,41 @@ def _check(value, field_evidence: dict, key: str, threshold: float) -> tuple:
     field_evidence separately, so a normalize function that forgets to
     attach evidence for a present field degrades to "fully confident"
     (the safe default for a structured extractor), not to a false
-    "missing" verdict.
+    "missing" verdict. Returns (outcome, reason_codes, evidence_refs, message).
     """
     confidence = _confidence(field_evidence, key)
     if confidence < threshold:
-        return "not_reliable", ["LOW_CONFIDENCE_EXTRACTION"], [key]
+        message = (
+            f"{key}: extraction confidence {confidence:.2f} is below the "
+            f"{threshold:.2f} reliability threshold."
+        )
+        return "not_reliable", ["LOW_CONFIDENCE_EXTRACTION"], [key], message
     if _is_empty(value):
-        return "failed", ["MISSING_FIELD"], [key]
-    return "passed", [], [key]
+        return "failed", ["MISSING_FIELD"], [key], f"{key}: required value is missing."
+    return "passed", [], [key], None
 
 
 def _combine(parts: list[tuple]) -> tuple:
     outcomes = [p[0] for p in parts]
     reason_codes = sorted({rc for p in parts for rc in p[1]})
     evidence_refs = sorted({ref for p in parts for ref in p[2]})
+    messages = [p[3] for p in parts if len(p) > 3 and p[3]]
+    combined_message = " ".join(messages) if messages else None
     if "not_reliable" in outcomes:
-        return "not_reliable", reason_codes, evidence_refs
+        return "not_reliable", reason_codes, evidence_refs, combined_message
     if "failed" in outcomes:
-        return "failed", reason_codes, evidence_refs
-    return "passed", reason_codes, evidence_refs
+        return "failed", reason_codes, evidence_refs, combined_message
+    return "passed", reason_codes, evidence_refs, None
 
 
-def _build(control_id: str, outcome: str, reason_codes: list[str], evidence_refs: list[str]) -> ControlResult:
+def _build(
+    control_id: str,
+    outcome: str,
+    reason_codes: list[str],
+    evidence_refs: list[str],
+    message: Optional[str] = None,
+    details: Optional[dict] = None,
+) -> ControlResult:
     definition = CATALOG[control_id]
     return ControlResult(
         control_id=control_id,
@@ -192,6 +213,8 @@ def _build(control_id: str, outcome: str, reason_codes: list[str], evidence_refs
         reason_codes=reason_codes,
         evidence_refs=evidence_refs,
         rule_version=definition.rule_version,
+        message=message,
+        details=details,
     )
 
 
@@ -266,11 +289,24 @@ def _evaluate_cal_001(invoice: dict, field_evidence: dict, threshold: float) -> 
     if combined[0] != "passed":
         return _build("CAL-001", *combined)
 
-    line_net = totals["lineNet"]
+    line_net = totals["lineNet"] or 0
     total_net_amount = sum(li.get("netAmount") or 0 for li in line_items)
-    tolerance = 0.02 * max(1, len(line_items))
-    if abs((line_net or 0) - total_net_amount) > tolerance:
-        return _build("CAL-001", "failed", ["AMOUNT_MISMATCH"], combined[2])
+    tolerance = round(0.02 * max(1, len(line_items)), 2)
+    difference = round(line_net - total_net_amount, 2)
+    if abs(difference) > tolerance:
+        details = {
+            "formula": "invoice.totals.lineNet == sum(invoice.lineItems[].netAmount)",
+            "expected": round(total_net_amount, 2),
+            "actual": round(line_net, 2),
+            "difference": difference,
+            "tolerance": tolerance,
+        }
+        message = (
+            f"Line net total {line_net:.2f} does not match the sum of line item net "
+            f"amounts {total_net_amount:.2f} (difference {difference:.2f}, tolerance "
+            f"{tolerance:.2f})."
+        )
+        return _build("CAL-001", "failed", ["AMOUNT_MISMATCH"], combined[2], message, details)
     return _build("CAL-001", "passed", [], combined[2])
 
 
@@ -282,9 +318,25 @@ def _evaluate_cal_002(invoice: dict, field_evidence: dict, threshold: float) -> 
         return _build("CAL-002", *_combine([charge_status, allowance_status]))
 
     if (totals.get("chargeTotal") or 0) != 0 or (totals.get("allowanceTotal") or 0) != 0:
+        # Not a genuine "does not apply" case: a document-level charge or
+        # allowance IS present and reliably reported, but this control's
+        # Σ(netAmount×vatRate) formula does not account for it, so the
+        # tax-consistency check cannot be correctly performed. Reporting
+        # not_applicable here would let aggregate() treat this as compatible
+        # with unauffaellig -- a false green result for something we simply
+        # can't calculate yet. not_reliable forces nicht_pruefbar instead,
+        # same as any other check this implementation cannot perform.
+        message = (
+            "A document-level charge or allowance is present "
+            f"(chargeTotal={totals.get('chargeTotal')!r}, "
+            f"allowanceTotal={totals.get('allowanceTotal')!r}); this control's tax-"
+            "consistency calculation does not yet account for them, so the result "
+            "cannot be verified automatically."
+        )
         return _build(
-            "CAL-002", "not_applicable", ["DOCUMENT_LEVEL_ALLOWANCE_OR_CHARGE_PRESENT"],
+            "CAL-002", "not_reliable", ["CONTROL_SCOPE_UNSUPPORTED"],
             sorted(set(charge_status[2] + allowance_status[2])),
+            message,
         )
 
     tax_amount_status = _check(totals["taxAmount"], field_evidence, "invoice.totals.taxAmount", threshold)
@@ -298,10 +350,23 @@ def _evaluate_cal_002(invoice: dict, field_evidence: dict, threshold: float) -> 
     expected_tax = sum(
         (li.get("netAmount") or 0) * (li.get("vatRate") or 0) / 100 for li in line_items
     )
-    tolerance = 0.02 * max(1, len(line_items))
+    tolerance = round(0.02 * max(1, len(line_items)), 2)
     tax_amount = totals["taxAmount"] or 0
-    if abs(tax_amount - expected_tax) > tolerance:
-        return _build("CAL-002", "failed", ["AMOUNT_MISMATCH"], combined[2])
+    difference = round(tax_amount - expected_tax, 2)
+    if abs(difference) > tolerance:
+        details = {
+            "formula": "invoice.totals.taxAmount == sum(lineItems[].netAmount * lineItems[].vatRate / 100)",
+            "expected": round(expected_tax, 2),
+            "actual": round(tax_amount, 2),
+            "difference": difference,
+            "tolerance": tolerance,
+        }
+        message = (
+            f"Tax amount {tax_amount:.2f} does not match the sum of line-item "
+            f"net×VAT-rate amounts {expected_tax:.2f} (difference {difference:.2f}, "
+            f"tolerance {tolerance:.2f})."
+        )
+        return _build("CAL-002", "failed", ["AMOUNT_MISMATCH"], combined[2], message, details)
     return _build("CAL-002", "passed", [], combined[2])
 
 
@@ -330,9 +395,13 @@ def _evaluate_cal_003(invoice: dict, field_evidence: dict, threshold: float) -> 
         key = f"invoice.totals.{k}"
         confidence = _confidence(field_evidence, key)
         if confidence < threshold:
-            optional_statuses.append(("not_reliable", ["LOW_CONFIDENCE_EXTRACTION"], [key]))
+            message = (
+                f"{key}: extraction confidence {confidence:.2f} is below the "
+                f"{threshold:.2f} reliability threshold."
+            )
+            optional_statuses.append(("not_reliable", ["LOW_CONFIDENCE_EXTRACTION"], [key], message))
         else:
-            optional_statuses.append(("passed", [], [key] if key in field_evidence else []))
+            optional_statuses.append(("passed", [], [key] if key in field_evidence else [], None))
 
     combined = _combine(required_statuses + optional_statuses)
     if combined[0] != "passed":
@@ -342,16 +411,46 @@ def _evaluate_cal_003(invoice: dict, field_evidence: dict, threshold: float) -> 
     # BT-114 (roundingAmount) belongs in the payable-amount reconciliation,
     # not the gross-amount one: BT-112 (gross) = BT-109 (taxBasis) +
     # BT-110 (taxAmount); BT-115 (payable) = BT-112 - BT-113 (prepaid) +
-    # BT-114 (rounding), per EN16931 BR-CO-16. A non-zero rounding amount
-    # was previously added into the gross-amount check instead, which could
-    # produce a spurious AMOUNT_MISMATCH on a perfectly reconciling invoice.
+    # BT-114 (rounding), per EN16931 BR-CO-16.
     gross_expected = (totals["taxBasis"] or 0) + (totals["taxAmount"] or 0)
-    if abs((totals["grossAmount"] or 0) - gross_expected) > tolerance:
-        return _build("CAL-003", "failed", ["AMOUNT_MISMATCH"], combined[2])
+    gross_actual = totals["grossAmount"] or 0
+    gross_difference = round(gross_actual - gross_expected, 2)
+    if abs(gross_difference) > tolerance:
+        details = {
+            "formula": "invoice.totals.grossAmount == invoice.totals.taxBasis + invoice.totals.taxAmount",
+            "expected": round(gross_expected, 2),
+            "actual": round(gross_actual, 2),
+            "difference": gross_difference,
+            "tolerance": tolerance,
+        }
+        message = (
+            f"Gross amount {gross_actual:.2f} does not match taxBasis + taxAmount "
+            f"{gross_expected:.2f} (difference {gross_difference:.2f}, tolerance "
+            f"{tolerance:.2f})."
+        )
+        return _build("CAL-003", "failed", ["AMOUNT_MISMATCH"], combined[2], message, details)
+
     rounding_amount = totals.get("roundingAmount") or 0
-    payable_expected = (totals["grossAmount"] or 0) - (totals.get("prepaidAmount") or 0) + rounding_amount
-    if abs((totals["payableAmount"] or 0) - payable_expected) > tolerance:
-        return _build("CAL-003", "failed", ["AMOUNT_MISMATCH"], combined[2])
+    payable_expected = gross_actual - (totals.get("prepaidAmount") or 0) + rounding_amount
+    payable_actual = totals["payableAmount"] or 0
+    payable_difference = round(payable_actual - payable_expected, 2)
+    if abs(payable_difference) > tolerance:
+        details = {
+            "formula": (
+                "invoice.totals.payableAmount == invoice.totals.grossAmount - "
+                "invoice.totals.prepaidAmount + invoice.totals.roundingAmount"
+            ),
+            "expected": round(payable_expected, 2),
+            "actual": round(payable_actual, 2),
+            "difference": payable_difference,
+            "tolerance": tolerance,
+        }
+        message = (
+            f"Payable amount {payable_actual:.2f} does not match grossAmount - "
+            f"prepaidAmount + roundingAmount {payable_expected:.2f} (difference "
+            f"{payable_difference:.2f}, tolerance {tolerance:.2f})."
+        )
+        return _build("CAL-003", "failed", ["AMOUNT_MISMATCH"], combined[2], message, details)
     return _build("CAL-003", "passed", [], combined[2])
 
 
@@ -371,13 +470,24 @@ def evaluate_org_001(invoice: dict, field_evidence: dict, master_data: dict, thr
     if combined[0] != "passed":
         return _build("ORG-001", *combined)
 
-    matches = (
-        _normalize_for_match(buyer["name"]) == _normalize_for_match(master_data["name"])
-        and _normalize_for_match(address["street"]) == _normalize_for_match(master_data["street"])
-        and _normalize_for_match(address["postalCode"]) == _normalize_for_match(master_data["postalCode"])
-        and _normalize_for_match(address["city"]) == _normalize_for_match(master_data["city"])
-        and _normalize_for_match(address["countryCode"]) == _normalize_for_match(master_data["countryCode"])
+    field_pairs = (
+        ("invoice.buyer.name", buyer["name"], master_data["name"]),
+        ("invoice.buyer.address.street", address["street"], master_data["street"]),
+        ("invoice.buyer.address.postalCode", address["postalCode"], master_data["postalCode"]),
+        ("invoice.buyer.address.city", address["city"], master_data["city"]),
+        ("invoice.buyer.address.countryCode", address["countryCode"], master_data["countryCode"]),
     )
-    if not matches:
-        return _build("ORG-001", "failed", ["MASTER_DATA_MISMATCH"], combined[2])
+    mismatches = [
+        {"field": field, "expected": expected, "actual": actual}
+        for field, actual, expected in field_pairs
+        if _normalize_for_match(actual) != _normalize_for_match(expected)
+    ]
+    if mismatches:
+        message = "Buyer data does not match approved organization master data: " + "; ".join(
+            f"{m['field']} expected {m['expected']!r}, got {m['actual']!r}" for m in mismatches
+        )
+        return _build(
+            "ORG-001", "failed", ["MASTER_DATA_MISMATCH"], combined[2], message,
+            {"mismatches": mismatches},
+        )
     return _build("ORG-001", "passed", [], combined[2])

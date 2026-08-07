@@ -30,7 +30,31 @@
           "reasonCodes": { "type": "array", "items": { "type": "string" } },
           "evidenceRefs": { "type": "array", "items": { "type": "string" } },
           "ruleVersion": { "type": "string", "minLength": 1 },
-          "message": { "type": ["string", "null"] }
+          "message": { "type": ["string", "null"] },
+          "details": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "properties": {
+              "formula": { "type": ["string", "null"] },
+              "expected": {},
+              "actual": {},
+              "difference": { "type": ["number", "null"] },
+              "tolerance": { "type": ["number", "null"] },
+              "mismatches": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["field", "expected", "actual"],
+                  "properties": {
+                    "field": { "type": "string" },
+                    "expected": {},
+                    "actual": {}
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

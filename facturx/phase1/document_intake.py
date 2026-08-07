@@ -38,8 +38,6 @@ from pypdf.errors import PdfReadError
 from ..facturx import get_flavor, get_level, get_xml_from_pdf
 from .errors import UnsupportedInputError
 
-FACTURX_LEGACY_FORMAT_VERSION = "1.07.2"
-
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MiB
 MAX_EMBEDDED_XML_BYTES = 5 * 1024 * 1024  # 5 MiB
 
@@ -91,7 +89,17 @@ def _parse_untrusted_xml(xml_bytes: bytes) -> etree._Element:
 
 
 def _detect_structured_format(xml_bytes: bytes, warnings: list[str]) -> tuple:
-    """Returns (detected_format, format_version, profile, xml_etree) for XML bytes."""
+    """Returns (detected_format, format_version, profile, xml_etree) for XML bytes.
+
+    format_version is always None here, deliberately: Factur-X does not
+    reliably encode its own document release (e.g. 1.07.2 vs 1.09) in
+    content we can detect -- the Guideline ID only encodes the PROFILE
+    (minimum/basicwl/basic/en16931/extended), not a release number. Do not
+    conflate that with the XSD/validator baseline this service actually
+    checks against, which is a property of the service, not the document,
+    and is already exposed via STR-003's ruleVersion and
+    /capabilities.structuredFormats["factur-x"].xsdVersion.
+    """
     try:
         xml_etree = _parse_untrusted_xml(xml_bytes)
     except Exception as exc:
@@ -118,8 +126,8 @@ def _detect_structured_format(xml_bytes: bytes, warnings: list[str]) -> tuple:
         level = get_level(xml_etree, flavor="factur-x")
     except Exception as exc:
         warnings.append(f"UNRECOGNIZED_PROFILE_LEVEL: {exc}")
-        return "factur-x", FACTURX_LEGACY_FORMAT_VERSION, None, xml_etree
-    return "factur-x", FACTURX_LEGACY_FORMAT_VERSION, level.upper(), xml_etree
+        return "factur-x", None, None, xml_etree
+    return "factur-x", None, level.upper(), xml_etree
 
 
 _XRECHNUNG_GUIDELINE_ID_PATH = (

@@ -139,6 +139,7 @@ def normalize_pdf_extraction(
             "confidence": field_value.confidence,
             "locator": locator,
             "rawValue": field_value.value,
+            "state": field_value.state.value,
         }
         return field_value.value
 

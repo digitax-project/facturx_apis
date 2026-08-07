@@ -35,6 +35,45 @@ XXE_EXTERNAL_ENTITY_XML = b"""<?xml version="1.0"?>
 </rsm:CrossIndustryInvoice>
 """
 
+# Same entity payloads, but with a real EN16931 GuidelineSpecifiedDocumentContextParameter
+# so the document actually clears the DOC-001/profile gate and reaches structured
+# XSD validation (validate/structured.py) -- the code path Finding 1 fixed. The
+# bare fixtures above are used for document_intake.py unit-level tests only;
+# these are for endpoint-level (/validate, /process) tests.
+BILLION_LAUGHS_EN16931_XML = b"""<?xml version="1.0"?>
+<!DOCTYPE lolz [
+ <!ENTITY lol "lol">
+ <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+ <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+]>
+<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:cen.eu:en16931:2017</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+  <rsm:ExchangedDocument>
+    <ram:ID>&lol3;</ram:ID>
+  </rsm:ExchangedDocument>
+</rsm:CrossIndustryInvoice>
+"""
+
+XXE_EN16931_XML = b"""<?xml version="1.0"?>
+<!DOCTYPE root [
+ <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:cen.eu:en16931:2017</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+  <rsm:ExchangedDocument>
+    <ram:ID>&xxe;</ram:ID>
+  </rsm:ExchangedDocument>
+</rsm:CrossIndustryInvoice>
+"""
+
 
 def _blank_pdf_with_attachment(filename: str, data: bytes) -> bytes:
     writer = PdfWriter()
@@ -222,3 +261,95 @@ def test_cii_xrechnung_is_routed_to_nicht_pruefbar_as_unsupported(client):
     assert report["status"] == "nicht_pruefbar"
     doc_001 = next(c for c in report["controls"] if c["controlId"] == "DOC-001")
     assert "UNSUPPORTED_FORMAT" in doc_001["reasonCodes"]
+
+
+# --- Endpoint-level entity-expansion/XXE tests ---------------------------
+#
+# document_intake.inspect_document() alone was already covered above, but
+# that only proves the classification step is hardened. validate/
+# structured.py used to reparse the original bytes through a *different*,
+# unhardened path during the actual XSD assertValid() call (facturx.py's
+# xml_check_xsd() always reparses via a plain etree.parse(BytesIO(...)),
+# even when handed an etree) -- these tests exercise the real HTTP
+# endpoints end-to-end to prove that reparse no longer happens anywhere on
+# this path, not just that document_intake's own parse is safe.
+#
+# BILLION_LAUGHS_EN16931_XML / XXE_EN16931_XML (declared above) carry a
+# real EN16931 GuidelineSpecifiedDocumentContextParameter, so unlike the
+# bare fixtures they actually clear the DOC-001/profile gate and reach
+# structured XSD validation.
+
+
+def test_billion_laughs_via_validate_endpoint_is_safe(client):
+    response = client.post(
+        "/v1/invoices/validate",
+        files={"file": ("bomb.xml", BILLION_LAUGHS_EN16931_XML, "application/xml")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applicable"] is True
+    assert body["xsdValid"] is False  # never falsely validated due to expanded entities
+    assert "lollollollol" not in response.text.lower()
+
+
+def test_xxe_via_validate_endpoint_is_safe(client):
+    response = client.post(
+        "/v1/invoices/validate",
+        files={"file": ("xxe.xml", XXE_EN16931_XML, "application/xml")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applicable"] is True
+    assert body["xsdValid"] is False
+    assert "root:" not in response.text  # a line from a real /etc/passwd, if it leaked
+
+
+def test_billion_laughs_via_process_endpoint_is_safe(client):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("bomb.xml", BILLION_LAUGHS_EN16931_XML, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "lollollollol" not in response.text.lower()
+    report = body["phase1ControlReport"]
+    assert report["status"] != "unauffaellig"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "failed"
+    assert "XSD_INVALID" in str_003["reasonCodes"]
+
+
+def test_xxe_via_process_endpoint_is_safe(client):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("xxe.xml", XXE_EN16931_XML, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "root:" not in response.text
+    report = body["phase1ControlReport"]
+    assert report["status"] != "unauffaellig"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "failed"
+
+
+def test_billion_laughs_inside_hybrid_pdf_via_process_endpoint_is_safe(client):
+    """Same entity bomb, but delivered as the well-known factur-x.xml
+    attachment inside a PDF (hybrid_pdf source type) through the real
+    /v1/invoices/process endpoint -- the malicious-hybrid-PDF case."""
+    pdf_bytes = _blank_pdf_with_attachment("factur-x.xml", BILLION_LAUGHS_EN16931_XML)
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "lollollollol" not in response.text.lower()
+    assert body["canonicalInvoice"]["document"]["sourceType"] == "hybrid_pdf"
+    report = body["phase1ControlReport"]
+    assert report["status"] != "unauffaellig"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "failed"

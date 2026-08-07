@@ -160,8 +160,12 @@ def _extract_and_normalize(
     status="failed") is returned normally with extraction_status="failed"."""
     if inspection.source_type in ("hybrid_pdf", "xml"):
         try:
-            level = inspection.profile.lower() if inspection.profile else "autodetect"
-            structured_validation = validate_structured_xml(inspection.xml_bytes, level)
+            # inspection.xml_etree was already parsed once, through
+            # document_intake's hardened parser -- pass that, never raw
+            # bytes, so untrusted XML is never reparsed unhardened for
+            # XSD validation (see validate/structured.py's module docstring).
+            level = inspection.profile.lower() if inspection.profile else None
+            structured_validation = validate_structured_xml(inspection.xml_etree, level)
         except Exception as exc:
             raise TechnicalProcessingError(
                 "STRUCTURED_EXTRACTION_UNAVAILABLE",
@@ -306,8 +310,10 @@ def validate_invoice(file_bytes: bytes, filename: str, content_type: str) -> dic
         }
 
     try:
-        level = inspection.profile.lower() if inspection.profile else "autodetect"
-        result = validate_structured_xml(inspection.xml_bytes, level)
+        # Same rule as in _extract_and_normalize: pass the already-hardened
+        # etree, never raw bytes.
+        level = inspection.profile.lower() if inspection.profile else None
+        result = validate_structured_xml(inspection.xml_etree, level)
     except Exception as exc:
         raise TechnicalProcessingError(
             "STRUCTURED_EXTRACTION_UNAVAILABLE",
