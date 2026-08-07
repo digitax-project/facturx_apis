@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1.0.0",
+  "document": {
+    "sourceType": "hybrid_pdf",
+    "filename": "unternehmen-x-invoice-001.pdf",
+    "mimeType": "application/pdf",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "detectedFormat": "factur-x",
+    "formatVersion": "1.09",
+    "profile": "EN16931"
+  },
+  "extraction": {
+    "method": "embedded_xml",
+    "status": "completed",
+    "overallConfidence": 1,
+    "adapterVersion": "pending",
+    "warnings": []
+  },
+  "invoice": {
+    "invoiceNumber": "UX-2026-001",
+    "issueDate": "2026-08-07",
+    "typeCode": "380",
+    "currency": "EUR",
+    "supplier": {
+      "name": "Beispiel Lieferant GmbH",
+      "address": { "street": "Lieferweg 1", "postalCode": "10115", "city": "Berlin", "countryCode": "DE" },
+      "taxId": null,
+      "vatId": "DE111111111"
+    },
+    "buyer": {
+      "name": "Unternehmen X",
+      "address": { "street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE" },
+      "taxId": null,
+      "vatId": "DE222222222"
+    },
+    "supply": {
+      "description": "Synthetic consulting service",
+      "deliveryDate": "2026-08-05",
+      "periodStart": null,
+      "periodEnd": null
+    },
+    "totals": { "lineNet": 100, "taxBasis": 100, "taxAmount": 19, "grossAmount": 119, "payableAmount": 119 },
+    "lineItems": [
+      { "description": "Synthetic consulting service", "quantity": 1, "netAmount": 100, "vatRate": 19 }
+    ]
+  },
+  "fieldEvidence": {
+    "invoice.invoiceNumber": { "method": "xml", "confidence": 1, "locator": "BT-1", "rawValue": "UX-2026-001" },
+    "invoice.buyer.name": { "method": "xml", "confidence": 1, "locator": "BT-44", "rawValue": "Unternehmen X" }
+  }
+}

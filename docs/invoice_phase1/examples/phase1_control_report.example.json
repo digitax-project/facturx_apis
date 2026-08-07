@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0.0",
+  "reportId": "REP-UX-2026-001",
+  "runId": "RUN-UX-2026-001",
+  "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "unauffaellig",
+  "routing": "standard_review",
+  "controls": [
+    {
+      "controlId": "C01",
+      "title": "Input readable and supported",
+      "outcome": "passed",
+      "severity": "none",
+      "reasonCodes": [],
+      "evidenceRefs": ["document.sha256"],
+      "ruleVersion": "1.0.0",
+      "message": null
+    }
+  ],
+  "suggestions": [],
+  "reqeli": { "invoked": false, "status": "not_required", "analysisRef": null },
+  "createdAt": "2026-08-07T09:00:00+02:00"
+}
