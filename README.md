@@ -94,8 +94,12 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
   satisfy (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via
   FastAPI dependency injection.
 - **CAL-002/CAL-003 (arithmetic controls) assume a simple invoice.**
-  `CAL-002` becomes `not_applicable` whenever a document-level charge or
-  allowance is present, rather than silently computing a wrong verdict.
+  `CAL-002`'s tax-consistency formula does not account for document-level
+  charges/allowances. When a reliable non-zero charge or allowance is
+  present, it returns `not_reliable` with reason `CONTROL_SCOPE_UNSUPPORTED`
+  (forcing the run to `nicht_pruefbar`) rather than silently computing a
+  wrong verdict or reporting `not_applicable` (which would aggregate as a
+  false green result).
 - **Only one organization context is supported**: the fictional
   `unternehmen-x-demo` snapshot. Real multi-tenant master-data loading is
   future work.
@@ -103,6 +107,15 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
   export of the existing DigiTax draft workflow, real-import-verified via
   the official `n8nio/n8n` Docker image -- see `examples/n8n/README.md`. It
   is not yet rewired to call the endpoints above.
+- **Deployment risk: the legacy `/facturx-*` routes are not hardened to the
+  same standard as the Phase 1 endpoints.** They share this FastAPI app
+  (see `facturx/api.py`) and still use the unhardened XML parsing path
+  described in `facturx/facturx.py`'s `xml_check_xsd()` (see the Phase 1
+  `/v1/invoices/*` endpoints' own hardening in `facturx/phase1/
+  document_intake.py` and `facturx/phase1/validate/structured.py` for
+  contrast). This doesn't block local development or the Phase 1 endpoints
+  themselves, but the legacy routes should be disabled or independently
+  hardened before this service is deployed publicly.
 
 ## Features
 
