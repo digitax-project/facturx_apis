@@ -5,6 +5,7 @@
   "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "catalogVersion": "0.1.0",
   "controlProfileId": "inbound-starter-de-v1",
+  "controlProfileVersion": "0.1.0",
   "status": "unauffaellig",
   "routing": "standard_review",
   "controls": [

@@ -29,6 +29,7 @@ def build_report(
         "sourceSha256": source_sha256,
         "catalogVersion": CATALOG_VERSION,
         "controlProfileId": control_profile.id,
+        "controlProfileVersion": control_profile.version,
         "status": status,
         "routing": routing,
         "controls": [

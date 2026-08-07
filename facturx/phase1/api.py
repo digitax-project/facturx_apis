@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from .capabilities import CAPABILITIES
-from .document_intake import inspect_document
+from .document_intake import MAX_UPLOAD_BYTES, inspect_document
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import MockPdfExtractionAdapter, PdfExtractionAdapter
 from .pipeline import normalize_invoice, process_invoice, validate_invoice
@@ -30,6 +30,31 @@ def get_pdf_extraction_adapter() -> PdfExtractionAdapter:
     specific scenarios; the production default is the mock adapter until a
     real OCR/LLM adapter is integrated (see capabilities.py)."""
     return _default_pdf_extraction_adapter
+
+
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+async def _read_upload_bounded(file: UploadFile, max_bytes: int = MAX_UPLOAD_BYTES) -> bytes:
+    """Reads at most `max_bytes + 1` bytes from an UploadFile in chunks.
+
+    document_intake.inspect_document() rejects anything over MAX_UPLOAD_BYTES
+    -- but only after `await file.read()` had already pulled the entire
+    body into memory, which is itself an unbounded-memory exposure for a
+    request that was going to be rejected anyway. This stops reading as
+    soon as the limit is exceeded, so a hostile multi-gigabyte upload never
+    fully lands in memory; inspect_document() still does the authoritative
+    size check and produces the same FILE_TOO_LARGE/413 result.
+    """
+    chunks = []
+    total = 0
+    while total <= max_bytes:
+        chunk = await file.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
 
 
 def _error_response(exc: Exception) -> HTTPException:
@@ -53,7 +78,7 @@ async def capabilities():
 
 @router.post("/v1/invoices/inspect")
 async def inspect(file: UploadFile):
-    content = await file.read()
+    content = await _read_upload_bounded(file)
     try:
         inspection = inspect_document(content, file.filename or "upload", file.content_type or "")
     except UnsupportedInputError as exc:
@@ -77,7 +102,7 @@ async def normalize(
     file: UploadFile,
     adapter: PdfExtractionAdapter = Depends(get_pdf_extraction_adapter),
 ):
-    content = await file.read()
+    content = await _read_upload_bounded(file)
     try:
         canonical_invoice = normalize_invoice(
             file_bytes=content,
@@ -93,7 +118,7 @@ async def normalize(
 
 @router.post("/v1/invoices/validate")
 async def validate(file: UploadFile):
-    content = await file.read()
+    content = await _read_upload_bounded(file)
     try:
         result = validate_invoice(
             file_bytes=content,
@@ -113,7 +138,7 @@ async def process(
     demoMode: bool = Form(False),
     adapter: PdfExtractionAdapter = Depends(get_pdf_extraction_adapter),
 ):
-    content = await file.read()
+    content = await _read_upload_bounded(file)
     try:
         canonical_invoice, report = process_invoice(
             file_bytes=content,

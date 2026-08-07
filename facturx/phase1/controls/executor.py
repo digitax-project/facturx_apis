@@ -295,11 +295,17 @@ def _evaluate_cal_003(invoice: dict, field_evidence: dict, threshold: float) -> 
         return _build("CAL-003", *combined)
 
     tolerance = 0.02
-    rounding_amount = totals.get("roundingAmount") or 0
-    gross_expected = (totals["taxBasis"] or 0) + (totals["taxAmount"] or 0) + rounding_amount
+    # BT-114 (roundingAmount) belongs in the payable-amount reconciliation,
+    # not the gross-amount one: BT-112 (gross) = BT-109 (taxBasis) +
+    # BT-110 (taxAmount); BT-115 (payable) = BT-112 - BT-113 (prepaid) +
+    # BT-114 (rounding), per EN16931 BR-CO-16. A non-zero rounding amount
+    # was previously added into the gross-amount check instead, which could
+    # produce a spurious AMOUNT_MISMATCH on a perfectly reconciling invoice.
+    gross_expected = (totals["taxBasis"] or 0) + (totals["taxAmount"] or 0)
     if abs((totals["grossAmount"] or 0) - gross_expected) > tolerance:
         return _build("CAL-003", "failed", ["AMOUNT_MISMATCH"], combined[2])
-    payable_expected = (totals["grossAmount"] or 0) - (totals.get("prepaidAmount") or 0)
+    rounding_amount = totals.get("roundingAmount") or 0
+    payable_expected = (totals["grossAmount"] or 0) - (totals.get("prepaidAmount") or 0) + rounding_amount
     if abs((totals["payableAmount"] or 0) - payable_expected) > tolerance:
         return _build("CAL-003", "failed", ["AMOUNT_MISMATCH"], combined[2])
     return _build("CAL-003", "passed", [], combined[2])

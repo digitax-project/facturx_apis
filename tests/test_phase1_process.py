@@ -35,6 +35,7 @@ def _assert_contract(body: dict, source_bytes: bytes):
     assert report["sourceSha256"] == hashlib.sha256(source_bytes).hexdigest()
     assert report["catalogVersion"]
     assert report["controlProfileId"] == "inbound-starter-de-v1"
+    assert report["controlProfileVersion"] == "0.1.0"
 
     dumped = str(body).lower()
     for keyword in DISALLOWED_ACTION_KEYWORDS:
@@ -256,6 +257,35 @@ def test_cal003_valid_invoice_without_total_prepaid_amount_is_unauffaellig(clien
     report = body["phase1ControlReport"]
     str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
     assert str_003["outcome"] == "passed"
+    cal_003 = next(c for c in report["controls"] if c["controlId"] == "CAL-003")
+    assert cal_003["outcome"] == "passed"
+    assert report["status"] == "unauffaellig"
+
+
+def test_cal003_nonzero_rounding_amount_reconciles_via_payable_not_gross(client):
+    """Regression test: BT-114 (roundingAmount) belongs in the payable-amount
+    reconciliation (payable = gross - prepaid + rounding), not the
+    gross-amount one (gross = taxBasis + taxAmount). A non-zero rounding
+    amount previously got added into the gross-amount check instead,
+    producing a spurious AMOUNT_MISMATCH on a perfectly valid invoice."""
+    xml_bytes = (
+        Path(__file__).parent / "fixtures" / "facturx_valid_en16931_with_rounding.xml"
+    ).read_bytes()
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", xml_bytes, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, xml_bytes)
+
+    invoice = body["canonicalInvoice"]["invoice"]
+    assert invoice["totals"]["roundingAmount"] == 0.01
+    assert invoice["totals"]["grossAmount"] == 119.0
+    assert invoice["totals"]["payableAmount"] == 119.01
+
+    report = body["phase1ControlReport"]
     cal_003 = next(c for c in report["controls"] if c["controlId"] == "CAL-003")
     assert cal_003["outcome"] == "passed"
     assert report["status"] == "unauffaellig"

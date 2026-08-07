@@ -112,10 +112,7 @@ def test_oversized_upload_is_rejected_before_parsing():
     assert exc_info.value.status_code == 413
 
 
-def test_oversized_embedded_xml_falls_back_to_plain_pdf():
-    """An embedded factur-x.xml attachment larger than the embedded-XML
-    limit must not be parsed at all -- falls back to plain_pdf rather than
-    handing an oversized payload to the XML parser."""
+def _make_oversized_embedded_xml() -> bytes:
     huge_xml = (
         b'<?xml version="1.0"?><rsm:CrossIndustryInvoice '
         b'xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100">'
@@ -123,10 +120,63 @@ def test_oversized_embedded_xml_falls_back_to_plain_pdf():
         + b"</rsm:CrossIndustryInvoice>"
     )
     assert len(huge_xml) > MAX_EMBEDDED_XML_BYTES
-    pdf_bytes = _blank_pdf_with_attachment("factur-x.xml", huge_xml)
+    return huge_xml
+
+
+def test_oversized_embedded_xml_is_not_downgraded_to_plain_pdf():
+    """An embedded factur-x.xml attachment larger than the embedded-XML
+    limit must not be parsed at all -- but it also must not be silently
+    downgraded to plain_pdf. This PDF is a known structured invoice we
+    can't safely read, not one that was never structured at all; treating
+    it as an ordinary plain PDF would let it flow through the PDF/OCR
+    mock-adapter path and potentially produce a false passing verdict for
+    content that was never actually examined."""
+    pdf_bytes = _blank_pdf_with_attachment("factur-x.xml", _make_oversized_embedded_xml())
     inspection = inspect_document(pdf_bytes, "invoice.pdf", "application/pdf")
-    assert inspection.source_type == "plain_pdf"
+    assert inspection.source_type == "hybrid_pdf"
+    assert inspection.detected_format == "unknown"
+    assert inspection.xml_bytes is None
     assert any("EMBEDDED_XML_TOO_LARGE" in w for w in inspection.warnings)
+
+
+def test_oversized_embedded_xml_routes_to_nicht_pruefbar_via_process(client):
+    pdf_bytes = _blank_pdf_with_attachment("factur-x.xml", _make_oversized_embedded_xml())
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    doc_001 = next(c for c in report["controls"] if c["controlId"] == "DOC-001")
+    assert doc_001["outcome"] == "failed"
+    assert "UNSUPPORTED_FORMAT" in doc_001["reasonCodes"]
+
+
+def test_oversized_upload_via_process_endpoint_is_413_not_500(client):
+    """Endpoint-level check that the bounded chunked reader in api.py and
+    document_intake's size check agree: an oversized upload through the
+    real HTTP endpoint is rejected cleanly, not read entirely into memory
+    or left to crash somewhere downstream."""
+    oversized = b"%PDF-1.4\n" + b"0" * (MAX_UPLOAD_BYTES + 1)
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("huge.pdf", oversized, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"]["error_code"] == "FILE_TOO_LARGE"
+
+
+def test_oversized_upload_via_inspect_endpoint_is_413(client):
+    oversized = b"%PDF-1.4\n" + b"0" * (MAX_UPLOAD_BYTES + 1)
+    response = client.post(
+        "/v1/invoices/inspect",
+        files={"file": ("huge.pdf", oversized, "application/pdf")},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"]["error_code"] == "FILE_TOO_LARGE"
 
 
 def test_malformed_xml_is_classified_unknown_not_crashed():

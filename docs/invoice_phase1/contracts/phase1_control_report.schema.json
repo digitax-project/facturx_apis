@@ -4,7 +4,7 @@
   "title": "DigiTax Phase 1 control report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "reportId", "runId", "sourceSha256", "catalogVersion", "controlProfileId", "status", "routing", "controls", "createdAt"],
+  "required": ["schemaVersion", "reportId", "runId", "sourceSha256", "catalogVersion", "controlProfileId", "controlProfileVersion", "status", "routing", "controls", "createdAt"],
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
     "reportId": { "type": "string", "minLength": 1 },
@@ -12,6 +12,7 @@
     "sourceSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
     "catalogVersion": { "type": "string", "minLength": 1 },
     "controlProfileId": { "type": "string", "minLength": 1 },
+    "controlProfileVersion": { "type": "string", "minLength": 1 },
     "status": { "enum": ["unauffaellig", "hinweis", "klaerung_erforderlich", "nicht_pruefbar"] },
     "routing": { "enum": ["standard_review", "prioritized_review"] },
     "controls": {

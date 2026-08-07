@@ -233,11 +233,29 @@ def _inspect_pdf(
         embedded_xml_bytes = None
 
     if embedded_xml_bytes and len(embedded_xml_bytes) > MAX_EMBEDDED_XML_BYTES:
+        # This is a known structured invoice (a well-known Factur-X/ZUGFeRD/
+        # Order-X attachment name was found) that we can't safely process --
+        # NOT the same fact as "this PDF never had structured data at all".
+        # Downgrading it to plain_pdf would let it flow through the PDF/OCR
+        # mock-adapter path and potentially produce a false unauffaellig/
+        # passing verdict for a document whose actual structured content was
+        # never examined. detected_format="unknown" keeps source_type as
+        # hybrid_pdf and fails DOC-001 (format_supported check in
+        # pipeline.py), routing to nicht_pruefbar instead.
         warnings.append(
             f"EMBEDDED_XML_TOO_LARGE: {len(embedded_xml_bytes)} bytes "
-            f"exceeds the {MAX_EMBEDDED_XML_BYTES} byte limit; treated as plain PDF"
+            f"exceeds the {MAX_EMBEDDED_XML_BYTES} byte limit; not processed"
         )
-        embedded_xml_bytes = None
+        return DocumentInspection(
+            source_type="hybrid_pdf",
+            filename=filename,
+            mime_type=content_type or "application/pdf",
+            sha256=sha256,
+            detected_format="unknown",
+            readable=True,
+            encrypted=False,
+            warnings=warnings,
+        )
 
     if embedded_xml_bytes:
         detected_format, format_version, profile, xml_etree = (
