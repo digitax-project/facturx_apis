@@ -11,34 +11,42 @@
 | Structured validation | Detect version/profile; run XSD and official Schematron/business rules | Factur-X API |
 | PDF extraction | OCR/text extraction plus constrained LLM mapping | extraction service called by n8n |
 | Normalization | Map both paths to `canonical_invoice.schema.json` | format adapter/service |
-| Minimum controls | Run the shared controls C01-C08 below | deterministic service or n8n code node |
+| Selected controls | Load a versioned organization/control profile and run its applicable controls | deterministic service, initially n8n code nodes where necessary |
 | Optional external checks | VAT-ID check when applicable and configured | n8n/API |
 | Status aggregation | Produce one Phase 1 status and routing target | deterministic rules |
 | Evidence | Persist source hash, extracted values, rule versions, findings, and timestamps | n8n/repository |
 | Optional analysis | Invoke Reqeli only for configured findings | n8n + Reqeli |
 | Handover | Display report and suggestions to the responsible human | n8n/application UI |
 
-## Shared minimum control catalog
+## Example starter control profile
 
-The PDF path must run the same content controls as the structured path after
-normalization. It cannot claim the same source reliability: XML values come
-from structured fields, while PDF values carry OCR/LLM confidence and evidence.
+The following controls are an initial executable example, not the complete or
+universally required catalog. The broader candidate list is maintained in
+`control_catalog.md`. The PDF path must run the same selected content controls
+as the structured path after normalization. It cannot claim the same source
+reliability: XML values come from structured fields, while PDF values carry
+OCR/LLM confidence and evidence.
 
-| ID | Minimum control | Machine outcome |
+| ID | Example control | Machine outcome |
 |---|---|---|
-| C01 | Input readable, supported, and not encrypted | pass/fail/not_reliable |
-| C02 | Structured document valid for detected version/profile | pass/fail/not_applicable |
-| C03 | Invoice number and issue date present | pass/fail/not_reliable |
-| C04 | Supplier and buyer name/address present | pass/fail/not_reliable |
-| C05 | Supplier tax number or VAT ID present; buyer VAT ID where required | pass/fail/not_applicable/not_reliable |
-| C06 | Supply description and delivery/service date or period present | pass/fail/not_reliable |
-| C07 | Currency, net/tax/gross/payable totals present and arithmetically consistent | pass/fail/not_reliable |
-| C08 | Buyer data match approved organization master data | pass/fail/not_reliable |
+| DOC-001 | Input readable, supported, and not encrypted | pass/fail/not_reliable |
+| STR-003 | Structured document valid for detected XSD | pass/fail/not_applicable |
+| STR-004 | Official structured business rules satisfied | pass/fail/not_applicable |
+| FRM-004 | Issue date present | pass/fail/not_reliable |
+| FRM-005 | Invoice number present | pass/fail/not_reliable |
+| FRM-001 | Supplier and buyer names present | pass/fail/not_reliable |
+| FRM-002 | Supplier and buyer addresses present | pass/fail/not_reliable |
+| FRM-003 | Supplier tax number or VAT ID present | pass/fail/not_reliable |
+| FRM-006 | Supply description present | pass/fail/not_reliable |
+| FRM-007 | Delivery/service date or period present when applicable | pass/fail/not_applicable/not_reliable |
+| CAL-001 | Line amounts arithmetically consistent | pass/fail/not_reliable |
+| CAL-002 | Tax bases, rates, tax amounts, and rounding consistent | pass/fail/not_reliable |
+| CAL-003 | Net, tax, gross, and payable totals reconcile | pass/fail/not_reliable |
+| CAL-004 | Currency present and used consistently | pass/fail/not_reliable |
+| ORG-001 | Buyer data match approved organization master data | pass/fail/not_reliable |
 
-Additional controls such as duplicate detection, foreign VAT-ID confirmation,
-reverse-charge indicators, exemptions, credit notes, and small-value invoices
-may be enabled as configured extensions. They must use explicit applicability
-conditions and may not be hidden inside an LLM prompt.
+Further controls are enabled incrementally through explicit versioned profiles.
+Applicability conditions may not be hidden inside an LLM prompt.
 
 ## Phase 1 status aggregation
 

@@ -21,15 +21,20 @@
    - `unknown`: return `nicht_pruefbar`.
 6. **Validate canonical JSON** - fail closed on schema errors.
 7. **Load organization master data** - versioned snapshot for this run.
-8. **Execute C01-C08** - deterministic controls with explicit applicability.
-9. **Aggregate Phase 1 status** - use the four-value status contract.
-10. **Optional VAT-ID check** - only when applicable and configured; merge
-    result into the report before final aggregation.
-11. **Optional Reqeli analysis** - disabled by default; invoke only for selected
+8. **Load control profile** - resolve the versioned control selection for the
+   organization and invoice context.
+9. **Determine applicability** - mark each selected control as applicable or
+   not applicable using explicit rules.
+10. **Execute selected controls** - run deterministic controls and retain
+   control/rule versions.
+11. **Optional VAT-ID check** - only when applicable and configured; merge its
+    result into the control results.
+12. **Aggregate Phase 1 status** - use the four-value status contract.
+13. **Optional Reqeli analysis** - disabled by default; invoke only for selected
     findings and retain its output as suggestions.
-12. **Persist evidence package** - source hash/reference, canonical JSON,
+14. **Persist evidence package** - source hash/reference, canonical JSON,
     control report, rule versions, execution timestamps, and service responses.
-13. **Return human-review payload** - status, findings, evidence, suggestions.
+15. **Return human-review payload** - status, findings, evidence, suggestions.
 
 ## Error workflow
 

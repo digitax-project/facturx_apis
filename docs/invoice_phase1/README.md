@@ -13,12 +13,14 @@ two input paths:
 2. Plain PDF: extract data with OCR/LLM, record field-level evidence and
    confidence, and normalize it to the same contract.
 
-Both paths then run the same deterministic minimum controls. Human oversight
-starts after Phase 1.
+Both paths then run the same selected deterministic control profile. The
+candidate catalog is intentionally broader than the first implementation and
+can be expanded control by control. Human oversight starts after Phase 1.
 
 ## Files
 
 - `automation_boundary.md`: what n8n automates and what remains human.
+- `control_catalog.md`: extensible candidate controls and implementation waves.
 - `service_gap_analysis.md`: current Factur-X API gaps and implementation order.
 - `test_matrix.md`: synthetic acceptance scenarios.
 - `agent_handover.md`: paste-ready implementation assignment.
@@ -30,7 +32,9 @@ starts after Phase 1.
 ## First implementation slice
 
 Implement a vertical slice for one valid ZUGFeRD invoice, one valid plain PDF,
-one missing-field PDF, and one invalid structured invoice. Do not begin with
-Reqeli or booking integration. The slice is complete when all four cases create
-a schema-valid canonical invoice or a controlled `nicht_pruefbar` result and a
-schema-valid Phase 1 report.
+one missing-field PDF, and one invalid structured invoice. Select and document
+a small starter control profile from the catalog; it is not necessary to
+implement the complete catalog. Do not begin with Reqeli or booking integration.
+The slice is complete when all four cases create a schema-valid canonical
+invoice or a controlled `nicht_pruefbar` result and a schema-valid Phase 1
+report.

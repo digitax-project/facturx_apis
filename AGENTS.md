@@ -16,7 +16,11 @@ logic in an API or dedicated validator.
   final tax judgment.
 - Factur-X/ZUGFeRD input uses embedded XML as the authoritative machine input.
 - Plain PDF input uses OCR/LLM extraction but must converge on the same
-  canonical invoice contract and deterministic control catalog.
+  canonical invoice contract and selected deterministic control profile.
+- `docs/invoice_phase1/control_catalog.md` is a candidate catalog, not a claim
+  that every control is universally applicable or already implemented.
+- Every run identifies the catalog and profile version. Add controls
+  incrementally without changing Phase 1 into final tax approval.
 - Low-confidence or incomplete PDF extraction must route to human review. It
   must never be silently treated as a valid structured invoice.
 - Reqeli is an optional analysis service after a control finding, not the
