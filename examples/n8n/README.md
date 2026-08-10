@@ -76,9 +76,18 @@ Start (Manual Trigger)
 The embedded invoice is a synthetic, fictional fixture ("Unternehmen X") so
 the workflow is fully reproducible via `n8n execute` with no filesystem
 mounts and no real invoice data. It is a deterministic regression/CI
-demo, not a stand-in for a real user-facing upload -- a separate
-operator-facing workflow with a real binary file input (Form Trigger or
-similar) is tracked as follow-up work in `AGENT_PROMPT.md`.
+demo, not a stand-in for a real user-facing upload -- see
+`digitax_invoice_phase1_upload_demo.json` below for the real-upload,
+operator-facing counterpart.
+
+**2026-08-10 capability-field fix:** PR #6 replaced the old flat
+`structuredFormats["factur-x"].xsdVersion`/`.legacyBaseline` fields with a
+per-level `xsdBaselines` map (each recognized profile is genuinely on its
+own XSD baseline now). The `Check Factur-X Version` node read the old
+fields and silently printed `"Using validator baseline: XSD undefined."`
+against the merged API -- reproduced against real `n8nio/n8n:2.33.7`, then
+fixed to read `xsdBaselines.en16931.version`/`.legacyBaseline` and to also
+surface `schematron.status`/`.artifactVersion`/`.engine`.
 
 ### Fail-safe API-error handling
 
@@ -153,6 +162,158 @@ integrity, configurable API URL, bounded retry + error-branch wiring, both
 review routes plus the technical-failure fallback all present); it is not a
 substitute for the real import/execute evidence, which is recorded in
 `coordination/claude-codex/handover-log.md`.
+
+## digitax_invoice_phase1_upload_demo.json
+
+The operator-facing counterpart to the structured regression demo above:
+accepts a **real** binary invoice upload and calls the same Phase 1 API.
+
+```
+Webhook: Invoice Upload (POST multipart/form-data)
+  -> Build Run Context           -- correlation ID before any API call,
+                                     filename/MIME type, organizationId
+                                     (explicit, or the fictional default
+                                     only under demoMode=true)
+  -> Validate Upload Request     -- missing file / missing org context:
+       -> [invalid] Build Invalid Upload Payload     never retried, no API call made
+       -> [valid]   GET /capabilities
+  -> Evaluate Capability Gate    -- EN16931 processable? Schematron implemented?
+       -> [absent]  Build Capability Gate Failure Payload   routes safely to technical_review
+       -> [present] POST /v1/invoices/process
+  -> Classify Process Response   -- 2xx success / 4xx-5xx "not retried" failure
+  -> Build Browser Response      -- single convergence point: renders full HTML
+                                     (invoice identity, parties, totals, profile,
+                                     XSD/Schematron version, control table)
+  -> Respond to Webhook (HTML)
+  -> Status Routing (Switch, 4 explicit outputs)
+       -> Human Review - Standard
+       -> Human Review - Prioritized
+       -> Human Review - Technical      (explicit route, not a fallthrough)
+       -> Human Review - Unknown (fallback)
+```
+
+Every failure and success path (`Build Invalid Upload Payload`, both
+`Build Technical Failure Payload (...)` nodes, `Build Capability Gate
+Failure Payload`, `Classify Process Response`) feeds the *same* `Build
+Browser Response` node, which feeds the *same* `Respond to Webhook` and
+`Status Routing` -- no duplicated response-building or routing logic.
+
+### Why a Webhook, not a Form Trigger
+
+Both trigger types need the same production-activation step (the workflow
+must be published/active for their real HTTP endpoint to work -- a test-mode
+listen-once endpoint isn't scriptable). A Webhook is exercisable headlessly
+with curl/PowerShell the same way this whole project's evidence has been
+gathered throughout (see `digitax_invoice_phase1_structured_demo.json`'s
+`n8n execute` verification and PR #5's real-execution evidence); a Form
+Trigger offers no advantage for that and adds UI-only surface. The minimal
+static page `phase1_upload_demo_page.html` (open directly in a browser, no
+server, no build step) gives the human-browser demo experience by simply
+POSTing multipart form data to the same webhook.
+
+### Fail-safe design
+
+- **Deterministic input errors never reach the API.** No file, or no
+  `organizationId`/`demoMode`, is caught in `Validate Upload Request` and
+  routed straight to `technical_review` -- confirmed by real timing
+  evidence: this path returns in ~0.075s (no network call, obviously no
+  retry).
+- **A real 4xx/5xx from the API is never retried either.** Both
+  `GET /capabilities` and `POST /v1/invoices/process` use
+  `options.response.neverError: true` + `fullResponse: true`, so *any* HTTP
+  response -- including 400/415/503 -- lands as normal node output with a
+  `statusCode`, never as a thrown error. Only a genuine connection-level
+  failure (`onError: "continueErrorOutput"`, `retryOnFail`, `maxTries: 3`,
+  `waitBetweenTries: 1000`) is retried. Verified with real timing: a real
+  API `415` rejection (garbage upload content) returns in ~0.09s; a real
+  unreachable-service failure (API container stopped) takes ~14.8s,
+  consistent with three bounded retries against a real DNS/connection
+  failure -- proof the two cases are genuinely handled differently, not
+  just labeled differently.
+- **A missing required capability routes safely, not silently.**
+  `Evaluate Capability Gate` checks `processableLevels` contains `en16931`
+  and `schematron.status === "implemented"` before ever calling
+  `/v1/invoices/process`.
+- **`technical_review` is an explicit Switch rule**, not a fallthrough to
+  the unknown-value fallback (unlike the regression demo's deliberately
+  simpler design) -- `Human Review - Technical` and `Human Review - Unknown
+  (fallback)` are two distinct terminal nodes.
+
+### Isolated environment: docker-compose.phase1-upload-demo.yml
+
+A separate, self-contained stack -- **never** the pre-existing, separately
+managed n8n instance on port 5678 / volume `n8n_data`, which this tooling
+never touches:
+
+- `api`: builds the repository's own `Dockerfile`, host port `6970` (not
+  `6969`, so it never collides with a manually-run `python run.py`),
+  reachable from n8n via the compose network as `http://api:6969`.
+- `n8n`: pinned `n8nio/n8n:2.33.7`, host port `5679`, named volume
+  `digitax_n8n_phase1_data` (never `n8n_data`).
+- Both services have real Docker healthchecks; nothing is imported or
+  executed before both report healthy.
+
+Manage it with `examples/n8n/scripts/Manage-Phase1UploadDemo.ps1`
+(Windows PowerShell 5.1-compatible):
+
+```powershell
+# Build+start both services, wait for real health, import both workflows
+# idempotently, publish+restart so the upload webhook goes live:
+./scripts/Manage-Phase1UploadDemo.ps1 -Action Start
+
+# Two real checks: CLI-execute the regression demo, and a real multipart
+# POST to the live upload webhook. Evidence saved under
+# output/bpmn/renders/versions/digitax_flow01_n8n/upload-automation/review_evidence/:
+./scripts/Manage-Phase1UploadDemo.ps1 -Action SmokeTest
+
+# Stop containers, keep the named volume (workflows/executions persist):
+./scripts/Manage-Phase1UploadDemo.ps1 -Action Stop
+
+# Destructive, explicit only -- deletes digitax_n8n_phase1_data after
+# re-verifying the exact volume name. Refuses without -Confirm:
+./scripts/Manage-Phase1UploadDemo.ps1 -Action Reset -Confirm
+```
+
+**Operational note on n8n's CLI:** `n8n import:workflow` always deactivates
+the imported workflow, even when the source JSON has `"active": true`
+(confirmed empirically -- every import prints `Deactivating workflow ...`).
+The upload demo's production webhook therefore needs an explicit
+`n8n update:workflow --id=... --active=true` after every import, and a
+container restart for that activation to take effect on the already-running
+process -- `Start` and any manual re-import both need this sequence; the
+script handles it automatically for `Start`.
+
+**Operational note on `n8n execute` against a running instance:** the
+main `n8n start` process holds n8n's Task Runners broker on its default
+port, which happens to collide with this stack's chosen host port (5679,
+purely coincidental). A subsequent `docker exec ... n8n execute` therefore
+needs `-e N8N_RUNNERS_BROKER_PORT=15679` (or any free port) to avoid `port
+5679 is already in use` -- this didn't surface in PR #5's testing, which
+only ever used one-shot `docker run --rm` containers with no already-running
+main process to collide with.
+
+### Real execution evidence (2026-08-10, n8n 2.33.7)
+
+Via the isolated stack above, real multipart POSTs to
+`http://localhost:5679/webhook/phase1-invoice-upload` (temporary fixtures
+derived at test time from the already-accepted embedded XML in
+`digitax_invoice_phase1_structured_demo.json`, never committed separately --
+see the parallel-agent boundary in `NEXT_JOB_2026-08-10.md`):
+
+| Scenario | Result | Notes |
+|---|---|---|
+| Valid EN16931 invoice | `unauffaellig` / `standard_review` | Full control table, XSD 1.09 EN16931, Schematron `implemented` |
+| Faulty invoice (amount mismatch) | `klaerung_erforderlich` / `prioritized_review` | CAL-003 with formula/expected/actual/difference |
+| No `organizationId`, no `demoMode` | `nicht_pruefbar` / `technical_review` | `ORGANIZATION_CONTEXT_REQUIRED`, ~0.075s, no API call |
+| Unrecognized file content | `nicht_pruefbar` / `technical_review` | real API `415`, `UNSUPPORTED_CONTENT_TYPE`, ~0.091s, not retried |
+| No file uploaded | `nicht_pruefbar` / `technical_review` | `MISSING_INVOICE_FILE` |
+| API unreachable | `nicht_pruefbar` / `technical_review` | `CAPABILITIES_SERVICE_UNAVAILABLE`, ~14.8s (bounded retry), recovered immediately on API restart |
+| Double import | no duplicates | `n8n list:workflow` shows exactly one entry per workflow id after re-importing both files |
+
+Full detail in `coordination/claude-codex/handover-log.md` and
+`output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.
+`tests/test_n8n_upload_demo_workflow.py` is the CI structural guard; it is
+not a substitute for the real evidence above.
 
 ## General rule
 
