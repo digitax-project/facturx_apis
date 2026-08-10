@@ -1,0 +1,71 @@
+# Isolated environment for the DigiTax Phase 1 operator upload demo.
+#
+# Deliberately separate from the repository's root docker-compose.yml and
+# from any manually-run "n8n" instance on the default port 5678 / volume
+# n8n_data -- this stack must never touch either. Everything here uses its
+# own project name, container names, network, and named volume so it can be
+# started and torn down independently.
+#
+# Usage: see examples/n8n/scripts/Manage-Phase1UploadDemo.ps1 rather than
+# calling `docker compose` directly, so health-waiting and idempotent
+# workflow import happen in the right order.
+name: digitax-phase1-demo
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: digitax-phase1-demo-api
+    ports:
+      # Host 6970, not 6969, so this containerized demo API never collides
+      # with a manually-run `python run.py` used for other local work.
+      - "6970:6969"
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  n8n:
+    image: n8nio/n8n:2.33.7
+    container_name: digitax-phase1-demo-n8n
+    ports:
+      - "5679:5678"
+    environment:
+      # Container-to-container URL via the compose network's service DNS,
+      # not host.docker.internal -- both services are on the same isolated
+      # network, so this doesn't depend on Docker Desktop's host gateway.
+      - FACTURX_API_BASE_URL=http://api:6969
+      # n8n >=2.x blocks $env.* expression access by default; this workflow
+      # family reads its API base URL that way (see examples/n8n/README.md
+      # for the tradeoff against an n8n Variable/credential).
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_DIAG_ENABLED=false
+    volumes:
+      - digitax_n8n_phase1_data:/home/node/.n8n
+      # Read-only: workflow JSON is imported by the management script via
+      # `docker exec ... n8n import:workflow`, never edited in place.
+      - ./:/data/workflows:ro
+    networks:
+      - demo
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+
+networks:
+  demo:
+    name: digitax-phase1-demo-net
+
+volumes:
+  digitax_n8n_phase1_data:
+    name: digitax_n8n_phase1_data

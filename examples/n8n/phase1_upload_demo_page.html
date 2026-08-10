@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  Minimal local upload page for the DigiTax Phase 1 operator upload demo.
+
+  Not served by n8n or the API -- just open this file directly in a browser
+  (file://...) while the isolated stack from
+  docker-compose.phase1-upload-demo.yml is running. It POSTs straight to the
+  webhook and lets the browser render the HTML response the workflow
+  returns (see digitax_invoice_phase1_upload_demo.json's "Build Browser
+  Response" node). No JavaScript, no external resources, no build step.
+
+  Why a static page instead of n8n's own Form Trigger: see the notes on the
+  "Webhook: Invoice Upload" node in digitax_invoice_phase1_upload_demo.json.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DigiTax Phase 1 -- invoice upload demo</title>
+<style>
+  body { font-family: sans-serif; max-width: 40rem; margin: 3rem auto; color: #1a1a1a; }
+  fieldset { border: 1px solid #ccc; border-radius: 6px; padding: 1rem 1.5rem; }
+  label { display: block; margin: 0.75rem 0 0.25rem; font-weight: bold; }
+  input[type="text"], input[type="url"] { width: 100%; padding: 0.4rem; box-sizing: border-box; }
+  button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; }
+  .boundary { margin-top: 2rem; padding: 1rem; background: #f5f5f5; border-left: 4px solid #888; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <h1>DigiTax Phase 1 -- invoice upload demo</h1>
+  <p>Upload a structured Factur-X invoice (XML or hybrid PDF). The result
+     replaces this page with a readable Phase 1 finding for human review.</p>
+
+  <form method="post" enctype="multipart/form-data"
+        action="http://localhost:5679/webhook/phase1-invoice-upload">
+    <fieldset>
+      <label for="webhookUrl">Webhook URL (edit if not using the default isolated stack)</label>
+      <input type="url" id="webhookUrl" name="webhookUrlDisplayOnly"
+             value="http://localhost:5679/webhook/phase1-invoice-upload"
+             oninput="document.querySelector('form').action = this.value">
+
+      <label for="invoiceFile">Invoice file</label>
+      <input type="file" id="invoiceFile" name="invoiceFile" required>
+
+      <label for="organizationId">Organization ID (leave blank to use demo mode below)</label>
+      <input type="text" id="organizationId" name="organizationId" placeholder="e.g. unternehmen-x-demo">
+
+      <label><input type="checkbox" name="demoMode" value="true"> Demo mode (defaults to the fictional Unternehmen X organization if no Organization ID is given)</label>
+
+      <button type="submit">Submit for Phase 1 review</button>
+    </fieldset>
+  </form>
+
+  <div class="boundary">
+    This demo produces a Phase 1 finding for human review only -- it is not
+    an approval, rejection, booking, payment, or supplier communication.
+  </div>
+</body>
+</html>
