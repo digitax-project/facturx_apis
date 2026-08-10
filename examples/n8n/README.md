@@ -261,7 +261,7 @@ Manage it with `examples/n8n/scripts/Manage-Phase1UploadDemo.ps1`
 (Windows PowerShell 5.1-compatible):
 
 ```powershell
-# Build+start both services, wait for real health, import both workflows
+# Build+start both services, wait for real health, import all demo workflows
 # idempotently, publish+restart so the upload webhook goes live:
 ./scripts/Manage-Phase1UploadDemo.ps1 -Action Start
 
@@ -314,7 +314,7 @@ see the parallel-agent boundary in `NEXT_JOB_2026-08-10.md`):
 | API unreachable | `nicht_pruefbar` / `technical_review` | `CAPABILITIES_SERVICE_UNAVAILABLE`, ~14.8s (bounded retry), recovered immediately on API restart |
 | Double import | no duplicates | `n8n list:workflow` shows exactly one entry per workflow id after re-importing both files |
 
-### Six-case profile demo
+### Batch and profile-comparison demo
 
 Generate the upload-ready hybrid PDFs with:
 
@@ -328,12 +328,18 @@ multiple simultaneous mismatches. The exact sequence, expected findings, and
 intended presentation message are documented in
 `docs/invoice_phase1/demo_profile_matrix.md`.
 
-Run all six cases through the live n8n webhook and verify the returned status
+Run all generated cases through the live n8n webhook and verify the returned status
 and selected profile:
 
 ```powershell
 ./examples/n8n/scripts/Test-Phase1DemoMatrix.ps1
 ```
+
+The browser dashboard is served by the demo API at
+`http://localhost:6970/demo/batch`. Each selected file is sent through the
+separate `phase1-invoice-batch-item` n8n webhook. The dashboard performs no
+invoice checks itself; it only consolidates API reports and requests an XLSX
+serialization for export.
 
 Full detail in `coordination/claude-codex/handover-log.md` and
 `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.

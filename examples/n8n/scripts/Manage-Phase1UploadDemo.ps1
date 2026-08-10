@@ -49,6 +49,7 @@ $N8nHealthUrl = "http://localhost:5679/healthz"
 
 $RegressionWorkflowId = "digitax-invoice-phase1-structured-demo"
 $UploadWorkflowId = "digitax-invoice-phase1-upload-demo"
+$BatchWorkflowId = "digitax-invoice-phase1-batch-item"
 
 $EvidenceDir = [System.IO.Path]::GetFullPath((Join-Path $N8nDir "..\..\..\..\..\output\bpmn\renders\versions\digitax_flow01_n8n\upload-automation\review_evidence"))
 
@@ -84,16 +85,18 @@ function Invoke-N8nImport {
     }
 }
 
-function Publish-UploadWorkflow {
+function Publish-DemoWebhooks {
     # n8n's import:workflow always deactivates the imported workflow as a
     # safety default (confirmed empirically: every import prints
     # "Deactivating workflow ..." even when the source JSON has
     # "active": true) -- so the upload demo's production webhook needs an
     # explicit publish step after every import, and a restart for that
     # activation to take effect on the already-running n8n process.
-    Write-Host "Publishing $UploadWorkflowId so its webhook goes live ..."
-    docker exec $N8nContainer n8n update:workflow --id=$UploadWorkflowId --active=true
-    if ($LASTEXITCODE -ne 0) { throw "n8n update:workflow --active=true failed (exit $LASTEXITCODE)" }
+    foreach ($id in @($UploadWorkflowId, $BatchWorkflowId)) {
+        Write-Host "Publishing $id so its webhook goes live ..."
+        docker exec $N8nContainer n8n update:workflow --id=$id --active=true
+        if ($LASTEXITCODE -ne 0) { throw "n8n update:workflow --active=true failed for $id (exit $LASTEXITCODE)" }
+    }
 
     Write-Host "Restarting n8n so the published webhook activates ..."
     docker restart $N8nContainer
@@ -107,7 +110,7 @@ function Assert-NoDuplicateWorkflows {
         throw "n8n list:workflow failed (exit $LASTEXITCODE):`n$listOutput"
     }
     Write-Host $listOutput
-    foreach ($id in @($RegressionWorkflowId, $UploadWorkflowId)) {
+    foreach ($id in @($RegressionWorkflowId, $UploadWorkflowId, $BatchWorkflowId)) {
         $idMatches = @($listOutput | Select-String -SimpleMatch $id)
         if ($idMatches.Count -gt 1) {
             throw "Duplicate workflow detected for id $id ($($idMatches.Count) entries) -- import is not idempotent"
@@ -116,7 +119,7 @@ function Assert-NoDuplicateWorkflows {
             throw "Expected workflow id $id not found after import"
         }
     }
-    Write-Host "No duplicate workflows: $RegressionWorkflowId and $UploadWorkflowId each appear exactly once."
+    Write-Host "No duplicate workflows: all three demo workflow ids appear exactly once."
 }
 
 switch ($Action) {
@@ -130,13 +133,15 @@ switch ($Action) {
 
         Invoke-N8nImport -WorkflowFileName "digitax_invoice_phase1_structured_demo.json"
         Invoke-N8nImport -WorkflowFileName "digitax_invoice_phase1_upload_demo.json"
+        Invoke-N8nImport -WorkflowFileName "digitax_invoice_phase1_batch_item.json"
         Assert-NoDuplicateWorkflows
-        Publish-UploadWorkflow
+        Publish-DemoWebhooks
 
         Write-Host ""
         Write-Host "Stack is up:"
         Write-Host "  n8n UI:      http://localhost:5679"
         Write-Host "  Upload demo: POST http://localhost:5679/webhook/phase1-invoice-upload (multipart: invoiceFile, organizationId or demoMode=true)"
+        Write-Host "  Batch UI:    http://localhost:6970/demo/batch"
         Write-Host "  API:         http://localhost:6970 (host) / http://api:6969 (container network)"
         Write-Host "  Volume:      $VolumeName (preserved across Stop)"
     }

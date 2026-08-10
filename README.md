@@ -135,7 +135,7 @@ The complete candidate catalog, including controls not yet selected for the
 starter profile, is documented in
 [`docs/invoice_phase1/control_catalog.md`](docs/invoice_phase1/control_catalog.md).
 
-### Run the six-case n8n demo
+### Run the batch and profile-comparison demo
 
 The isolated demo uses API port `6970`, n8n port `5679`, and the dedicated
 Docker volume `digitax_n8n_phase1_data`. It does not change an existing n8n
@@ -149,11 +149,18 @@ instance on port `5678`.
 Open [`examples/n8n/phase1_upload_demo_page.html`](examples/n8n/phase1_upload_demo_page.html),
 select Unternehmen X or Unternehmen Y, and upload these generated cases:
 
+For the batch presentation, open `http://localhost:6970/demo/batch`. It accepts
+multiple files for X and Y, consolidates results in one table, exports a real
+`.xlsx` workbook, runs a paired profile comparison, and can generate a
+deterministic synthetic X batch. These demo-only endpoints are disabled unless
+`FACTURX_ENABLE_DEMO_ENDPOINTS=true`; the isolated Docker setup enables them.
+
 | Case | Profile | Expected result | Expected evidence |
 | --- | --- | --- | --- |
 | X: valid | starter | `unauffaellig / standard_review` | shared baseline passes |
 | X: missing supplier identifier | starter | `klaerung_erforderlich / prioritized_review` | `FRM-003` and official Schematron findings |
 | X: incorrect payable amount | starter | `klaerung_erforderlich / prioritized_review` | official `BR-CO-16` and independent `CAL-003` explanation |
+| X: comparison supplier | starter | `unauffaellig / standard_review` | supplier matching is not selected by this profile |
 | Y: valid approved supplier | operating | `unauffaellig / standard_review` | shared baseline plus `ORG-002` pass |
 | Y: unapproved supplier | operating | `klaerung_erforderlich / prioritized_review` | `ORG-002 / SUPPLIER_NOT_APPROVED` |
 | Y: multiple mismatches | operating | `klaerung_erforderlich / prioritized_review` | organization, required-information, arithmetic, and official-rule findings |
@@ -166,7 +173,8 @@ python examples/demo/generate_demo_invoices.py --output-dir .demo-output
 
 See [`examples/n8n/README.md`](examples/n8n/README.md) for workflow operation
 and [`docs/invoice_phase1/demo_profile_matrix.md`](docs/invoice_phase1/demo_profile_matrix.md)
-for the recommended demo sequence and exact meaning of each case.
+for the exact meaning of each case. The presentation sequence is in
+[`docs/invoice_phase1/batch_demo_runbook.md`](docs/invoice_phase1/batch_demo_runbook.md).
 
 ### Upstream software and validation vendors
 

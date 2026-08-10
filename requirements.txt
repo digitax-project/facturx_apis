@@ -5,3 +5,6 @@ uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 jsonschema>=4.20.0
 saxonche==13.0.0
+# Used only when the explicitly enabled demo endpoint generates readable
+# synthetic hybrid PDFs; core invoice processing does not import it.
+reportlab>=4.0.0

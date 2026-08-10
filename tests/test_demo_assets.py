@@ -134,6 +134,7 @@ def test_six_case_profile_and_finding_matrix_runs_through_public_api(client):
         "x_valid": ("inbound-starter-de-v1", set()),
         "x_missing_supplier_identifier": ("inbound-starter-de-v1", {"STR-004", "FRM-003"}),
         "x_incorrect_payable": ("inbound-starter-de-v1", {"STR-004", "CAL-003"}),
+        "x_shared_unapproved_supplier": ("inbound-starter-de-v1", set()),
         "y_valid": ("inbound-operating-de-v1", set()),
         "y_unapproved_supplier": ("inbound-operating-de-v1", {"ORG-002"}),
         "y_multiple_mismatches": (
@@ -141,7 +142,7 @@ def test_six_case_profile_and_finding_matrix_runs_through_public_api(client):
             {"STR-004", "FRM-003", "CAL-003", "ORG-001", "ORG-002"},
         ),
     }
-    assert len(demo.SCENARIOS) == 6
+    assert len(demo.SCENARIOS) == 7
 
     for scenario in demo.SCENARIOS:
         pdf_bytes, _xml_bytes, _invoice = demo.build_hybrid_pdf(scenario)

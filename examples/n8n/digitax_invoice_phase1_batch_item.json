@@ -1,0 +1,104 @@
+{
+  "id": "digitax-invoice-phase1-batch-item",
+  "name": "DigiTax Invoice Phase 1 - Batch Item",
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "phase1-invoice-batch-item",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1000001-0000-4000-8000-000000000001",
+      "name": "Webhook: Batch Item",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 0],
+      "webhookId": "digitax-phase1-invoice-batch-item"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/process",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "invoiceFile"
+            },
+            {
+              "parameterType": "formData",
+              "name": "organizationId",
+              "value": "={{ $('Webhook: Batch Item').item.json.body.organizationId }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": { "neverError": true, "fullResponse": true }
+          }
+        }
+      },
+      "id": "b1000002-0000-4000-8000-000000000002",
+      "name": "POST /v1/invoices/process",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "position": [-460, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst statusCode = response.statusCode || 503;\nconst body = response.body || {};\nif (statusCode >= 200 && statusCode < 300 && body.phase1ControlReport) {\n  return [{ json: { ok: true, statusCode, canonicalInvoice: body.canonicalInvoice, phase1ControlReport: body.phase1ControlReport } }];\n}\nconst detail = body.detail && typeof body.detail === 'object' ? body.detail : {};\nreturn [{ json: { ok: false, statusCode, errorCode: detail.error_code || 'BATCH_ITEM_PROCESSING_FAILED', detail: detail.detail || response.message || 'Invoice processing failed.' } }];"
+      },
+      "id": "b1000003-0000-4000-8000-000000000003",
+      "name": "Build JSON Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      },
+      "id": "b1000004-0000-4000-8000-000000000004",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [20, 0]
+    }
+  ],
+  "connections": {
+    "Webhook: Batch Item": {
+      "main": [[{ "node": "POST /v1/invoices/process", "type": "main", "index": 0 }]]
+    },
+    "POST /v1/invoices/process": {
+      "main": [
+        [{ "node": "Build JSON Result", "type": "main", "index": 0 }],
+        [{ "node": "Build JSON Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build JSON Result": {
+      "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": []
+}

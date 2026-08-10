@@ -112,6 +112,27 @@ SCENARIOS = [
         ),
     },
     {
+        "id": "x_shared_unapproved_supplier",
+        "organizationId": "unternehmen-x-demo",
+        "controlProfileId": "inbound-starter-de-v1",
+        "category": "profile_comparison",
+        "xmlFixture": "facturx_valid_en16931.xml",
+        "outputBasename": "demo_invoice_shared_supplier_unternehmen_x",
+        "mutations": [
+            ["set", "//rsm:ExchangedDocument/ram:ID", "UX-2026-COMPARE"],
+            ["set", "//ram:SellerTradeParty/ram:Name", "Unbekannter Lieferant GmbH"],
+            ["set", "//ram:SellerTradeParty/ram:SpecifiedTaxRegistration/ram:ID", "DE222222222"],
+            ["set", "//ram:ApplicableHeaderTradeSettlement/ram:PaymentReference", "UX-2026-COMPARE"],
+        ],
+        "injectedMismatches": [
+            "Supplier is not in Unternehmen Y's approved supplier data, but Unternehmen X does not select ORG-002."
+        ],
+        "scenario": "Profile comparison: same supplier, service, and amounts as the Unternehmen Y comparison invoice.",
+        "expectedStatus": "unauffaellig",
+        "expectedRouting": "standard_review",
+        "expectedFindings": "No supplier-master-data finding because the Unternehmen X starter profile does not select ORG-002.",
+    },
+    {
         "id": "y_valid",
         "organizationId": "unternehmen-y-demo",
         "controlProfileId": "inbound-operating-de-v1",

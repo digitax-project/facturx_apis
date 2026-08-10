@@ -8,12 +8,16 @@ completed classification (including one whose *result* is nicht_pruefbar)
 is always a normal 200 response.
 """
 import logging
+import os
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
 
 from .capabilities import CAPABILITIES
 from .document_intake import MAX_UPLOAD_BYTES, inspect_document
+from .demo_support import build_results_xlsx
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import MockPdfExtractionAdapter, PdfExtractionAdapter
 from .pipeline import normalize_invoice, process_invoice, validate_invoice
@@ -33,6 +37,25 @@ def get_pdf_extraction_adapter() -> PdfExtractionAdapter:
 
 
 _READ_CHUNK_BYTES = 64 * 1024
+
+
+def _require_demo_endpoints() -> None:
+    if os.getenv("FACTURX_ENABLE_DEMO_ENDPOINTS", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="Demo endpoints are disabled.")
+
+
+def _load_demo_generator():
+    try:
+        from examples.demo.generate_demo_invoices import SCENARIOS, build_hybrid_pdf
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Synthetic generator assets are not installed. Use the repository's "
+                "isolated Docker demo setup, which includes examples/demo."
+            ),
+        ) from exc
+    return SCENARIOS, build_hybrid_pdf
 
 
 async def _read_upload_bounded(file: UploadFile, max_bytes: int = MAX_UPLOAD_BYTES) -> bytes:
@@ -74,6 +97,69 @@ async def health():
 @router.get("/capabilities")
 async def capabilities():
     return CAPABILITIES
+
+
+@router.get("/demo/batch", include_in_schema=False)
+async def batch_demo_page():
+    _require_demo_endpoints()
+    return FileResponse(Path(__file__).parent / "static" / "batch_demo.html")
+
+
+@router.get("/v1/demo/mock-invoices")
+async def list_mock_invoices():
+    _require_demo_endpoints()
+    scenarios, _build_hybrid_pdf = _load_demo_generator()
+
+    return {
+        "generator": "deterministic-template-v1",
+        "llmUsed": False,
+        "scenarios": [
+            {
+                "id": scenario["id"],
+                "organizationId": scenario["organizationId"],
+                "filename": f"{scenario['outputBasename']}.pdf",
+                "category": scenario["category"],
+                "description": scenario["scenario"],
+            }
+            for scenario in scenarios
+        ],
+    }
+
+
+@router.get("/v1/demo/mock-invoices/{scenario_id}")
+async def generate_mock_invoice(scenario_id: str):
+    _require_demo_endpoints()
+    scenarios, build_hybrid_pdf = _load_demo_generator()
+
+    scenario = next((item for item in scenarios if item["id"] == scenario_id), None)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="Unknown synthetic invoice scenario.")
+    pdf_bytes, _xml_bytes, _invoice = build_hybrid_pdf(scenario)
+    filename = f"{scenario['outputBasename']}.pdf"
+    return Response(
+        pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-DigiTax-Synthetic-Generator": "deterministic-template-v1",
+        },
+    )
+
+
+@router.post("/v1/demo/results.xlsx")
+async def export_demo_results(payload: dict = Body(...)):
+    _require_demo_endpoints()
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows or len(rows) > 500:
+        raise HTTPException(status_code=422, detail="rows must contain between 1 and 500 results.")
+    if any(not isinstance(row, dict) for row in rows):
+        raise HTTPException(status_code=422, detail="Every result row must be an object.")
+    workbook = build_results_xlsx(rows)
+    return Response(
+        workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="digitax-phase1-results.xlsx"'},
+    )
 
 
 @router.post("/v1/invoices/inspect")

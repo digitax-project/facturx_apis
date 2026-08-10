@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-  Generates and sends all six synthetic profile-demo invoices through the
+  Generates and sends all synthetic profile-demo invoices through the
   live n8n upload webhook.
 #>
 param(
-    [string]$WebhookUrl = "http://localhost:5679/webhook/phase1-invoice-upload"
+    [string]$WebhookUrl = "http://localhost:5679/webhook/phase1-invoice-batch-item"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +24,7 @@ $failures = @()
 
 foreach ($entry in $manifest.entries) {
     $invoicePath = Join-Path $OutputDir $entry.generatedPdf
-    $responsePath = Join-Path $ResultDir "$($entry.scenarioId).html"
+    $responsePath = Join-Path $ResultDir "$($entry.scenarioId).json"
     Write-Host "Testing $($entry.scenarioId) with $($entry.organizationId) ..."
 
     $httpCode = & curl.exe -s -o $responsePath -w "%{http_code}" $WebhookUrl `
@@ -35,11 +35,12 @@ foreach ($entry in $manifest.entries) {
         continue
     }
 
-    $response = Get-Content -Raw -Path $responsePath
-    $expectedStatus = "STATUS: $($entry.expectedStatus)"
+    $response = Get-Content -Raw -Path $responsePath | ConvertFrom-Json
+    $report = $response.phase1ControlReport
+    $expectedStatus = $entry.expectedStatus
     $expectedProfile = $entry.controlProfileId
-    if ($httpCode -ne "200" -or $response -notmatch [regex]::Escape($expectedStatus) -or
-        $response -notmatch [regex]::Escape($expectedProfile)) {
+    if ($httpCode -ne "200" -or -not $response.ok -or
+        $report.status -ne $expectedStatus -or $report.controlProfileId -ne $expectedProfile) {
         $failures += "$($entry.scenarioId): HTTP $httpCode, expected $expectedStatus and $expectedProfile"
         continue
     }
@@ -50,5 +51,5 @@ if ($failures.Count -gt 0) {
     throw "Demo matrix failed:`n$($failures -join "`n")"
 }
 
-Write-Host "All $($manifest.entries.Count) demo cases passed through n8n."
-Write-Host "Browser-readable responses: $ResultDir"
+Write-Host "All $($manifest.entries.Count) generated demo cases passed through n8n."
+Write-Host "Machine-readable batch responses: $ResultDir"
