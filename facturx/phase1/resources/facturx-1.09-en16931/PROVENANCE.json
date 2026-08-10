@@ -1,0 +1,64 @@
+{
+  "$comment": "Provenance manifest for the vendored Factur-X EN16931 XSD/Schematron resources in this directory. tests/test_resource_provenance.py asserts every file listed below is present and its SHA-256 matches. Do not edit a vendored artifact file without regenerating both its hash here and the wheelSource.sha256 below.",
+  "artifactLabel": "Factur-X 1.09 EN16931 (XSD + compiled Schematron business rules)",
+  "artifactVersionNote": "This is Factur-X 1.09, NOT ZUGFeRD 2.5.2 / Factur-X 1.09.2. The compiled Schematron stylesheet's own embedded title attribute reads 'Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)' (verified by inspecting Factur-X_1.09_EN16931.xsl directly, not inferred from the wheel's package version). The official ZUGFeRD 2.5.2 / Factur-X 1.09.2 corrigendum package (published by FeRD/FNFE-MPE on 2026-08-04, primarily affecting the EXTENDED profile) requires submitting real personal data through a registration form on ferd-net.de and fnfe-mpe.org -- there is no direct, ungated download. Per an explicit 2026-08-10 user decision, this round vendors the exact, independently content-verified, ungated Factur-X 1.09 EN16931 artifacts instead, and every claim in code, /capabilities, and documentation says '1.09', never '1.09.2'. Upgrading EN16931 to the true 1.09.2 corrigendum artifacts (if it differs from 1.09 for EN16931 at all -- FeRD's own release note says the corrigendum 'primarily' affects EXTENDED) is a follow-up once someone completes that registration and hands over the official ZIP.",
+  "retrievalDate": "2026-08-10",
+  "wheelSource": {
+    "package": "factur-x",
+    "version": "6.6",
+    "pypiProjectUrl": "https://pypi.org/project/factur-x/6.6/",
+    "pypiJsonUrl": "https://pypi.org/pypi/factur-x/6.6/json",
+    "filename": "factur_x-6.6-py3-none-any.whl",
+    "sha256": "e13949e7eb3c2af3b528487aa49ca49f0af02bc84ee5a513fc48e222baad965b",
+    "sha256VerifiedAgainst": "PyPI JSON API 'digests.sha256' for this exact release file, fetched independently of the local pip download",
+    "uploadTime": "2026-07-22T20:48:45",
+    "license": "BSD-3-Clause-style (see upstream LICENSE.txt, identical in text to this repository's own LICENSE file -- this repository is itself a fork of the same akretion/factur-x project)",
+    "upstreamHomepage": "https://github.com/akretion/factur-x",
+    "note": "Only the 6 files listed below (from wheelPath facturx/xsd_and_schematron/facturx-en16931/) were copied. No other file from the wheel, and no dependency edge on the 'factur-x' PyPI package, was added -- see facturx/phase1/validate/structured.py and schematron.py module docstrings for why (this repository's own package is also named 'facturx', a name collision with upstream). The wheel's bundled files carry no individual per-file license headers; provenance for each is this manifest entry plus the wheel-level BSD license above."
+  },
+  "files": [
+    {
+      "filename": "Factur-X_EN16931.xsd",
+      "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/Factur-X_EN16931.xsd",
+      "sha256": "977654a4e0442885a3d622ca198cff414f467eebc93098654b98127f2349f066",
+      "role": "Root XSD for the EN16931 profile; imports the three urn_un_unece_... files below."
+    },
+    {
+      "filename": "Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_QualifiedDataType_100.xsd",
+      "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_QualifiedDataType_100.xsd",
+      "sha256": "5a3ce756cfa8d4f2ff3165d68123cfb7fbf3c7b64664edb0de38cca64d5c413b",
+      "role": "Imported qualified-data-type definitions."
+    },
+    {
+      "filename": "Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_ReusableAggregateBusinessInformationEntity_100.xsd",
+      "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_ReusableAggregateBusinessInformationEntity_100.xsd",
+      "sha256": "99ee1a2a2857babcb4ab74a64fc65a816fe25d2209291d403a8d0dc85542abd8",
+      "role": "Imported reusable aggregate business information entity definitions."
+    },
+    {
+      "filename": "Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_UnqualifiedDataType_100.xsd",
+      "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_UnqualifiedDataType_100.xsd",
+      "sha256": "f87a1b78d2b7177955957002f8c2a7917e326038d38803f875266cc7579ea857",
+      "role": "Imported unqualified-data-type definitions."
+    },
+    {
+      "filename": "Factur-X_1.09_EN16931.xsl",
+      "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/Factur-X_1.09_EN16931.xsl",
+      "sha256": "ad17794b088dfb89a5e92c9e3b9a2f6663b95bd12b23677667e3e7996d1c4b1f",
+      "role": "Compiled ISO Schematron business-rule stylesheet (XSLT 2.0, requires an XSLT2-capable engine -- executed offline via pinned saxonche/SaxonC-HE). Embedded title: 'Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)'. Contains 427 svrl:failed-assert templates (424 unflagged/blocking BR-*, BR-CO-*, BR-S-*, BR-DEC-* assertions; 3 flag=\"warning\" PEPPOL-EN16931-R00x advisory assertions). The only external-resource access in the whole file is a fixed relative document('FACTUR-X_EN16931_codedb.xml') call (116 occurrences, always the same literal filename, resolved by the XSLT engine against this stylesheet's own location -- never derived from the invoice being checked)."
+    },
+    {
+      "filename": "FACTUR-X_EN16931_codedb.xml",
+      "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/FACTUR-X_EN16931_codedb.xml",
+      "sha256": "faa3ef78a23a5910e9c90bbcd3c3de5e45b6a84a3d62e11e1e6097fa466d52d8",
+      "role": "Code-list lookup table (enumeration values) referenced by Factur-X_1.09_EN16931.xsl via document(). Required at execution time -- schematron.py fails the control safely (not_reliable, never passed) if this file is missing or unreadable, verified directly (see tests/test_schematron.py::test_missing_codedb_fails_safely)."
+    }
+  ],
+  "executionEngine": {
+    "package": "saxonche",
+    "pinnedVersion": "13.0.0",
+    "product": "SaxonC-HE 13.0 from Saxonica",
+    "license": "Mozilla Public License 2.0 (Saxon-HE), no license key required, no Java runtime, no network access at runtime",
+    "why": "The compiled Schematron stylesheet declares <xsl:stylesheet version=\"2.0\">, i.e. genuine XSLT 2.0, which lxml/libxslt cannot execute (1.0 only). saxonche is Saxonica's own offline, open-source Python binding for SaxonC-HE and needs no external service (unlike upstream factur-x's own convenience wrapper, which per its docs can call out to a remote 'Saxon Server' -- that code path is not used here at all; this integration calls the SaxonC-HE engine in-process)."
+  }
+}
