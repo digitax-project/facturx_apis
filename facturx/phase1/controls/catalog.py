@@ -31,7 +31,11 @@ CATALOG: dict[str, ControlDefinition] = {
         "STR-003",
         "Structured document valid for detected XSD",
         "blocking",
-        "1.07.2",
+        # Default/fallback label only -- evaluate_str_003() overrides this with
+        # the XSD baseline actually used for the request (see
+        # validate/structured.py: "1.09" for en16931, "1.07.2" for the other,
+        # still-legacy-baseline recognized levels).
+        "1.09",
         selected_in_starter_profile=True,
     ),
     "DOC-007": ControlDefinition(
@@ -45,14 +49,8 @@ CATALOG: dict[str, ControlDefinition] = {
         "STR-004",
         "Official structured business rules (Schematron) satisfied",
         "blocking",
-        "not_implemented",
-        selected_in_starter_profile=False,
-        exclusion_reason=(
-            "No official Schematron/business-rule artifacts are bundled or "
-            "fetched in this slice. A selected-but-not-executed control must "
-            "not present as passed, so this control is left out of the "
-            "starter profile entirely rather than reported as not_run."
-        ),
+        "1.09",
+        selected_in_starter_profile=True,
     ),
     "FRM-001": ControlDefinition(
         "FRM-001", "Supplier and buyer names present", "blocking", "1.0.0", True

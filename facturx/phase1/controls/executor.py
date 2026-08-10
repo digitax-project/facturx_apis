@@ -25,6 +25,7 @@ from dataclasses import dataclass, field as dc_field
 from typing import Optional
 
 from .catalog import CATALOG
+from ..validate.schematron import SchematronValidationResult
 from ..validate.structured import StructuredValidationResult
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
@@ -114,13 +115,92 @@ def evaluate_str_003(structured_validation: StructuredValidationResult | None) -
             "STR-003", definition.title, "not_applicable", "none",
             reason_codes=["NOT_A_STRUCTURED_DOCUMENT"], rule_version=definition.rule_version,
         )
+    # The XSD baseline actually used varies by detected profile (see
+    # validate/structured.py: "1.09" for en16931, "1.07.2" for the other,
+    # still-legacy-baseline recognized levels) -- report the real one used
+    # for THIS request, not the catalog's static default.
+    rule_version = structured_validation.xsd_version or definition.rule_version
     if structured_validation.xsd_valid:
-        return ControlResult("STR-003", definition.title, "passed", "none", rule_version=definition.rule_version)
+        return ControlResult("STR-003", definition.title, "passed", "none", rule_version=rule_version)
     return ControlResult(
         "STR-003", definition.title, "failed", definition.failure_severity,
-        reason_codes=["XSD_INVALID"], rule_version=definition.rule_version,
+        reason_codes=["XSD_INVALID"], rule_version=rule_version,
         message=structured_validation.xsd_message,
     )
+
+
+def evaluate_str_004(
+    schematron_validation: SchematronValidationResult | None, xsd_valid: bool = True
+) -> ControlResult:
+    """Official EN16931 Schematron business rules, executed offline via
+    saxonche against the vendored Factur-X 1.09 stylesheet (see
+    validate/schematron.py). A flag="warning" finding is an advisory
+    PEPPOL-EN16931-R00x recommendation, not a rule violation -- present with
+    zero non-warning findings still passes, but keeps the warnings visible in
+    `details` rather than silently dropping them.
+
+    `xsd_valid=False` means STR-003 already failed: real EN16931 Schematron
+    rules assume XSD-valid input (its arithmetic/type conversions are not
+    defined for a document that violates the type system XSD itself
+    enforces -- confirmed directly: running it against this repo's own
+    XSD-invalid fixture, whose invalidity is a non-numeric value in a
+    decimal-typed field, makes Saxon raise FORG0001, not produce a
+    meaningful business-rule finding). Schematron is not run in that case;
+    STR-003 already reported the blocking finding.
+    """
+    definition = CATALOG["STR-004"]
+    if not xsd_valid:
+        return ControlResult(
+            "STR-004", definition.title, "not_applicable", "none",
+            reason_codes=["BLOCKED_BY_XSD_INVALID"], rule_version=definition.rule_version,
+            message="Official Schematron business-rule validation requires a structurally "
+            "XSD-valid document; not run because STR-003 (XSD) failed.",
+        )
+    if schematron_validation is None or schematron_validation.status == "not_applicable":
+        return ControlResult(
+            "STR-004", definition.title, "not_applicable", "none",
+            reason_codes=["NOT_A_STRUCTURED_DOCUMENT"], rule_version=definition.rule_version,
+        )
+    if schematron_validation.status == "unavailable":
+        # Never a passed control when Saxon or its bundled resources fail --
+        # not_reliable forces nicht_pruefbar via aggregate(), same treatment
+        # as any other check this implementation cannot currently perform.
+        return ControlResult(
+            "STR-004", definition.title, "not_reliable", definition.failure_severity,
+            reason_codes=["SCHEMATRON_EXECUTION_UNAVAILABLE"], rule_version=definition.rule_version,
+            message="Official Schematron business-rule validation could not be executed: "
+            f"{schematron_validation.error_detail}",
+        )
+
+    blocking = [f for f in schematron_validation.findings if f.flag != "warning"]
+    warnings = [f for f in schematron_validation.findings if f.flag == "warning"]
+
+    def _finding_dict(f):
+        return {"ruleId": f.rule_id, "flag": f.flag, "message": f.message, "location": f.location}
+
+    if blocking:
+        first = blocking[0]
+        message = (
+            f"{len(blocking)} official EN16931 business rule(s) failed"
+            + (f", {len(warnings)} advisory warning(s)" if warnings else "")
+            + f". First: [{first.rule_id}] {first.message}"
+        )
+        details = {"schematronFindings": [_finding_dict(f) for f in blocking + warnings]}
+        return ControlResult(
+            "STR-004", definition.title, "failed", definition.failure_severity,
+            reason_codes=["SCHEMATRON_RULE_VIOLATION"],
+            evidence_refs=[f.rule_id for f in blocking],
+            rule_version=definition.rule_version, message=message, details=details,
+        )
+    if warnings:
+        message = f"{len(warnings)} advisory EN16931/PEPPOL warning(s), no blocking rule violations."
+        details = {"schematronFindings": [_finding_dict(f) for f in warnings]}
+        return ControlResult(
+            "STR-004", definition.title, "passed", "none",
+            evidence_refs=[f.rule_id for f in warnings],
+            rule_version=definition.rule_version, message=message, details=details,
+        )
+    return ControlResult("STR-004", definition.title, "passed", "none", rule_version=definition.rule_version)
 
 
 def evaluate_extraction_confidence(

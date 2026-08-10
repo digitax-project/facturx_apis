@@ -27,6 +27,7 @@ from .controls.executor import (
     evaluate_extraction_confidence,
     evaluate_org_001,
     evaluate_str_003,
+    evaluate_str_004,
     not_run_result,
 )
 from .controls.profiles import STARTER_PROFILE
@@ -36,7 +37,16 @@ from .normalize.pdf_adapter import PdfExtractionAdapter, normalize_pdf_extractio
 from .normalize.structured import normalize_structured_invoice
 from .organization_master_data import resolve_master_data
 from .report import build_report
+from .validate.schematron import SchematronValidationResult, validate_schematron
 from .validate.structured import StructuredValidationResult, validate_structured_xml
+
+# The vendored Schematron artifact (facturx/phase1/resources/facturx-1.09-en16931/)
+# is EN16931-specific and has only been reviewed for that profile -- see
+# PROVENANCE.json. Running it against minimum/basicwl/basic/extended content
+# (reachable only via /normalize and /validate, which are deliberately not
+# profile-gated) would be an unreviewed use of the artifact, so it is skipped
+# for those and STR-004 reports not_applicable/UNSUPPORTED_PROFILE instead.
+_SCHEMATRON_REVIEWED_PROFILES = ("EN16931",)
 
 _EMPTY_INVOICE = {
     "invoiceNumber": None,
@@ -248,7 +258,36 @@ def process_invoice(
         report = _finalize_report(inspection.sha256, controls, "nicht_pruefbar", "prioritized_review")
         return outcome.canonical_invoice, report
 
-    controls = [doc_001, evaluate_str_003(outcome.structured_validation)]
+    # DOC-001 already gated out anything but EN16931 factur-x above (see
+    # _is_profile_supported), so the vendored EN16931-only Schematron
+    # artifact is always applicable whenever this line is reached for a
+    # structured document -- the explicit profile check still guards it
+    # against ever running on an unreviewed profile if that gate changes.
+    # Schematron also only runs on an already-XSD-valid document: its
+    # arithmetic assumes XSD-conformant types (verified directly -- an
+    # XSD-invalid value like a non-numeric string in a decimal field makes
+    # Saxon raise a dynamic type error, not a meaningful business-rule
+    # finding), so an XSD failure short-circuits it to not_applicable
+    # instead (see evaluate_str_004()).
+    # None here means "not a structured document at all" (the PDF/OCR path
+    # never sets structured_validation) -- distinct from "structured but
+    # XSD-invalid". Only the latter should make evaluate_str_004() report
+    # BLOCKED_BY_XSD_INVALID instead of NOT_A_STRUCTURED_DOCUMENT.
+    xsd_valid = (
+        outcome.structured_validation.xsd_valid
+        if outcome.structured_validation is not None
+        else True
+    )
+    schematron_validation = (
+        validate_schematron(inspection.xml_etree)
+        if xsd_valid and inspection.profile in _SCHEMATRON_REVIEWED_PROFILES
+        else None
+    )
+    controls = [
+        doc_001,
+        evaluate_str_003(outcome.structured_validation),
+        evaluate_str_004(schematron_validation, xsd_valid),
+    ]
     controls.append(
         evaluate_extraction_confidence(outcome.canonical_invoice["extraction"]["overallConfidence"])
     )
@@ -290,10 +329,11 @@ def normalize_invoice(
 
 
 def validate_invoice(file_bytes: bytes, filename: str, content_type: str) -> dict:
-    """Returns XSD validation findings for a structured document
-    (POST /v1/invoices/validate). Plain PDFs are `applicable: false`, not an
-    error -- there is nothing to XSD-validate. Schematron is not
-    implemented (see capabilities.py); this never claims to run it."""
+    """Returns XSD and (for EN16931) Schematron validation findings for a
+    structured document (POST /v1/invoices/validate) -- format validation
+    only, never a DigiTax business control (those only run via /process, see
+    controls/executor.py). Plain PDFs are `applicable: false`, not an error
+    -- there is nothing to XSD/Schematron-validate."""
     inspection = inspect_document(file_bytes, filename, content_type)
 
     if inspection.source_type not in ("hybrid_pdf", "xml"):
@@ -320,6 +360,35 @@ def validate_invoice(file_bytes: bytes, filename: str, content_type: str) -> dic
             f"Structured XML validation failed unexpectedly: {exc}",
         ) from exc
 
+    if not result.xsd_valid:
+        # Real EN16931 Schematron rules assume XSD-valid input -- verified
+        # directly (see controls/executor.py's evaluate_str_004() docstring):
+        # running it against XSD-invalid content can make the engine raise a
+        # dynamic type error instead of a meaningful business-rule finding.
+        # Not run; xsdMessage above already explains what's wrong.
+        schematron_block = {"status": "not_applicable", "reasonCode": "BLOCKED_BY_XSD_INVALID"}
+    elif inspection.profile in _SCHEMATRON_REVIEWED_PROFILES:
+        schematron_result = validate_schematron(inspection.xml_etree)
+        schematron_block: dict = {"status": schematron_result.status}
+        if schematron_result.status == "completed":
+            schematron_block["findings"] = [
+                {
+                    "ruleId": f.rule_id,
+                    "flag": f.flag,
+                    "message": f.message,
+                    "location": f.location,
+                }
+                for f in schematron_result.findings
+            ]
+        elif schematron_result.status == "unavailable":
+            schematron_block["errorDetail"] = schematron_result.error_detail
+    else:
+        # Recognized Factur-X profile, but not EN16931 -- the vendored
+        # Schematron artifact is only reviewed for EN16931 (see
+        # PROVENANCE.json), so this is honestly reported as not run rather
+        # than silently executed against an unreviewed profile.
+        schematron_block = {"status": "not_applicable", "reasonCode": "UNSUPPORTED_PROFILE"}
+
     return {
         "applicable": True,
         "detectedFormat": inspection.detected_format,
@@ -327,7 +396,8 @@ def validate_invoice(file_bytes: bytes, filename: str, content_type: str) -> dic
         "profile": inspection.profile,
         "xsdValid": result.xsd_valid,
         "xsdMessage": result.xsd_message,
-        "schematron": "not_implemented",
+        "xsdVersion": result.xsd_version,
+        "schematron": schematron_block,
     }
 
 

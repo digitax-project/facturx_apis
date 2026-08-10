@@ -52,6 +52,20 @@
                     "actual": {}
                   }
                 }
+              },
+              "schematronFindings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["ruleId", "message"],
+                  "properties": {
+                    "ruleId": { "type": "string", "minLength": 1 },
+                    "flag": { "type": ["string", "null"] },
+                    "message": { "type": "string" },
+                    "location": { "type": ["string", "null"] }
+                  }
+                }
               }
             }
           }
