@@ -77,13 +77,13 @@ communication.
 
 See `docs/invoice_phase1/` for the full specification. These endpoints
 inspect, validate, and normalize a Factur-X/ZUGFeRD or plain-PDF invoice into
-a shared canonical contract, run the same starter control profile against
-both, and return a schema-valid control report. They never approve, reject,
+a shared canonical contract, run the organization's selected versioned control
+profile, and return a schema-valid control report. They never approve, reject,
 book, pay, or contact a supplier -- Phase 1 ends at a report for human
 review.
 
 - `GET /health`
-- `GET /capabilities` - supported formats/versions, the active control
+- `GET /capabilities` - supported formats/versions and available control
   profile, and known limitations (see below)
 - `POST /v1/invoices/inspect` - detect source type, format, and version
 - `POST /v1/invoices/normalize` - extract/normalize into `canonicalInvoice`
@@ -110,10 +110,11 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
 
 ### Embedded starter controls
 
-The active profile is `inbound-starter-de-v1` version `0.2.0`, catalog version
-`0.2.0`. The API returns every selected control with its outcome, severity,
-reason codes, rule version, message, evidence references, and structured
-details where applicable.
+The API currently selects either `inbound-starter-de-v1` version `0.2.0` or
+`inbound-operating-de-v1` version `0.1.0`; both use catalog version `0.3.0`.
+The API returns every selected control with its outcome, severity, reason
+codes, rule version, message, evidence references, and structured details
+where applicable.
 
 | Group | Controls currently executed |
 | --- | --- |
@@ -121,7 +122,7 @@ details where applicable.
 | Structured validation | `STR-003`: detected XSD validation; `STR-004`: official EN16931 Schematron business rules |
 | Required invoice information | `FRM-001`: supplier/buyer names; `FRM-002`: addresses; `FRM-003`: supplier tax/VAT ID; `FRM-004`: issue date; `FRM-005`: invoice number; `FRM-006`: goods/service description; `FRM-007`: delivery/service date or period |
 | Arithmetic and currency | `CAL-001`: line-net consistency; `CAL-002`: tax basis/rate/amount consistency; `CAL-003`: net, tax, gross, prepaid, rounding, and payable reconciliation; `CAL-004`: currency presence and consistency |
-| Organization context | `ORG-001`: buyer data match the approved organization master-data snapshot |
+| Organization context | `ORG-001`: buyer data match the approved organization master-data snapshot; operating profile only: `ORG-002`, supplier identity matches approved supplier data |
 
 `STR-004` is one DigiTax control boundary around the complete vendored
 Schematron artifact. That artifact currently contains 427 contextual assertion
@@ -134,7 +135,7 @@ The complete candidate catalog, including controls not yet selected for the
 starter profile, is documented in
 [`docs/invoice_phase1/control_catalog.md`](docs/invoice_phase1/control_catalog.md).
 
-### Run the two-case n8n demo
+### Run the six-case n8n demo
 
 The isolated demo uses API port `6970`, n8n port `5679`, and the dedicated
 Docker volume `digitax_n8n_phase1_data`. It does not change an existing n8n
@@ -146,12 +147,16 @@ instance on port `5678`.
 ```
 
 Open [`examples/n8n/phase1_upload_demo_page.html`](examples/n8n/phase1_upload_demo_page.html),
-select `Demo mode`, and upload these generated cases:
+select Unternehmen X or Unternehmen Y, and upload these generated cases:
 
-| Case | Expected result | Expected evidence |
-| --- | --- | --- |
-| Valid Factur-X invoice | `unauffaellig / standard_review` | XSD, Schematron, and all applicable DigiTax controls pass |
-| Incorrect payable amount | `klaerung_erforderlich / prioritized_review` | Official `BR-CO-16` through `STR-004` and independent DigiTax `CAL-003`, including expected, actual, difference, and tolerance |
+| Case | Profile | Expected result | Expected evidence |
+| --- | --- | --- | --- |
+| X: valid | starter | `unauffaellig / standard_review` | shared baseline passes |
+| X: missing supplier identifier | starter | `klaerung_erforderlich / prioritized_review` | `FRM-003` and official Schematron findings |
+| X: incorrect payable amount | starter | `klaerung_erforderlich / prioritized_review` | official `BR-CO-16` and independent `CAL-003` explanation |
+| Y: valid approved supplier | operating | `unauffaellig / standard_review` | shared baseline plus `ORG-002` pass |
+| Y: unapproved supplier | operating | `klaerung_erforderlich / prioritized_review` | `ORG-002 / SUPPLIER_NOT_APPROVED` |
+| Y: multiple mismatches | operating | `klaerung_erforderlich / prioritized_review` | organization, required-information, arithmetic, and official-rule findings |
 
 Generate portable demo files from the accepted XML fixtures:
 
@@ -160,7 +165,20 @@ python examples/demo/generate_demo_invoices.py --output-dir .demo-output
 ```
 
 See [`examples/n8n/README.md`](examples/n8n/README.md) for workflow operation
-and [`CHANGELOG.md`](CHANGELOG.md) for release notes.
+and [`docs/invoice_phase1/demo_profile_matrix.md`](docs/invoice_phase1/demo_profile_matrix.md)
+for the recommended demo sequence and exact meaning of each case.
+
+### Upstream software and validation vendors
+
+- Hybrid-PDF generation builds on the open-source [`factur-x` Python
+  project](https://github.com/akretion/factur-x) by Alexis de Lattre/Akretion;
+  package publisher, release provenance, and license metadata are available on
+  [PyPI](https://pypi.org/project/factur-x/).
+- Offline Schematron execution uses Saxonica's
+  [`saxonche`/SaxonC Python binding](https://www.saxonica.com/html/download/c.html).
+- The exact vendored XSD/Schematron sources, SHA-256 hashes, and licenses are
+  retained in
+  [`PROVENANCE.json`](facturx/phase1/resources/facturx-1.09-en16931/PROVENANCE.json).
 
 #### Known limitations (also reported by `/capabilities`)
 
@@ -198,8 +216,10 @@ and [`CHANGELOG.md`](CHANGELOG.md) for release notes.
   (forcing the run to `nicht_pruefbar`) rather than silently computing a
   wrong verdict or reporting `not_applicable` (which would aggregate as a
   false green result).
-- **Only one organization context is supported**: the fictional
-  `unternehmen-x-demo` snapshot. Real multi-tenant master-data loading is
+- **Only two synthetic organization contexts are supported**:
+  `unternehmen-x-demo` selects the starter profile and `unternehmen-y-demo`
+  selects the operating demo profile with `ORG-002`. These in-memory fixtures
+  demonstrate profile selection; real multi-tenant master-data loading remains
   future work.
 - **`examples/n8n/digitax_invoice_intake.json`** is a sanitized reference
   export of the existing DigiTax draft workflow, real-import-verified via

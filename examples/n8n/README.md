@@ -167,6 +167,10 @@ substitute for the real import/execute evidence, which is recorded in
 
 The operator-facing counterpart to the structured regression demo above:
 accepts a **real** binary invoice upload and calls the same Phase 1 API.
+The upload form offers two fictional contexts: Unternehmen X selects the
+starter profile, while Unternehmen Y selects the operating profile with the
+additional approved-supplier control `ORG-002`. The workflow itself remains
+organization-neutral and forwards the selected `organizationId` dynamically.
 
 ```
 Webhook: Invoice Upload (POST multipart/form-data)
@@ -309,6 +313,27 @@ see the parallel-agent boundary in `NEXT_JOB_2026-08-10.md`):
 | No file uploaded | `nicht_pruefbar` / `technical_review` | `MISSING_INVOICE_FILE` |
 | API unreachable | `nicht_pruefbar` / `technical_review` | `CAPABILITIES_SERVICE_UNAVAILABLE`, ~14.8s (bounded retry), recovered immediately on API restart |
 | Double import | no duplicates | `n8n list:workflow` shows exactly one entry per workflow id after re-importing both files |
+
+### Six-case profile demo
+
+Generate the upload-ready hybrid PDFs with:
+
+```bash
+python examples/demo/generate_demo_invoices.py --output-dir .demo-output
+```
+
+The set contains valid and faulty invoices for both organizations. It covers
+required information, arithmetic, buyer master data, supplier master data, and
+multiple simultaneous mismatches. The exact sequence, expected findings, and
+intended presentation message are documented in
+`docs/invoice_phase1/demo_profile_matrix.md`.
+
+Run all six cases through the live n8n webhook and verify the returned status
+and selected profile:
+
+```powershell
+./examples/n8n/scripts/Test-Phase1DemoMatrix.ps1
+```
 
 Full detail in `coordination/claude-codex/handover-log.md` and
 `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.

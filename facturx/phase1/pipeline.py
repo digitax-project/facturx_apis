@@ -1,5 +1,5 @@
 """Orchestrates the Phase 1 endpoints: inspect -> extract/validate ->
-normalize -> (process only: load starter profile -> run controls ->
+normalize -> (process only: load organization profile -> run controls ->
 aggregate -> build report).
 
 HTTP status semantics (enforced by facturx/phase1/api.py using the
@@ -26,11 +26,12 @@ from .controls.executor import (
     evaluate_doc_001,
     evaluate_extraction_confidence,
     evaluate_org_001,
+    evaluate_org_002,
     evaluate_str_003,
     evaluate_str_004,
     not_run_result,
 )
-from .controls.profiles import STARTER_PROFILE
+from .controls.profiles import ControlProfile, get_control_profile
 from .document_intake import DocumentInspection, inspect_document
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import PdfExtractionAdapter, normalize_pdf_extraction
@@ -93,7 +94,8 @@ def resolve_organization_context(organization_id: Optional[str], demo_mode: bool
         raise UnsupportedInputError(
             "ORGANIZATION_CONTEXT_REQUIRED",
             "This run requires an explicit organization context. Pass "
-            "organizationId=unternehmen-x-demo or demoMode=true; there is no "
+            "organizationId=unternehmen-x-demo, organizationId=unternehmen-y-demo, "
+            "or demoMode=true; there is no "
             "silent fallback to demo master data.",
             status_code=400,
         )
@@ -120,10 +122,14 @@ def _build_canonical_invoice(
 
 
 def _finalize_report(
-    source_sha256: str, controls: list[ControlResult], status: str, routing: str
+    source_sha256: str,
+    control_profile: ControlProfile,
+    controls: list[ControlResult],
+    status: str,
+    routing: str,
 ) -> dict:
     try:
-        return build_report(source_sha256, STARTER_PROFILE, controls, status, routing)
+        return build_report(source_sha256, control_profile, controls, status, routing)
     except Exception as exc:
         raise TechnicalProcessingError(
             "CONTRACT_VALIDATION_FAILED", f"Internal control report was not schema-valid: {exc}"
@@ -230,7 +236,8 @@ def process_invoice(
 ) -> tuple[dict, dict]:
     """Returns (canonical_invoice, phase1_control_report), both already
     validated against their own contract schemas."""
-    master_data = resolve_organization_context(organization_id, demo_mode)
+    organization_context = resolve_organization_context(organization_id, demo_mode)
+    control_profile = get_control_profile(organization_context["controlProfileId"])
     inspection = inspect_document(file_bytes, filename, content_type)
 
     doc_001 = evaluate_doc_001(
@@ -243,8 +250,10 @@ def process_invoice(
     )
 
     if doc_001.outcome != "passed":
-        canonical_invoice, controls = _blocked_by_doc_001(inspection, doc_001)
-        report = _finalize_report(inspection.sha256, controls, "nicht_pruefbar", "prioritized_review")
+        canonical_invoice, controls = _blocked_by_doc_001(inspection, doc_001, control_profile)
+        report = _finalize_report(
+            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review"
+        )
         return canonical_invoice, report
 
     outcome = _extract_and_normalize(inspection, file_bytes, pdf_extraction_adapter)
@@ -252,10 +261,12 @@ def process_invoice(
     if outcome.extraction_status == "failed":
         controls = [doc_001, evaluate_str_003(outcome.structured_validation)] + [
             not_run_result(cid, "Blocked because extraction failed.")
-            for cid in STARTER_PROFILE.control_ids
+            for cid in control_profile.control_ids
             if cid not in ("DOC-001", "STR-003")
         ]
-        report = _finalize_report(inspection.sha256, controls, "nicht_pruefbar", "prioritized_review")
+        report = _finalize_report(
+            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review"
+        )
         return outcome.canonical_invoice, report
 
     # DOC-001 already gated out anything but EN16931 factur-x above (see
@@ -292,10 +303,22 @@ def process_invoice(
         evaluate_extraction_confidence(outcome.canonical_invoice["extraction"]["overallConfidence"])
     )
     controls += evaluate_content_controls(outcome.invoice, outcome.field_evidence)
-    controls.append(evaluate_org_001(outcome.invoice, outcome.field_evidence, master_data))
+    controls.append(
+        evaluate_org_001(
+            outcome.invoice, outcome.field_evidence, organization_context["buyer"]
+        )
+    )
+    if "ORG-002" in control_profile.control_ids:
+        controls.append(
+            evaluate_org_002(
+                outcome.invoice,
+                outcome.field_evidence,
+                organization_context["approvedSuppliers"],
+            )
+        )
 
     status, routing = aggregate(controls)
-    report = _finalize_report(inspection.sha256, controls, status, routing)
+    report = _finalize_report(inspection.sha256, control_profile, controls, status, routing)
     return outcome.canonical_invoice, report
 
 
@@ -321,7 +344,9 @@ def normalize_invoice(
         inspection.detected_format,
     )
     if doc_001.outcome != "passed":
-        canonical_invoice, _controls = _blocked_by_doc_001(inspection, doc_001)
+        # Normalization has no organization context or report profile. The
+        # blocked canonical invoice is profile-independent.
+        canonical_invoice, _controls = _blocked_by_doc_001(inspection, doc_001, None)
         return canonical_invoice
 
     outcome = _extract_and_normalize(inspection, file_bytes, pdf_extraction_adapter)
@@ -402,7 +427,9 @@ def validate_invoice(file_bytes: bytes, filename: str, content_type: str) -> dic
 
 
 def _blocked_by_doc_001(
-    inspection: DocumentInspection, doc_001: ControlResult
+    inspection: DocumentInspection,
+    doc_001: ControlResult,
+    control_profile: ControlProfile | None,
 ) -> tuple[dict, list[ControlResult]]:
     extraction = {
         "method": "ocr_llm" if inspection.source_type == "plain_pdf" else "embedded_xml",
@@ -412,9 +439,10 @@ def _blocked_by_doc_001(
         "warnings": inspection.warnings,
     }
     canonical_invoice = _build_canonical_invoice(inspection, extraction, dict(_EMPTY_INVOICE), {})
+    profile_control_ids = control_profile.control_ids if control_profile else ("DOC-001",)
     controls = [doc_001] + [
         not_run_result(cid, "Blocked because DOC-001 did not pass.")
-        for cid in STARTER_PROFILE.control_ids
+        for cid in profile_control_ids
         if cid != "DOC-001"
     ]
     return canonical_invoice, controls

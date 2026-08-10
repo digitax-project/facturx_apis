@@ -572,3 +572,106 @@ def evaluate_org_001(invoice: dict, field_evidence: dict, master_data: dict, thr
             {"mismatches": mismatches},
         )
     return _build("ORG-001", "passed", [], combined[2])
+
+
+def evaluate_org_002(
+    invoice: dict,
+    field_evidence: dict,
+    approved_suppliers: list[dict],
+    threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+) -> ControlResult:
+    """Match the invoice supplier to an approved supplier snapshot.
+
+    A VAT or tax identifier is used as the stable lookup key. The supplier
+    name is then compared with the approved record so an unchanged identifier
+    combined with unexpected identity data remains visible to the reviewer.
+    """
+    supplier = invoice["supplier"]
+    supplier_name = _check(
+        supplier["name"], field_evidence, "invoice.supplier.name", threshold
+    )
+    vat_id = _check(
+        supplier["vatId"], field_evidence, "invoice.supplier.vatId", threshold
+    )
+    tax_id = _check(
+        supplier["taxId"], field_evidence, "invoice.supplier.taxId", threshold
+    )
+
+    if supplier_name[0] != "passed":
+        return _build("ORG-002", *supplier_name)
+
+    provided_id_checks = []
+    if supplier.get("vatId"):
+        provided_id_checks.append(vat_id)
+    if supplier.get("taxId"):
+        provided_id_checks.append(tax_id)
+    if provided_id_checks:
+        identifier_status = _combine(provided_id_checks)
+        if identifier_status[0] != "passed":
+            return _build("ORG-002", *identifier_status)
+
+    provided_ids = {
+        _normalize_for_match(value)
+        for value in (supplier.get("vatId"), supplier.get("taxId"))
+        if value
+    }
+    evidence_refs = sorted(
+        set(supplier_name[2] + vat_id[2] + tax_id[2] + ["organization.approvedSuppliers"])
+    )
+    if not provided_ids:
+        return _build(
+            "ORG-002",
+            "failed",
+            ["SUPPLIER_IDENTIFIER_MISSING"],
+            evidence_refs,
+            "Supplier could not be matched to approved master data because no VAT or tax identifier is present.",
+        )
+
+    matched = None
+    for approved in approved_suppliers:
+        approved_ids = {
+            _normalize_for_match(value)
+            for value in (approved.get("vatId"), approved.get("taxId"))
+            if value
+        }
+        if provided_ids & approved_ids:
+            matched = approved
+            break
+
+    if matched is None:
+        actual_ids = sorted(provided_ids)
+        return _build(
+            "ORG-002",
+            "failed",
+            ["SUPPLIER_NOT_APPROVED"],
+            evidence_refs,
+            "No approved supplier record matches the invoice supplier identifiers.",
+            {
+                "expected": f"identifier matching one of {len(approved_suppliers)} approved supplier record(s)",
+                "actual": actual_ids,
+            },
+        )
+
+    evidence_refs.append(f"organization.approvedSuppliers[{matched['supplierId']}]")
+    evidence_refs = sorted(set(evidence_refs))
+
+    mismatches = []
+    if _normalize_for_match(supplier["name"]) != _normalize_for_match(matched["name"]):
+        mismatches.append(
+            {
+                "field": "invoice.supplier.name",
+                "expected": matched["name"],
+                "actual": supplier["name"],
+            }
+        )
+    if mismatches:
+        return _build(
+            "ORG-002",
+            "failed",
+            ["MASTER_DATA_MISMATCH"],
+            evidence_refs,
+            "Supplier identifier is approved, but supplier identity data differ from the approved record.",
+            {"mismatches": mismatches},
+        )
+
+    return _build("ORG-002", "passed", [], evidence_refs)

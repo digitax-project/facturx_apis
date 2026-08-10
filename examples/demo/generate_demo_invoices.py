@@ -45,8 +45,9 @@ from pypdf import PdfWriter  # noqa: E402
 from reportlab.lib.pagesizes import A4  # noqa: E402
 from reportlab.lib.units import mm  # noqa: E402
 from reportlab.pdfgen import canvas  # noqa: E402
+from lxml import etree  # noqa: E402
 
-from facturx.facturx import generate_from_binary  # noqa: E402
+from facturx.facturx import XML_NAMESPACES, generate_from_binary  # noqa: E402
 from facturx.phase1.document_intake import _parse_untrusted_xml  # noqa: E402
 from facturx.phase1.normalize.structured import normalize_structured_invoice  # noqa: E402
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
@@ -56,18 +57,46 @@ FACTURX_LABEL = "Factur-X 1.09 EN16931"  # never "1.09.2" -- see PROVENANCE.json
 
 SCENARIOS = [
     {
-        "id": "valid",
+        "id": "x_valid",
+        "organizationId": "unternehmen-x-demo",
+        "controlProfileId": "inbound-starter-de-v1",
+        "category": "baseline",
         "xmlFixture": "facturx_valid_en16931.xml",
         "outputBasename": "demo_invoice_valid_unternehmen_x",
+        "mutations": [],
+        "injectedMismatches": [],
         "scenario": "Valid EN16931 invoice, all totals reconcile.",
         "expectedStatus": "unauffaellig",
         "expectedRouting": "standard_review",
         "expectedFindings": "None -- all applicable controls (incl. STR-003 XSD and STR-004 Schematron) pass.",
     },
     {
-        "id": "incorrect_payable",
+        "id": "x_missing_supplier_identifier",
+        "organizationId": "unternehmen-x-demo",
+        "controlProfileId": "inbound-starter-de-v1",
+        "category": "required_information",
+        "xmlFixture": "facturx_schematron_invalid.xml",
+        "outputBasename": "demo_invoice_missing_supplier_identifier_unternehmen_x",
+        "mutations": [],
+        "injectedMismatches": ["Supplier tax/VAT identifier is missing."],
+        "scenario": "One required-information defect: supplier identifier is missing.",
+        "expectedStatus": "klaerung_erforderlich",
+        "expectedRouting": "prioritized_review",
+        "expectedFindings": (
+            "FRM-003 and official Schematron rules identify the same underlying "
+            "missing supplier identifier; one defect can therefore have more than "
+            "one independent evidence path."
+        ),
+    },
+    {
+        "id": "x_incorrect_payable",
+        "organizationId": "unternehmen-x-demo",
+        "controlProfileId": "inbound-starter-de-v1",
+        "category": "arithmetic",
         "xmlFixture": "facturx_incorrect_payable.xml",
         "outputBasename": "demo_invoice_incorrect_payable_unternehmen_x",
+        "mutations": [],
+        "injectedMismatches": ["Payable amount is inconsistent with the invoice totals."],
         "scenario": (
             "XSD-valid, grossAmount correct, but DuePayableAmount does not "
             "equal grossAmount - prepaidAmount + roundingAmount (isolates "
@@ -82,7 +111,100 @@ SCENARIOS = [
             "agreeing this invoice is wrong."
         ),
     },
+    {
+        "id": "y_valid",
+        "organizationId": "unternehmen-y-demo",
+        "controlProfileId": "inbound-operating-de-v1",
+        "category": "operating_profile_baseline",
+        "xmlFixture": "facturx_valid_en16931.xml",
+        "outputBasename": "demo_invoice_valid_unternehmen_y",
+        "mutations": [
+            ["set", "//rsm:ExchangedDocument/ram:ID", "UY-2026-001"],
+            ["set", "//ram:ApplicableHeaderTradeAgreement/ram:BuyerReference", "UY-REF-001"],
+            ["set", "//ram:BuyerTradeParty/ram:ID", "UNTERNEHMEN-Y"],
+            ["set", "//ram:BuyerTradeParty/ram:Name", "Unternehmen Y"],
+            ["set", "//ram:BuyerTradeParty/ram:PostalTradeAddress/ram:PostcodeCode", "01067"],
+            ["set", "//ram:BuyerTradeParty/ram:PostalTradeAddress/ram:LineOne", "Industriestrasse 20"],
+            ["set", "//ram:BuyerTradeParty/ram:PostalTradeAddress/ram:CityName", "Dresden"],
+            ["set", "//ram:ApplicableHeaderTradeSettlement/ram:PaymentReference", "UY-2026-001"],
+        ],
+        "injectedMismatches": [],
+        "scenario": "Valid invoice for Unternehmen Y, including approved-supplier matching.",
+        "expectedStatus": "unauffaellig",
+        "expectedRouting": "standard_review",
+        "expectedFindings": "None; ORG-002 additionally confirms the approved supplier record.",
+    },
+    {
+        "id": "y_unapproved_supplier",
+        "organizationId": "unternehmen-y-demo",
+        "controlProfileId": "inbound-operating-de-v1",
+        "category": "supplier_master_data",
+        "xmlFixture": "facturx_valid_en16931.xml",
+        "outputBasename": "demo_invoice_unapproved_supplier_unternehmen_y",
+        "mutationsFrom": "y_valid",
+        "mutations": [
+            ["set", "//ram:SellerTradeParty/ram:Name", "Unbekannter Lieferant GmbH"],
+            ["set", "//ram:SellerTradeParty/ram:SpecifiedTaxRegistration/ram:ID", "DE222222222"],
+        ],
+        "injectedMismatches": ["Supplier identifier is not in Unternehmen Y's approved supplier data."],
+        "scenario": "One organization-specific defect: supplier is not approved for Unternehmen Y.",
+        "expectedStatus": "klaerung_erforderlich",
+        "expectedRouting": "prioritized_review",
+        "expectedFindings": "ORG-002 fails with SUPPLIER_NOT_APPROVED while standard invoice checks remain valid.",
+    },
+    {
+        "id": "y_multiple_mismatches",
+        "organizationId": "unternehmen-y-demo",
+        "controlProfileId": "inbound-operating-de-v1",
+        "category": "multiple",
+        "xmlFixture": "facturx_valid_en16931.xml",
+        "outputBasename": "demo_invoice_multiple_mismatches_unternehmen_y",
+        "mutationsFrom": "y_valid",
+        "mutations": [
+            ["set", "//ram:BuyerTradeParty/ram:PostalTradeAddress/ram:CityName", "Leipzig"],
+            ["remove", "//ram:SellerTradeParty/ram:SpecifiedTaxRegistration", None],
+            ["set", "//ram:SpecifiedTradeSettlementHeaderMonetarySummation/ram:DuePayableAmount", "125.00"],
+        ],
+        "injectedMismatches": [
+            "Buyer city differs from approved organization master data.",
+            "Supplier identifier is missing.",
+            "Payable amount is arithmetically inconsistent.",
+        ],
+        "scenario": "Three independent defects across organization, required information, and arithmetic.",
+        "expectedStatus": "klaerung_erforderlich",
+        "expectedRouting": "prioritized_review",
+        "expectedFindings": "ORG-001, ORG-002, FRM-003, CAL-003, and related official Schematron findings explain the independent defects.",
+    },
 ]
+
+
+def _scenario_by_id(scenario_id: str) -> dict:
+    return next(s for s in SCENARIOS if s["id"] == scenario_id)
+
+
+def _apply_mutations(xml_etree, mutations: list[list]) -> None:
+    for action, xpath, value in mutations:
+        nodes = xml_etree.xpath(xpath, namespaces=XML_NAMESPACES["factur-x"])
+        if len(nodes) != 1:
+            raise ValueError(f"Mutation {action} expected one node for {xpath!r}, got {len(nodes)}")
+        node = nodes[0]
+        if action == "set":
+            node.text = value
+        elif action == "remove":
+            node.getparent().remove(node)
+        else:
+            raise ValueError(f"Unsupported demo mutation action: {action}")
+
+
+def _scenario_xml_bytes(scenario: dict) -> bytes:
+    xml_bytes = (FIXTURES_DIR / scenario["xmlFixture"]).read_bytes()
+    xml_etree = _parse_untrusted_xml(xml_bytes)
+    if scenario.get("mutationsFrom"):
+        _apply_mutations(xml_etree, _scenario_by_id(scenario["mutationsFrom"])["mutations"])
+    _apply_mutations(xml_etree, scenario.get("mutations", []))
+    return etree.tostring(
+        xml_etree, xml_declaration=True, encoding="UTF-8", pretty_print=True
+    )
 
 
 def _fmt_amount(value) -> str:
@@ -226,8 +348,7 @@ def build_hybrid_pdf(scenario: dict) -> tuple:
     hybrid PDF, so both the demo-asset files and the automated regression
     test exercise the exact same code path. Returns
     (hybrid_pdf_bytes, xml_bytes, invoice_dict)."""
-    xml_path = FIXTURES_DIR / scenario["xmlFixture"]
-    xml_bytes = xml_path.read_bytes()
+    xml_bytes = _scenario_xml_bytes(scenario)
     xml_etree = _parse_untrusted_xml(xml_bytes)
     invoice, field_evidence, warnings = normalize_structured_invoice(xml_etree)
     assert not warnings, f"unexpected normalization warnings for {scenario['xmlFixture']}: {warnings}"
@@ -254,6 +375,10 @@ def generate(output_dir: Path = DEFAULT_OUTPUT_DIR) -> list:
         manifest_entries.append(
             {
                 "scenarioId": scenario["id"],
+                "organizationId": scenario["organizationId"],
+                "controlProfileId": scenario["controlProfileId"],
+                "mismatchCategory": scenario["category"],
+                "injectedMismatches": scenario["injectedMismatches"],
                 "scenario": scenario["scenario"],
                 "sourceXmlFixture": f"tests/fixtures/{scenario['xmlFixture']}",
                 "generatedPdf": pdf_out_path.name,
