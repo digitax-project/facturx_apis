@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="facturx-api",
-    version="0.1.0",
+    version="1.0.0",
     packages=find_packages(),
     install_requires=[
         "fastapi>=0.68.0",
@@ -13,5 +13,5 @@ setup(
     ],
     description="API for Factur-X PDF generation, XML extraction and validation",
     author="Factur-X Team",
-    python_requires=">=3.7",
+    python_requires=">=3.10",
 )

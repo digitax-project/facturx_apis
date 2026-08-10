@@ -2,6 +2,32 @@
 
 API for Factur-X PDF generation, XML extraction and validation.
 
+## DigiTax Phase 1 API v1.0.0
+
+`v1.0.0` is the first stable release of the DigiTax Phase 1
+invoice-preprocessing API and its n8n demonstration. This service release is
+independent of the embedded upstream `factur-x` Python library version `3.6`
+and the invoice validation baseline `Factur-X 1.09 EN16931`.
+
+### What is new
+
+- A fail-safe pipeline for inspecting, normalizing, validating, and checking
+  structured invoices before human review.
+- Hardened PDF/XML intake with explicit size limits and entity/network-safe XML
+  parsing.
+- Factur-X 1.09 EN16931 XSD validation plus offline execution of the official
+  Schematron business rules.
+- A versioned DigiTax control report with stable control IDs, reason codes,
+  rule versions, source hash, evidence references, and detailed calculations.
+- Reproducible valid and incorrect-payable hybrid Factur-X demo invoices.
+- An isolated n8n 2.33.7 upload workflow with browser-readable results and
+  explicit `standard_review`, `prioritized_review`, and `technical_review`
+  routes.
+
+Phase 1 only produces findings for human review. It does not approve or reject
+an invoice and does not perform booking, payment, delegation, or supplier
+communication.
+
 ## Setup and Installation
 
 1. Make sure you have Python 3.10 or higher installed (the `facturx/phase1/`
@@ -11,8 +37,8 @@ API for Factur-X PDF generation, XML extraction and validation.
 2. Install the package and its dependencies:
 
    ```bash
-   # Navigate to the project directory
-   cd c:\Agentic\synthetic_invoice\factur-x-master
+   git clone https://github.com/digitax-project/facturx_apis.git
+   cd facturx_apis
 
    # Create and activate a virtual environment (recommended)
    python -m venv .venv
@@ -79,6 +105,53 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
   -F "file=@invoice.pdf" \
   -F "organizationId=unternehmen-x-demo"
 ```
+
+### Embedded starter controls
+
+The active profile is `inbound-starter-de-v1` version `0.2.0`, catalog version
+`0.2.0`. The API returns every selected control with its outcome, severity,
+reason codes, rule version, message, evidence references, and structured
+details where applicable.
+
+| Group | Controls currently executed |
+| --- | --- |
+| Document intake | `DOC-001`: readable, supported, unencrypted input; `DOC-007`: sufficient overall extraction confidence |
+| Structured validation | `STR-003`: detected XSD validation; `STR-004`: official EN16931 Schematron business rules |
+| Required invoice information | `FRM-001`: supplier/buyer names; `FRM-002`: addresses; `FRM-003`: supplier tax/VAT ID; `FRM-004`: issue date; `FRM-005`: invoice number; `FRM-006`: goods/service description; `FRM-007`: delivery/service date or period |
+| Arithmetic and currency | `CAL-001`: line-net consistency; `CAL-002`: tax basis/rate/amount consistency; `CAL-003`: net, tax, gross, prepaid, rounding, and payable reconciliation; `CAL-004`: currency presence and consistency |
+| Organization context | `ORG-001`: buyer data match the approved organization master-data snapshot |
+
+The complete candidate catalog, including controls not yet selected for the
+starter profile, is documented in
+[`docs/invoice_phase1/control_catalog.md`](docs/invoice_phase1/control_catalog.md).
+
+### Run the two-case n8n demo
+
+The isolated demo uses API port `6970`, n8n port `5679`, and the dedicated
+Docker volume `digitax_n8n_phase1_data`. It does not change an existing n8n
+instance on port `5678`.
+
+```powershell
+./examples/n8n/scripts/Manage-Phase1UploadDemo.ps1 -Action Start
+./examples/n8n/scripts/Manage-Phase1UploadDemo.ps1 -Action SmokeTest
+```
+
+Open [`examples/n8n/phase1_upload_demo_page.html`](examples/n8n/phase1_upload_demo_page.html),
+select `Demo mode`, and upload these generated cases:
+
+| Case | Expected result | Expected evidence |
+| --- | --- | --- |
+| Valid Factur-X invoice | `unauffaellig / standard_review` | XSD, Schematron, and all applicable DigiTax controls pass |
+| Incorrect payable amount | `klaerung_erforderlich / prioritized_review` | Official `BR-CO-16` through `STR-004` and independent DigiTax `CAL-003`, including expected, actual, difference, and tolerance |
+
+Generate portable demo files from the accepted XML fixtures:
+
+```bash
+python examples/demo/generate_demo_invoices.py --output-dir .demo-output
+```
+
+See [`examples/n8n/README.md`](examples/n8n/README.md) for workflow operation
+and [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 #### Known limitations (also reported by `/capabilities`)
 

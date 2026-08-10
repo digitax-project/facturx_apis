@@ -23,12 +23,17 @@ from .phase1.api import router as phase1_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("facturx-api")
 
+API_VERSION = "1.0.0"
+
 # Show all recognized XML filenames at startup
 logger.info(f"Supported XML filenames: {ALL_FILENAMES}")
 logger.info(f"ZUGFeRD filenames: {ZUGFERD_FILENAMES}")
 
-app = FastAPI(title="Factur-X API",
-              description="API for Factur-X PDF generation, XML extraction and validation")
+app = FastAPI(
+    title="Factur-X API",
+    version=API_VERSION,
+    description="API for Factur-X PDF generation, XML extraction and validation",
+)
 app.include_router(phase1_router)
 
 class FlavorEnum(str, Enum):
