@@ -82,3 +82,10 @@ include facturx/xmp/ZUGFeRD_extension_schema.xmp
 include facturx/xmp/Factur-X_extension_schema.xmp
 include facturx/phase1/schemas/canonical_invoice.schema.json
 include facturx/phase1/schemas/phase1_control_report.schema.json
+include facturx/phase1/resources/facturx-1.09-en16931/PROVENANCE.json
+include facturx/phase1/resources/facturx-1.09-en16931/Factur-X_EN16931.xsd
+include facturx/phase1/resources/facturx-1.09-en16931/Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_QualifiedDataType_100.xsd
+include facturx/phase1/resources/facturx-1.09-en16931/Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_ReusableAggregateBusinessInformationEntity_100.xsd
+include facturx/phase1/resources/facturx-1.09-en16931/Factur-X_1.09_EN16931_urn_un_unece_uncefact_data_standard_UnqualifiedDataType_100.xsd
+include facturx/phase1/resources/facturx-1.09-en16931/Factur-X_1.09_EN16931.xsl
+include facturx/phase1/resources/facturx-1.09-en16931/FACTUR-X_EN16931_codedb.xml

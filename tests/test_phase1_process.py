@@ -35,7 +35,7 @@ def _assert_contract(body: dict, source_bytes: bytes):
     assert report["sourceSha256"] == hashlib.sha256(source_bytes).hexdigest()
     assert report["catalogVersion"]
     assert report["controlProfileId"] == "inbound-starter-de-v1"
-    assert report["controlProfileVersion"] == "0.1.0"
+    assert report["controlProfileVersion"] == "0.2.0"
 
     dumped = str(body).lower()
     for keyword in DISALLOWED_ACTION_KEYWORDS:
@@ -105,7 +105,9 @@ def test_fx01_valid_zugferd_hybrid_pdf_is_unauffaellig(client, valid_hybrid_pdf_
     assert report["status"] == "unauffaellig"
     assert report["routing"] == "standard_review"
     control_ids = {c["controlId"] for c in report["controls"]}
-    assert "STR-004" not in control_ids, "Schematron is not implemented and must not appear as run"
+    assert "STR-004" in control_ids
+    str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
+    assert str_004["outcome"] == "passed"
 
 
 def test_fx04_xsd_invalid_xml_is_klaerung_erforderlich(client, invalid_xsd_xml_bytes):
@@ -125,6 +127,9 @@ def test_fx04_xsd_invalid_xml_is_klaerung_erforderlich(client, invalid_xsd_xml_b
     assert str_003["outcome"] == "failed"
     assert str_003["severity"] == "blocking"
     assert "XSD_INVALID" in str_003["reasonCodes"]
+    str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
+    assert str_004["outcome"] == "not_applicable"
+    assert "BLOCKED_BY_XSD_INVALID" in str_004["reasonCodes"]
 
 
 def test_pdf01_readable_pdf_all_fields_is_unauffaellig(client, blank_pdf_bytes):
@@ -313,7 +318,9 @@ def test_validate_endpoint_structured_valid(client, valid_hybrid_pdf_bytes):
     body = response.json()
     assert body["applicable"] is True
     assert body["xsdValid"] is True
-    assert body["schematron"] == "not_implemented"
+    assert body["xsdVersion"] == "1.09"
+    assert body["schematron"]["status"] == "completed"
+    assert body["schematron"]["findings"] == []
 
 
 def test_validate_endpoint_structured_invalid(client, invalid_xsd_xml_bytes):
@@ -612,6 +619,116 @@ def test_factur_x_minimum_profile_is_unsupported_profile_not_unsupported_format(
     assert doc_001["outcome"] == "failed"
     assert "UNSUPPORTED_PROFILE" in doc_001["reasonCodes"]
     assert "UNSUPPORTED_FORMAT" not in doc_001["reasonCodes"]
+
+
+def test_schematron_invalid_xml_is_klaerung_erforderlich_with_retained_rule_ids(
+    client, schematron_invalid_xml_bytes
+):
+    """XSD-valid (SpecifiedTaxRegistration is optional in the XSD) but
+    violates EN16931 BR-CO-26/BR-S-02 (no Seller identifier at all). STR-003
+    must pass; STR-004 must fail with the real, retained official rule IDs
+    -- this is the "which standard rule failed and why" traceability the
+    fixture catalog exists to prove."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", schematron_invalid_xml_bytes, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, schematron_invalid_xml_bytes)
+
+    report = body["phase1ControlReport"]
+    assert report["status"] == "klaerung_erforderlich"
+    assert report["routing"] == "prioritized_review"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "passed"
+    str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
+    assert str_004["outcome"] == "failed"
+    assert str_004["severity"] == "blocking"
+    assert "SCHEMATRON_RULE_VIOLATION" in str_004["reasonCodes"]
+    assert "FX-SCH-A-000001" in str_004["evidenceRefs"]
+    findings = str_004["details"]["schematronFindings"]
+    assert any(f["ruleId"] == "FX-SCH-A-000001" and "BR-CO-26" in f["message"] for f in findings)
+    assert all(f["location"] for f in findings), "every finding must carry a real XPath locator"
+
+
+def test_incorrect_payable_amount_is_klaerung_erforderlich_caught_by_control_and_schematron(
+    client, incorrect_payable_xml_bytes
+):
+    """Deliberately wrong DuePayableAmount (grossAmount - prepaidAmount +
+    roundingAmount != payableAmount, BR-CO-16). Caught independently by both
+    the DigiTax CAL-003 business control (expected/actual/difference/formula)
+    and the official EN16931 Schematron rule (STR-004) -- this is the
+    "distinguish format validation from DigiTax business controls" case:
+    two different mechanisms independently agreeing this invoice is wrong."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", incorrect_payable_xml_bytes, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, incorrect_payable_xml_bytes)
+
+    report = body["phase1ControlReport"]
+    assert report["status"] == "klaerung_erforderlich"
+    assert report["routing"] == "prioritized_review"
+
+    cal_003 = next(c for c in report["controls"] if c["controlId"] == "CAL-003")
+    assert cal_003["outcome"] == "failed"
+    assert cal_003["details"]["expected"] == 119.01
+    assert cal_003["details"]["actual"] == 125.0
+
+    str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
+    assert str_004["outcome"] == "failed"
+    assert "FX-SCH-A-000122" in str_004["evidenceRefs"]
+    assert "BR-CO-16" in str_004["details"]["schematronFindings"][0]["message"]
+
+
+def test_hybrid_pdf_without_accepted_embedded_xml_falls_back_to_plain_pdf(
+    client, hybrid_pdf_without_accepted_embedded_xml_bytes
+):
+    """A PDF with an XML attachment under an unrecognized filename must be
+    treated as a plain PDF (mock OCR path), never silently parsed as
+    structured data -- document_intake.py deliberately does not extract
+    arbitrary embedded attachments by filename heuristic (see its module
+    docstring). Confirmed via /inspect (source-type classification) and
+    /process (still produces a normal, schema-valid, non-error result via
+    the PDF/mock-adapter path, not a crash or a false structured pass)."""
+    inspect_response = client.post(
+        "/v1/invoices/inspect",
+        files={"file": ("invoice.pdf", hybrid_pdf_without_accepted_embedded_xml_bytes, "application/pdf")},
+    )
+    assert inspect_response.status_code == 200
+    inspection = inspect_response.json()
+    assert inspection["sourceType"] == "plain_pdf"
+    assert inspection["detectedFormat"] == "pdf"
+    assert inspection["profile"] is None
+
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=_happy_path_fields(), line_item_count=1
+    )
+    _seed_pdf_adapter(hybrid_pdf_without_accepted_embedded_xml_bytes, result)
+    process_response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", hybrid_pdf_without_accepted_embedded_xml_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert process_response.status_code == 200
+    body = process_response.json()
+    _assert_contract(body, hybrid_pdf_without_accepted_embedded_xml_bytes)
+    assert body["canonicalInvoice"]["extraction"]["method"] == "ocr_llm"
+    assert body["canonicalInvoice"]["document"]["sourceType"] == "plain_pdf"
+    report = body["phase1ControlReport"]
+    assert report["status"] == "unauffaellig"
+    assert report["routing"] == "standard_review"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "not_applicable"
+    assert "NOT_A_STRUCTURED_DOCUMENT" in str_003["reasonCodes"]
+    str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
+    assert str_004["outcome"] == "not_applicable"
+    assert "NOT_A_STRUCTURED_DOCUMENT" in str_004["reasonCodes"]
 
 
 def test_capabilities_distinguishes_recognized_from_processable_profiles(client):

@@ -7,7 +7,7 @@ tax compliance, and be explicit when a baseline is outdated.
 """
 from .controls.profiles import STARTER_PROFILE
 
-CATALOG_VERSION = "0.1.0"
+CATALOG_VERSION = "0.2.0"
 
 CAPABILITIES = {
     "structuredFormats": {
@@ -29,13 +29,38 @@ CAPABILITIES = {
                 "extended",
             ],
             "processableLevels": ["en16931"],
-            "xsdVersion": "1.07.2",
-            "legacyBaseline": True,
+            # Per level, since they are genuinely on different XSD baselines
+            # right now -- reporting one blanket "xsdVersion" would be
+            # dishonest once en16931 moved ahead of the others. See
+            # facturx/phase1/resources/facturx-1.09-en16931/PROVENANCE.json
+            # for full source/hash/license provenance of the en16931 XSD.
+            "xsdBaselines": {
+                "en16931": {
+                    "version": "1.09",
+                    "legacyBaseline": False,
+                    "source": (
+                        "Vendored from the pinned, PyPI-hash-verified factur-x==6.6 "
+                        "wheel (facturx/xsd_and_schematron/facturx-en16931/); "
+                        "content-verified as Factur-X 1.09, not 1.09.2 -- see "
+                        "PROVENANCE.json."
+                    ),
+                },
+                "minimum": {"version": "1.07.2", "legacyBaseline": True},
+                "basicwl": {"version": "1.07.2", "legacyBaseline": True},
+                "basic": {"version": "1.07.2", "legacyBaseline": True},
+                "extended": {"version": "1.07.2", "legacyBaseline": True},
+            },
             "note": (
-                "This is the ZUGFeRD 2.3.2 / Factur-X 1.07.2 XSD package, not "
-                "the current ZUGFeRD 2.5 / Factur-X 1.09 package. Upgrading is "
-                "tracked separately, see the follow-up issue referenced in "
-                "docs/invoice_phase1/service_gap_analysis.md. Only en16931 is "
+                "Only en16931 has been upgraded to the current Factur-X 1.09 "
+                "XSD baseline; minimum/basicwl/basic/extended remain on the "
+                "legacy ZUGFeRD 2.3.2 / Factur-X 1.07.2 package (see "
+                "xsdBaselines above) because only en16931 has reviewed "
+                "content controls and a reviewed Schematron artifact so far. "
+                "The true ZUGFeRD 2.5.2 / Factur-X 1.09.2 corrigendum "
+                "(2026-08-04, primarily affecting EXTENDED) is NOT what is "
+                "vendored here -- that official package is gated behind a "
+                "personal-data registration form with no direct download; "
+                "acquiring it is a separate follow-up. Only en16931 is "
                 "processable by POST /v1/invoices/process; other recognized "
                 "levels route to nicht_pruefbar/UNSUPPORTED_PROFILE."
             ),
@@ -46,12 +71,22 @@ CAPABILITIES = {
         },
     },
     "schematron": {
-        "status": "not_implemented",
+        "status": "implemented",
+        "scope": ["en16931"],
+        "artifactVersion": "1.09",
+        "engine": "saxonche 13.0.0 (SaxonC-HE, offline execution, no network/Java at runtime)",
         "note": (
-            "No official Schematron/business-rule artifacts are bundled or "
-            "fetched. STR-004 is defined in the control catalog but is not "
-            "part of the current starter control profile -- it is never "
-            "reported as passed or run."
+            "STR-004 executes the official, vendored, hash-verified Factur-X "
+            "1.09 EN16931 compiled Schematron business rules (427 assertions: "
+            "424 blocking BR-*/BR-CO-*/BR-S-*/BR-DEC-* rules, 3 advisory "
+            "flag=warning PEPPOL-EN16931-R00x recommendations) against "
+            "POST /v1/invoices/process and POST /v1/invoices/validate for "
+            "en16931 documents only -- not yet reviewed for minimum/basicwl/"
+            "basic/extended, where it reports not_applicable/"
+            "UNSUPPORTED_PROFILE rather than running unreviewed. If Saxon or "
+            "its bundled resources fail, time out, or the output can't be "
+            "parsed, STR-004 reports not_reliable (forcing nicht_pruefbar), "
+            "never passed."
         ),
     },
     "pdfExtraction": {
