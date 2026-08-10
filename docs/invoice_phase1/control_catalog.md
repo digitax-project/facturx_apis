@@ -126,6 +126,13 @@ once. It must publish the selected `controlProfileId`, catalog version, omitted
 controls, and known limits so later controls can be added without changing the
 workflow contract.
 
+The official Factur-X EN16931 Schematron assertions executed through
+`STR-004` are inventoried separately in `schematron_rule_inventory.md` and
+`schematron_rule_inventory.json`. They must not be silently duplicated as
+hand-written DigiTax controls. A future profile may group or prioritize those
+standard rules, while DigiTax controls add process, evidence, master-data, and
+organization-specific checks around them.
+
 ## Sources
 
 - German VAT Act, especially Section 14:

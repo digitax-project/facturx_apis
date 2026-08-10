@@ -27,13 +27,11 @@ for official business rules.
    PyPI-hash-verified `factur-x==6.6` wheel, per the reviewed Stage 1
    decision). `minimum`/`basicwl`/`basic`/`extended` remain on the legacy
    Factur-X 1.07.2 / ZUGFeRD 2.3.2 XSDs, since only EN16931 has reviewed
-   content controls and a reviewed Schematron artifact so far. This is
-   Factur-X **1.09**, not the true ZUGFeRD 2.5.2 / Factur-X 1.09.2
-   corrigendum (published 2026-08-04, primarily affecting EXTENDED) --
-   that official package is gated behind a personal-data registration form
-   on ferd-net.de/fnfe-mpe.org with no direct download; acquiring the true
-   1.09.2 artifacts (if they differ from 1.09 for EN16931 at all) remains a
-   separate follow-up.
+   content controls and a reviewed Schematron artifact so far. The official
+   FeRD/FNFE-MPE sources checked on 2026-08-10 identify Factur-X 1.09 /
+   ZUGFeRD 2.5 as the current release. The checked sources did not identify
+   an official Factur-X 1.09.2 / ZUGFeRD 2.5.2 release. See
+   `standard_baseline.md` for the dated evidence and update procedure.
 3. **Implemented for EN16931.** The official, vendored Factur-X 1.09 EN16931
    compiled Schematron business rules are executed offline via pinned
    `saxonche` (SaxonC-HE 13.0, no Java, no network at runtime) -- see

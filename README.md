@@ -121,6 +121,13 @@ details where applicable.
 | Arithmetic and currency | `CAL-001`: line-net consistency; `CAL-002`: tax basis/rate/amount consistency; `CAL-003`: net, tax, gross, prepaid, rounding, and payable reconciliation; `CAL-004`: currency presence and consistency |
 | Organization context | `ORG-001`: buyer data match the approved organization master-data snapshot |
 
+`STR-004` is one DigiTax control boundary around the complete vendored
+Schematron artifact. That artifact currently contains 427 contextual assertion
+templates (302 unique technical IDs). The generated
+[`Schematron rule inventory`](docs/invoice_phase1/schematron_rule_inventory.md)
+documents every assertion and links to a machine-readable JSON inventory for
+future control grouping, mock-invoice generation, and coverage tracking.
+
 The complete candidate catalog, including controls not yet selected for the
 starter profile, is documented in
 [`docs/invoice_phase1/control_catalog.md`](docs/invoice_phase1/control_catalog.md).
@@ -161,11 +168,13 @@ and [`CHANGELOG.md`](CHANGELOG.md) for release notes.
   artifact so far (see `/capabilities`' `structuredFormats["factur-x"]
   .xsdBaselines`, per level, and
   `facturx/phase1/resources/facturx-1.09-en16931/PROVENANCE.json` for full
-  source/hash/license provenance). This is Factur-X **1.09**, not the true
-  ZUGFeRD 2.5.2 / Factur-X 1.09.2 corrigendum (published 2026-08-04,
-  primarily affecting EXTENDED) -- that official package is gated behind a
-  personal-data registration form on ferd-net.de/fnfe-mpe.org with no direct
-  download; acquiring it is a separate follow-up, not done here.
+  source/hash/license provenance). The official FeRD and FNFE-MPE pages
+  checked on 2026-08-10 identify Factur-X 1.09 / ZUGFeRD 2.5, published on
+  2026-06-10, as the current release. No official Factur-X 1.09.2 / ZUGFeRD
+  2.5.2 release was identified in those sources. This is a dated factual
+  snapshot, not a permanent assumption; see
+  [`docs/invoice_phase1/standard_baseline.md`](docs/invoice_phase1/standard_baseline.md)
+  for sources and the update procedure.
 - **Official EN16931 Schematron business-rule validation (`STR-004`) is
   implemented**, executed offline via pinned `saxonche` (SaxonC-HE 13.0, no
   Java, no network at runtime) against the vendored 1.09 stylesheet. It only

@@ -59,13 +59,17 @@ def test_no_extra_undocumented_files_in_resource_directory():
     )
 
 
-def test_artifact_version_is_labelled_109_not_1092():
-    """Regression guard for the exact mistake the reviewed decision warned
-    against: never claim ZUGFeRD 2.5.2 / Factur-X 1.09.2 support for
-    artifacts that are actually Factur-X 1.09."""
+def test_artifact_version_matches_embedded_109_label_and_dated_snapshot():
+    """The artifact label comes from the vendored XSL, while the official
+    release statement remains an explicitly dated external observation."""
     manifest = _load_manifest()
     xsl_path = RESOURCE_DIR / "Factur-X_1.09_EN16931.xsl"
     content = xsl_path.read_text(encoding="utf-8")
     assert 'title="Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)"' in content
     assert "1.09.2" not in content
     assert "1.09.2" not in json.dumps(manifest["artifactLabel"])
+    snapshot = manifest["officialReleaseSnapshot"]
+    assert snapshot["checkedAt"] == "2026-08-10"
+    assert snapshot["currentReleaseObserved"] == "Factur-X 1.09 / ZUGFeRD 2.5"
+    assert snapshot["facturXSource"].startswith("https://fnfe-mpe.org/")
+    assert snapshot["zugferdSource"].startswith("https://www.ferd-net.de/")

@@ -1,8 +1,18 @@
 {
   "$comment": "Provenance manifest for the vendored Factur-X EN16931 XSD/Schematron resources in this directory. tests/test_resource_provenance.py asserts every file listed below is present and its SHA-256 matches. Do not edit a vendored artifact file without regenerating both its hash here and the wheelSource.sha256 below.",
   "artifactLabel": "Factur-X 1.09 EN16931 (XSD + compiled Schematron business rules)",
-  "artifactVersionNote": "This is Factur-X 1.09, NOT ZUGFeRD 2.5.2 / Factur-X 1.09.2. The compiled Schematron stylesheet's own embedded title attribute reads 'Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)' (verified by inspecting Factur-X_1.09_EN16931.xsl directly, not inferred from the wheel's package version). The official ZUGFeRD 2.5.2 / Factur-X 1.09.2 corrigendum package (published by FeRD/FNFE-MPE on 2026-08-04, primarily affecting the EXTENDED profile) requires submitting real personal data through a registration form on ferd-net.de and fnfe-mpe.org -- there is no direct, ungated download. Per an explicit 2026-08-10 user decision, this round vendors the exact, independently content-verified, ungated Factur-X 1.09 EN16931 artifacts instead, and every claim in code, /capabilities, and documentation says '1.09', never '1.09.2'. Upgrading EN16931 to the true 1.09.2 corrigendum artifacts (if it differs from 1.09 for EN16931 at all -- FeRD's own release note says the corrigendum 'primarily' affects EXTENDED) is a follow-up once someone completes that registration and hands over the official ZIP.",
+  "artifactVersionNote": "The vendored resources identify themselves as Factur-X 1.09 EN16931. The compiled Schematron stylesheet's embedded title is 'Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)'; this was verified from Factur-X_1.09_EN16931.xsl rather than inferred from the Python wheel version. The official release snapshot below is contextual evidence and does not replace the file hashes or embedded artifact label.",
   "retrievalDate": "2026-08-10",
+  "officialReleaseSnapshot": {
+    "checkedAt": "2026-08-10",
+    "currentReleaseObserved": "Factur-X 1.09 / ZUGFeRD 2.5",
+    "publishedAt": "2026-06-10",
+    "recommendedUseFrom": "2026-07-01",
+    "facturXSource": "https://fnfe-mpe.org/factur-x/",
+    "zugferdSource": "https://www.ferd-net.de/publikationen-produkte/publikationen/detailseite/zugferd-25-english",
+    "releaseAnnouncement": "https://www.ferd-net.de/aktuelles-veranstaltungen/aktuelles/news/neue-zugferd-version-25-veroeffentlicht",
+    "observation": "The checked official sources did not identify a Factur-X 1.09.2 / ZUGFeRD 2.5.2 release. This is a dated observation and must be rechecked before claiming a later baseline."
+  },
   "wheelSource": {
     "package": "factur-x",
     "version": "6.6",
@@ -45,7 +55,7 @@
       "filename": "Factur-X_1.09_EN16931.xsl",
       "wheelPath": "facturx/xsd_and_schematron/facturx-en16931/Factur-X_1.09_EN16931.xsl",
       "sha256": "ad17794b088dfb89a5e92c9e3b9a2f6663b95bd12b23677667e3e7996d1c4b1f",
-      "role": "Compiled ISO Schematron business-rule stylesheet (XSLT 2.0, requires an XSLT2-capable engine -- executed offline via pinned saxonche/SaxonC-HE). Embedded title: 'Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)'. Contains 427 svrl:failed-assert templates (424 unflagged/blocking BR-*, BR-CO-*, BR-S-*, BR-DEC-* assertions; 3 flag=\"warning\" PEPPOL-EN16931-R00x advisory assertions). The only external-resource access in the whole file is a fixed relative document('FACTUR-X_EN16931_codedb.xml') call (116 occurrences, always the same literal filename, resolved by the XSLT engine against this stylesheet's own location -- never derived from the invoice being checked)."
+      "role": "Compiled ISO Schematron business-rule stylesheet (XSLT 2.0, requires an XSLT2-capable engine -- executed offline via pinned saxonche/SaxonC-HE). Embedded title: 'Schema for Factur-X; 1.09; EN16931-COMPLIANT (FULLY)'. Contains 427 contextual svrl:failed-assert templates: 424 unflagged findings treated as blocking and 3 flag=\"warning\" findings. The generated docs/invoice_phase1/schematron_rule_inventory.json records all templates, 302 unique technical IDs, explicit standard references, families, messages, XPath expressions, source lines, and this file's hash. The only external-resource access in the whole file is a fixed relative document('FACTUR-X_EN16931_codedb.xml') call (116 occurrences, always the same literal filename, resolved by the XSLT engine against this stylesheet's own location -- never derived from the invoice being checked)."
     },
     {
       "filename": "FACTUR-X_EN16931_codedb.xml",

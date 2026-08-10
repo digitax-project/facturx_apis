@@ -41,8 +41,7 @@ CAPABILITIES = {
                     "source": (
                         "Vendored from the pinned, PyPI-hash-verified factur-x==6.6 "
                         "wheel (facturx/xsd_and_schematron/facturx-en16931/); "
-                        "content-verified as Factur-X 1.09, not 1.09.2 -- see "
-                        "PROVENANCE.json."
+                        "content-verified as Factur-X 1.09 -- see PROVENANCE.json."
                     ),
                 },
                 "minimum": {"version": "1.07.2", "legacyBaseline": True},
@@ -56,11 +55,10 @@ CAPABILITIES = {
                 "legacy ZUGFeRD 2.3.2 / Factur-X 1.07.2 package (see "
                 "xsdBaselines above) because only en16931 has reviewed "
                 "content controls and a reviewed Schematron artifact so far. "
-                "The true ZUGFeRD 2.5.2 / Factur-X 1.09.2 corrigendum "
-                "(2026-08-04, primarily affecting EXTENDED) is NOT what is "
-                "vendored here -- that official package is gated behind a "
-                "personal-data registration form with no direct download; "
-                "acquiring it is a separate follow-up. Only en16931 is "
+                "Official FeRD/FNFE-MPE sources checked on 2026-08-10 list "
+                "Factur-X 1.09 / ZUGFeRD 2.5 as the current release; this is "
+                "a dated baseline snapshot and must be rechecked when the "
+                "standard changes. Only en16931 is "
                 "processable by POST /v1/invoices/process; other recognized "
                 "levels route to nicht_pruefbar/UNSUPPORTED_PROFILE."
             ),
@@ -77,9 +75,13 @@ CAPABILITIES = {
         "engine": "saxonche 13.0.0 (SaxonC-HE, offline execution, no network/Java at runtime)",
         "note": (
             "STR-004 executes the official, vendored, hash-verified Factur-X "
-            "1.09 EN16931 compiled Schematron business rules (427 assertions: "
-            "424 blocking BR-*/BR-CO-*/BR-S-*/BR-DEC-* rules, 3 advisory "
-            "flag=warning PEPPOL-EN16931-R00x recommendations) against "
+            "1.09 EN16931 compiled Schematron business rules. The artifact "
+            "contains 427 contextual assertion templates: 424 are treated as "
+            "blocking and 3 carry flag=warning; they comprise 302 unique "
+            "FX-SCH-A technical IDs, 209 assertions with an explicit bracketed "
+            "standard-rule reference, and 218 additional profile/structure "
+            "constraints. See docs/invoice_phase1/schematron_rule_inventory.md "
+            "and .json for the generated inventory. STR-004 runs against "
             "POST /v1/invoices/process and POST /v1/invoices/validate for "
             "en16931 documents only -- not yet reviewed for minimum/basicwl/"
             "basic/extended, where it reports not_applicable/"
