@@ -15,16 +15,17 @@ could silently drift from the XML.
 
 Usage:
     python examples/demo/generate_demo_invoices.py
+    python examples/demo/generate_demo_invoices.py --output-dir <path>
 
 Requires `reportlab` (not a runtime API dependency -- see requirements-dev.txt).
 
-Output: writes PDFs, source XML copies, and a manifest.json into
-C:/Users/Tyto/Desktop/diss/ResearchAssistant/output/demo/invoice_phase1/2026-08-10/
-(a shared, non-repo output area used across this afternoon's demo workstreams
--- NOT part of the facturx_apis git repository). The XML fixtures and this
-generator, in tests/fixtures/ and here, remain the reproducible source; the
-files under output/ are regenerable review copies, not the source of truth.
+Output: writes PDFs, source XML copies, and a manifest.json into the directory
+provided with ``--output-dir``. If omitted, the portable repository-local
+``.demo-output`` directory is used. The XML fixtures and this generator remain
+the reproducible source; generated files are review copies, not the source of
+truth.
 """
+import argparse
 import hashlib
 import json
 import sys
@@ -49,9 +50,7 @@ from facturx.facturx import generate_from_binary  # noqa: E402
 from facturx.phase1.document_intake import _parse_untrusted_xml  # noqa: E402
 from facturx.phase1.normalize.structured import normalize_structured_invoice  # noqa: E402
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
-OUTPUT_DIR = Path(
-    r"C:\Users\Tyto\Desktop\diss\ResearchAssistant\output\demo\invoice_phase1\2026-08-10"
-)
+DEFAULT_OUTPUT_DIR = REPO_ROOT / ".demo-output"
 
 FACTURX_LABEL = "Factur-X 1.09 EN16931"  # never "1.09.2" -- see PROVENANCE.json
 
@@ -240,15 +239,15 @@ def build_hybrid_pdf(scenario: dict) -> tuple:
     return hybrid_pdf_bytes, xml_bytes, invoice
 
 
-def generate() -> list:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def generate(output_dir: Path = DEFAULT_OUTPUT_DIR) -> list:
+    output_dir.mkdir(parents=True, exist_ok=True)
     manifest_entries = []
 
     for scenario in SCENARIOS:
         hybrid_pdf_bytes, xml_bytes, invoice = build_hybrid_pdf(scenario)
 
-        pdf_out_path = OUTPUT_DIR / f"{scenario['outputBasename']}.pdf"
-        xml_out_path = OUTPUT_DIR / f"{scenario['outputBasename']}.xml"
+        pdf_out_path = output_dir / f"{scenario['outputBasename']}.pdf"
+        xml_out_path = output_dir / f"{scenario['outputBasename']}.xml"
         pdf_out_path.write_bytes(hybrid_pdf_bytes)
         xml_out_path.write_bytes(xml_bytes)
 
@@ -280,7 +279,16 @@ def generate() -> list:
 
 
 if __name__ == "__main__":
-    entries = generate()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Destination for generated PDFs, XML copies, and manifest.",
+    )
+    args = parser.parse_args()
+    output_dir = args.output_dir.resolve()
+    entries = generate(output_dir)
     generated_at = datetime.now(timezone.utc).isoformat()
     manifest = {
         "$comment": (
@@ -294,6 +302,6 @@ if __name__ == "__main__":
         "standardsLabel": FACTURX_LABEL,
         "entries": entries,
     }
-    manifest_path = OUTPUT_DIR / "generated_manifest.json"
+    manifest_path = output_dir / "generated_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Wrote {manifest_path}")

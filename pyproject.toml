@@ -1,5 +1,7 @@
 [project]
 name = "factur-x"
+# Version of the embedded upstream Python library. The independently versioned
+# DigiTax API release is exposed by facturx/api.py and the repository Git tag.
 version = "3.6"
 description = "Factur-X and Order-X: electronic invoicing and ordering standards"
 authors = [{name = "Alexis de Lattre", email = "alexis.delattre@akretion.com"}]
@@ -31,9 +33,10 @@ dynamic = ["dependencies"]
 # ]
 
 [project.urls]
-Homepage = "https://github.com/akretion/factur-x"
-Source = "https://github.com/akretion/factur-x"
-Issues = "https://github.com/akretion/factur-x/issues"
+Homepage = "https://github.com/digitax-project/facturx_apis"
+Source = "https://github.com/digitax-project/facturx_apis"
+Issues = "https://github.com/digitax-project/facturx_apis/issues"
+Upstream = "https://github.com/akretion/factur-x"
 
 [project.scripts]
 facturx-pdfgen = "facturx.scripts.pdfgen:main"

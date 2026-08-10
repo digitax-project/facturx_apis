@@ -169,8 +169,14 @@ switch ($Action) {
         # only ever used one-shot `docker run --rm` containers with no
         # already-running main process to collide with).
         $result = docker exec -e N8N_RUNNERS_BROKER_PORT=15679 $N8nContainer n8n execute --id=$RegressionWorkflowId 2>&1
-        $result | Out-File -FilePath $outputFile -Encoding utf8
         $resultText = $result -join "`n"
+        # n8n includes an internal per-execution resume token even for this
+        # completed workflow. It is not needed as review evidence and must not
+        # leave the local instance when evidence is shared.
+        $sanitizedResultText = $resultText `
+            -replace '(?i)("resumeToken"\s*:\s*)"[^"]*"', '$1"[redacted]"' `
+            -replace '(?i)("resumeUrl"\s*:\s*)"[^"]*"', '$1"[redacted]"'
+        $sanitizedResultText | Out-File -FilePath $outputFile -Encoding utf8
         if ($resultText -notmatch '"finished":\s*true') {
             Write-Host "SMOKE TEST 1/2 FAILED -- see $outputFile"
             throw "CLI smoke test did not report finished:true"
