@@ -346,6 +346,157 @@ Full detail in `coordination/claude-codex/handover-log.md` and
 `tests/test_n8n_upload_demo_workflow.py` is the CI structural guard; it is
 not a substitute for the real evidence above.
 
+## digitax_invoice_phase1_flow1b_pdf_ocr.json
+
+Flow 1b: processes a plain PDF invoice (no embedded structured XML) via
+OCR/LLM extraction (Gemini) instead of XML parsing, reusing the four
+proven OCR nodes from `digitax_invoice_intake.json` **unmodified**:
+
+```
+Webhook: PDF Invoice Upload (POST multipart/form-data, file field "data")
+  -> Build Run Context           -- correlation ID before any call,
+                                     organizationId (explicit, or the
+                                     fictional default only under demoMode=true)
+  -> Validate Upload Request     -- missing file / missing org context:
+       -> [invalid] Build Invalid Upload Payload    never retried, no call made
+       -> [valid]   Resolve Organization Profile (temporary mirror)
+  -> Organization Profile Known?
+       -> [unknown] Build Unknown Organization Payload
+       -> [known]   fix base64 -> Build Gemini Request
+                       -> File-Based OCR with Gemini 2.5 (bounded retry, maxTries: 5)
+                       -> Gemini Output Parser
+  -> Normalize OCR Fields to Canonical Buyer Shape (temporary)
+  -> Evaluate ORG-001 (temporary mirror)
+  -> Build Review Summary
+  -> Build Browser Response      -- single convergence point, HTML, with an
+                                     explicit "temporary implementation" notice
+  -> Respond to Webhook (HTML)
+  -> Status Routing (Switch, 4 explicit outputs)
+       -> Human Review - Standard / Prioritized / Technical / Unknown (fallback)
+```
+
+`digitax_invoice_intake.json` itself is **untouched** -- it remains the
+historical, sanitized reference for the full mailbox-intake workflow this
+chain was extracted from. Unrelated scope from that workflow (Outlook
+mailbox intake, BZSt VAT lookup, Excel reporting, Reqeli analysis) is not
+present here at all, per the task's explicit scope reduction.
+
+### The four reused OCR nodes: byte-for-byte, not just "similar"
+
+`fix base64`, `Build Gemini Request`, `File-Based OCR with Gemini 2.5`, and
+`Gemini Output Parser` carry the *exact same* `jsCode`/parameters and node
+`id`s as `digitax_invoice_intake.json` -- verified by
+`tests/test_n8n_flow1b_workflow.py::test_ocr_nodes_reused_verbatim_from_intake_workflow`,
+which diffs the two files directly rather than trusting a copy-paste by eye.
+Two consequences worth knowing, not fixed here because the task's explicit
+instruction was to reuse this logic, not improve it:
+
+- **The Gemini prompt hint is hardcoded to `Unternehmen X`** (name, two
+  approved addresses, VAT ID). Using Flow 1b for a different
+  `organizationId` (e.g. `unternehmen-y-demo`) will still work -- ORG-001 is
+  evaluated independently downstream against whichever organization was
+  actually selected -- but the extraction *guidance* quality may degrade
+  for a genuinely different buyer, since the model isn't told to expect one.
+- **The upload's binary field must be named `data`**, not `invoiceFile`
+  like the Flow 1a upload demo, because that's `fix base64`'s hardcoded
+  `binaryPropertyName`. This is a deliberate, documented inconsistency
+  across the workflow family, not an oversight.
+
+The one deliberate addition beyond verbatim reuse: `Gemini Output Parser`
+gained `onError: "continueErrorOutput"`. It throws by design on malformed
+LLM output (invalid JSON, unexpected response shape), and the historical
+mailbox-intake workflow had no fail-safe wrapping around that at all. This
+workflow must never end as an unhandled execution error, so the thrown
+error is now routed to a proper `nicht_pruefbar`/`technical_review` payload.
+This is error-handling wiring only -- the parsing logic itself is untouched.
+
+### Missing API contract -- this is a temporary implementation, not a shortcut
+
+`POST /v1/invoices/process` only accepts a file upload, and the shipped
+`MockPdfExtractionAdapter` (`facturx/phase1/normalize/pdf_adapter.py`) is
+keyed by the SHA-256 of the uploaded bytes with **no seam for an external
+caller to inject a real OCR/LLM extraction result**. There is also no API
+endpoint exposing organization master data
+(`facturx/phase1/organization_master_data.py`) to an external caller. So
+Flow 1b **cannot** call the real API to evaluate ORG-001 against genuinely
+OCR-extracted fields today -- and it does not pretend to. Instead:
+
+- `Resolve Organization Profile (temporary mirror)` hand-mirrors only the
+  `buyer` block of `organization_master_data.py`'s two fictional org
+  contexts. This **must be kept in sync by hand** until a real endpoint or
+  adapter seam exists -- a genuine, acknowledged maintenance burden, not a
+  one-time cost.
+- `Evaluate ORG-001 (temporary mirror)` replicates
+  `evaluate_org_001()` and its `_check`/`_combine`/`_normalize_for_match`
+  helpers from `facturx/phase1/controls/executor.py` line-for-line in
+  JavaScript: same 5 buyer fields, same `0.70` confidence threshold, same
+  case/whitespace-insensitive comparison, same severity/reason-code shape.
+  Verified with real execution (Node.js, not just read-through) in
+  `tests/test_n8n_flow1b_workflow.py`.
+- The rendered HTML result carries an explicit, prominent banner stating
+  this is a temporary n8n-side implementation, so no viewer mistakes it for
+  a real API-issued control report.
+
+**What real convergence with Flow 1a would require** (open decision, not
+implemented): either (a) a real `PdfExtractionAdapter` the API's existing
+dependency-injection seam can select, fed by this workflow's OCR chain, so
+`/v1/invoices/process` can be called normally with the original PDF -- or
+(b) a narrower endpoint/contract accepting pre-extracted canonical fields
+plus their evidence directly. Recorded here and in
+`output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md` for Codex/the user to
+decide, not silently chosen.
+
+### Confidence: Gemini has no native per-field signal
+
+Unlike the Flow 1a PDF path's `PdfExtractionAdapter` contract (which always
+carries a real confidence per field), Gemini's structured-JSON output is
+just five key/value pairs with no calibrated confidence at all. This
+workflow uses a documented, conservative placeholder: `0.85` (just above
+the `0.70` threshold used everywhere else in this project) for any field
+Gemini returned a real value for, and `0.0`/`state: "not_extracted"` --
+**not** `confirmed_missing` -- for anything Gemini reported as `"not
+found"`. The `not_extracted` choice is deliberate: there's no calibrated
+signal to trust an LLM's own absence claim as a confirmed business fact
+yet, so a missing field always forces `not_reliable`/human review rather
+than a confident `MISSING_FIELD` failure. This satisfies the project-wide
+rule that low-confidence or missing OCR fields must never auto-pass --
+verified with real Node.js execution, not just asserted.
+
+### Import status: imported, credentials pending
+
+Imported as **inactive** into the isolated `digitax-phase1-demo-n8n`
+(`n8nio/n8n:2.33.7`) container, confirmed via
+`n8n list:workflow --active=false`; re-imported a second time with no
+duplicate created. **No Gemini credential is configured in that instance.**
+`File-Based OCR with Gemini 2.5` still carries the same
+`REPLACE_WITH_YOUR_CREDENTIAL_ID` placeholder as the historical workflow --
+nothing was copied from the pre-existing, separately managed `n8n`
+container (port 5678) or from anywhere else. Before a real end-to-end run:
+
+1. Open the n8n UI at `http://localhost:5679`.
+2. Select **DigiTax Flow 1b - PDF OCR/LLM**.
+3. On the `File-Based OCR with Gemini 2.5` node, select or create a real
+   **Google Gemini (PaLM) API** credential (Google AI Studio API key).
+4. Activate the workflow only after that -- it is deliberately left
+   inactive on import per the task's explicit instruction.
+
+Status is **imported, credentials pending** -- not "working." No E2E claim
+is made without a credential actually present.
+
+### Verification
+
+- `pytest`: full suite green, including
+  `tests/test_n8n_flow1b_workflow.py` (structural checks plus real Node.js
+  execution of the ORG-001 evaluator and status aggregator against
+  synthetic inputs -- the actual reused JS logic, not a re-implementation
+  assumption).
+- Real `n8n import:workflow` against pinned `n8nio/n8n:2.33.7` in the
+  running isolated container (not a one-shot `--rm` container -- the same
+  persistent stack the Flow 1a upload demo already uses).
+- Full detail, exact commands, and the "credentials pending" scope in
+  `coordination/claude-codex/handover-log.md` and
+  `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.
+
 ## General rule
 
 Workflow exports must contain no credentials, API keys, real invoice data,
