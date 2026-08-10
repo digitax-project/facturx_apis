@@ -80,3 +80,5 @@ include facturx/xsd/orderx-extended/SCRDMCCBDACIOMessageStructure_100pD20B_urn_u
 include facturx/xsd/orderx-extended/SCRDMCCBDACIOMessageStructure_100pD20B_urn_un_unece_uncefact_codelist_standard_UNECE_MessageFunctionCode_D20A.xsd
 include facturx/xmp/ZUGFeRD_extension_schema.xmp
 include facturx/xmp/Factur-X_extension_schema.xmp
+include facturx/phase1/schemas/canonical_invoice.schema.json
+include facturx/phase1/schemas/phase1_control_report.schema.json

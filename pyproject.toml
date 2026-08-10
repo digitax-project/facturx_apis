@@ -6,6 +6,10 @@ authors = [{name = "Alexis de Lattre", email = "alexis.delattre@akretion.com"}]
 readme = "README.rst"
 classifiers = [
     "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial :: Accounting",
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -14,7 +18,10 @@ classifiers = [
 ]
 keywords = ["e-invoice", "ZUGFeRD", "Factur-X", "Order-X", "e-procurement"]
 license = {file = "LICENSE"}
-requires-python = ">=3.7"
+# facturx/phase1/ (the DigiTax Phase 1 slice) uses PEP 604 `X | None` unions,
+# which require 3.10+; this replaces the historical >=3.7 floor, which the
+# core facturx/facturx.py library alone would still satisfy.
+requires-python = ">=3.10"
 dynamic = ["dependencies"]
 
 # Needed if we enable facturx-webservice

@@ -1,0 +1,1629 @@
+{
+  "name": "DigiTax Invoice Intake (Phase 1, sanitized)",
+  "id": "digitax-invoice-intake-phase1",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "let results = [];\n\nfor (const item of $input.all()) {\n\tif (!item.binary) continue;\n\n\tconst metadata = item.json;\n\n\tfor (const key of Object.keys(item.binary)) {\n\t\tresults.push({\n\t\t\tjson: {\n\t\t\t\tfileName: item.binary[key].fileName,\n\t\t\t\tmessageId: $input.first().json.id,\n\t\t\t\tsubject: metadata.subject,\n\t\t\t\tsenderName: metadata.sender?.emailAddress?.name || '',\n\t\t\t\tsenderEmail: metadata.sender?.emailAddress?.address || '',\n\t\t\t\treceivedAt: metadata.receivedAt,\n\t\t\t\twebLink: metadata.webLink\n\t\t\t},\n\t\t\tbinary: {\n\t\t\t\tdata: item.binary[key]\n\t\t\t}\n\t\t});\n\t}\n}\n\nreturn results;\n"
+      },
+      "id": "916b45b6-dc2d-4d27-8dbc-5dc56aa46e10",
+      "name": "Split Attachments",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -768,
+        48
+      ],
+      "typeVersion": 2,
+      "retryOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "output": "raw",
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "id": "dce0899b-5d92-418a-89f8-0c4c6739e399",
+      "name": "Download Attachments",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "position": [
+        -992,
+        -64
+      ],
+      "webhookId": "b3e83036-8079-493b-b870-cdcedeecad51",
+      "typeVersion": 2,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Microsoft Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "inputText": "={{ $json.markdown }}",
+        "categories": {
+          "categories": [
+            {
+              "category": "has invoice",
+              "description": "There is at least one invoice in the message"
+            },
+            {
+              "category": "has no invoice",
+              "description": "There is no invoice in the message"
+            }
+          ]
+        },
+        "options": {
+          "fallback": "other",
+          "systemPromptTemplate": "Classify the text provided by the user into one of the following categories: {categories}. Only output json."
+        }
+      },
+      "id": "baf82cf5-3f86-4c27-a21e-416f05e3cd9c",
+      "name": "Message Classifier",
+      "type": "@n8n/n8n-nodes-langchain.textClassifier",
+      "position": [
+        -1344,
+        48
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "options": {}
+      },
+      "id": "3f91baac-8127-4d0f-b762-d2c1fe2c28f1",
+      "name": "Extract from File",
+      "type": "n8n-nodes-base.extractFromFile",
+      "position": [
+        -320,
+        16
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "html": "={{ $json.subject }}\n{{ $json.bodyPreview }}",
+        "destinationKey": "markdown",
+        "options": {}
+      },
+      "id": "c2f55d7c-2338-4169-8c7e-e6a0706b15e5",
+      "name": "Markdown",
+      "type": "n8n-nodes-base.markdown",
+      "position": [
+        -1568,
+        48
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5240de52-3b02-4151-8c2b-b0522582700e",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{\n(function(output) {\n  return output.is_invoice;\n})(\n  $json.candidates[0].content.parts[0].text.parseJson()\n)\n}}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "b2f13c4d-8efd-430f-9637-022dd81b3f52",
+      "name": "Filter Invoices",
+      "type": "n8n-nodes-base.filter",
+      "position": [
+        128,
+        -80
+      ],
+      "typeVersion": 2.2,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "57f433cd-5861-434f-80f2-ce28d7c22c26",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "leftValue": "={{ $input.first().json }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "693c17c4-624f-48f4-9db1-ff580386d55b",
+      "name": "Has Invoice?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        352,
+        -80
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash-lite",
+        "options": {}
+      },
+      "id": "74e48717-c4d1-45eb-9c19-1856f38781c6",
+      "name": "Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "position": [
+        -1280,
+        304
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Read content of message/mail",
+        "height": 420,
+        "width": 800,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1856,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "9e9a7fb0-171b-431c-8433-317c255b78d2",
+      "name": "Sticky Note13"
+    },
+    {
+      "parameters": {
+        "content": "## Download attachment and prepare metadata",
+        "height": 468,
+        "width": 912,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1184,
+        -272
+      ],
+      "typeVersion": 1,
+      "id": "1acbc9cc-b925-49dc-93f4-fc153b62ba2b",
+      "name": "Sticky Note14"
+    },
+    {
+      "parameters": {
+        "content": "## Check if the the downloaded data pdf and invoice is",
+        "height": 420,
+        "width": 1088,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -144,
+        -240
+      ],
+      "typeVersion": 1,
+      "id": "d07e046c-bdb5-4480-a60e-ec657e008143",
+      "name": "Sticky Note15"
+    },
+    {
+      "parameters": {
+        "resource": "folderMessage",
+        "folderId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "REPLACE_WITH_YOUR_INVOICE_FOLDER"
+        },
+        "filtersUI": {
+          "values": {
+            "filterBy": "search",
+            "search": "invoice OR rechnung"
+          }
+        },
+        "options": {}
+      },
+      "id": "030edbea-5827-4d77-a7a4-e033082ee36f",
+      "name": "Get All Messages from one specific Mail-Folder",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "position": [
+        -1792,
+        48
+      ],
+      "webhookId": "6e52effb-42b5-4d9c-b008-82f167e471db",
+      "typeVersion": 2,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Microsoft Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "messageId, webLink, senderEmail, senderName, messageId",
+        "outputDataFrom": "input2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        -544,
+        -64
+      ],
+      "id": "f3c3fedc-8cce-4647-95f7-787b6c999399",
+      "name": "Merge Attachment + Message Metadata by messageId"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -992,
+        144
+      ],
+      "id": "66eba577-f497-4b63-9043-0be8a9f144df",
+      "name": "Excluding mail which is not invoice for company"
+    },
+    {
+      "parameters": {
+        "content": "### Company can customize the prompt here!",
+        "height": 80,
+        "width": 208,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1120,
+        336
+      ],
+      "typeVersion": 1,
+      "id": "e7f46109-0577-45d9-b766-574e9ce0dd04",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        128,
+        112
+      ],
+      "id": "3a1f527f-8864-474f-b0ef-39e29dd5b872",
+      "name": "Validator Service offline or data was not pdf"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        576,
+        -32
+      ],
+      "id": "1b089f3a-fc2a-46bb-891b-b81ebd904a8c",
+      "name": "PDF is not Invoice"
+    },
+    {
+      "parameters": {
+        "content": "## From now on only Invoices and their metadatas",
+        "height": 236,
+        "width": 220,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        752,
+        -320
+      ],
+      "typeVersion": 1,
+      "id": "c8910453-c615-460d-97f8-e2dbb50dd18a",
+      "name": "Sticky Note24"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"subject\": \"{{$json.subject}}\",\n  \"senderEmail\": \"{{$json.sender.emailAddress.address}}\",\n  \"senderName\": \"{{$json.sender.emailAddress.name}}\",\n  \"messageId\": \"{{$json.id}}\",\n  \"receivedAt\": \"{{$json.receivedDateTime}}\",\n  \"webLink\": \"{{$json.webLink}}\",\n  \"trackingKey\": \"null\",\n  \"isCorrectedInvoice\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -768,
+        -160
+      ],
+      "id": "6171eb5d-4d8d-4902-89ac-fb8eaee7bbf0",
+      "name": "Extract Email Metadata for new invoice"
+    },
+    {
+      "parameters": {
+        "content": "# Control 02: Check validity of USt-ID\n### - check foreign USt-ID using BZSt-API, mock for domestic (payable)\n### - check invoice address, deliver address",
+        "height": 1208,
+        "width": 1140
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2544,
+        -688
+      ],
+      "typeVersion": 1,
+      "id": "04d06050-ae9e-4f0e-896f-d21e73c46709",
+      "name": "Sticky Note",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "# Control 01: Check validity of Invoice for SME\n### - check company name\n### - check invoice address, deliver address",
+        "height": 664,
+        "width": 1460
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        912,
+        -608
+      ],
+      "typeVersion": 1,
+      "id": "d207fe3f-1550-49e7-b3bd-10edc22a8b62",
+      "name": "Sticky Note2",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "d76f8f6b-f80a-4edf-a1f0-d493a453bfff",
+      "name": "For Each Invoice",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        800,
+        -256
+      ],
+      "typeVersion": 3,
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        576,
+        -256
+      ],
+      "id": "222170e1-6579-42ac-9498-0ae8707267fe",
+      "name": "Merge to proceed object"
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractTextFromGeminiResponse(item) {\n  const j = item.json || {};\n\n  if (\n    Array.isArray(j.candidates) &&\n    j.candidates[0] &&\n    j.candidates[0].content &&\n    Array.isArray(j.candidates[0].content.parts) &&\n    j.candidates[0].content.parts[0] &&\n    typeof j.candidates[0].content.parts[0].text === 'string'\n  ) {\n    return j.candidates[0].content.parts[0].text;\n  }\n\n  throw new Error('Could not find Gemini text output in expected response fields.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nreturn items.map(item => {\n  const rawText = extractTextFromGeminiResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Gemini output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)')\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      gemini_raw_text: rawText\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1696,
+        -256
+      ],
+      "id": "4a35d5e4-05a1-407d-88f6-9b73d6563ecd",
+      "name": "Gemini Output Parser"
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryPropertyName = 'data';\nconst result = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);\n\n  result.push({\n    json: {\n      pdfMimeType: 'application/pdf',\n      pdfBase64: buffer.toString('base64')\n    }\n  });\n}\n\nreturn result;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -112
+      ],
+      "id": "c3dae39f-3de6-418f-ba5f-3eae110bef89",
+      "name": "fix base64"
+    },
+    {
+      "parameters": {
+        "jsCode": "const recipientMaster = {\n  company_id: 'company_x',\n  legal_name: 'Unternehmen X',\n  approved_recipients: [\n    {\n      recipient_id: 'REC-X-001',\n      name: 'Unternehmen X',\n      address: 'Musterweg 10',\n      zip: '04109',\n      city: 'Leipzig',\n      country: 'Germany',\n      status: 'current',\n      address_type: 'primary'\n    },\n    {\n      recipient_id: 'REC-X-002',\n      name: 'Unternehmen X',\n      address: 'Musterweg 12',\n      zip: '04109',\n      city: 'Leipzig',\n      country: 'Germany',\n      status: 'current',\n      address_type: 'secondary'\n    }\n  ]\n};\n\nreturn items.map(item => {\n  return {\n    json: {\n      ...item.json,\n      recipient_master: recipientMaster\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -256
+      ],
+      "id": "4b90f765-6c2c-4d3c-8281-728446267203",
+      "name": "Recipient Master Loader"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"inline_data\": {\n            \"mime_type\": $('Split Attachments').item.binary.data.mimeType,\n            \"data\": $json.data\n          }\n        },\n        {\n          \"text\": `You are an accounts receivable agent who is helping to identify if the document is an invoice.`\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"response_mime_type\": \"application/json\",\n    \"response_schema\": {\n      \"type\": \"OBJECT\",\n      \"required\": [\n        \"is_invoice\",\n        \"is_issued_to_company\"\n      ],\n      \"properties\": {\n        \"is_invoice\": { \"type\": \"boolean\" },\n        \"is_issued_to_company\": { \"type\": \"boolean\" }\n      }\n    }\n  }\n}\n}}",
+        "options": {}
+      },
+      "id": "cce17e7e-5bc4-4059-b315-3a7761fa43d6",
+      "name": "Invoice Classifier With Gemini 2.5",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -96,
+        16
+      ],
+      "executeOnce": false,
+      "retryOnFail": true,
+      "typeVersion": 4.2,
+      "waitBetweenTries": 100,
+      "alwaysOutputData": false,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiRequest) }}",
+        "options": {}
+      },
+      "id": "851db9a0-6882-4e19-8201-bd9e2e601d5c",
+      "name": "File-Based OCR with Gemini 2.5",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1472,
+        -112
+      ],
+      "executeOnce": false,
+      "retryOnFail": true,
+      "typeVersion": 4.2,
+      "maxTries": 5,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  return {\n    json: {\n      geminiRequest: {\n        contents: [\n          {\n            parts: [\n              {\n                inline_data: {\n                  mime_type: 'application/pdf',\n                  data: item.json.pdfBase64\n                }\n              },\n              {\n                text: `Extract invoice header information from this PDF and return JSON only.\n\nImportant context:\n- The expected buyer company is: Unternehmen X\n- The buyer may use one of these approved addresses:\n  - Musterweg 10, 04109 Leipzig, Germany\n  - Musterweg 12, 04109 Leipzig, Germany\n- The buyer VAT ID is: DE450224353\n\nCritical extraction rules:\n1. Distinguish clearly between seller and buyer.\n2. Do not confuse the buyer VAT ID with the seller VAT ID.\n3. If a VAT ID belongs to Unternehmen X, return it as \"VAT-ID (Buyer)\".\n4. Extract the supplier VAT ID separately as \"VAT-ID (Seller)\".\n5. If only one VAT ID is visible, decide whether it belongs to the seller or buyer based on the company name and address nearby.\n6. If the seller VAT ID cannot be identified with confidence, return \"not found\" for \"VAT-ID (Seller)\".\n7. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\"\n}\n\nIf a field is missing, return \"not found\".`\n              }\n            ]\n          }\n        ]\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        -112
+      ],
+      "id": "e187af11-be7a-4453-8072-a3c7482495ef",
+      "name": "Build Gemini Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "function normText(value) {\n  return String(value || '')\n    .toLowerCase()\n    .normalize('NFKD')\n    .replace(/[^\\w\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction normZip(value) {\n  return String(value || '').replace(/\\D/g, '').padStart(5, '0');\n}\n\nfunction normCountry(value) {\n  const raw = String(value || '').trim().toLowerCase();\n\n  const map = {\n    de: 'germany',\n    deutschland: 'germany',\n    germany: 'germany',\n    fr: 'france',\n    frankreich: 'france',\n    france: 'france',\n    se: 'sweden',\n    schweden: 'sweden',\n    sweden: 'sweden',\n  };\n\n  return map[raw] || normText(value);\n}\n\nfunction equalsLoose(a, b) {\n  return normText(a) !== '' && normText(a) === normText(b);\n}\n\nfunction scoreRecipient(invoice, recipient) {\n  const checks = {\n    buyer_name_match: equalsLoose(invoice['Name (Buyer)'], recipient.name),\n    buyer_address_match: equalsLoose(invoice['Address (Buyer)'], recipient.address),\n    buyer_zip_match:\n      normZip(invoice['Zip (Buyer)']) !== '' &&\n      normZip(invoice['Zip (Buyer)']) === normZip(recipient.zip),\n    buyer_city_match: equalsLoose(invoice['City (Buyer)'], recipient.city),\n    buyer_country_match:\n      normCountry(invoice['Country (Buyer)']) !== '' &&\n      normCountry(invoice['Country (Buyer)']) === normCountry(recipient.country),\n  };\n\n  const score =\n    (checks.buyer_name_match ? 4 : 0) +\n    (checks.buyer_address_match ? 2 : 0) +\n    (checks.buyer_zip_match ? 2 : 0) +\n    (checks.buyer_city_match ? 1 : 0) +\n    (checks.buyer_country_match ? 1 : 0);\n\n  return { checks, score };\n}\n\nreturn items.map(item => {\n  const invoice = item.json.invoice_extracted || {};\n  const master = item.json.recipient_master || {};\n  const recipients = Array.isArray(master.approved_recipients) ? master.approved_recipients : [];\n\n  let best = null;\n  let bestScore = -1;\n  let bestChecks = {\n    buyer_name_match: false,\n    buyer_address_match: false,\n    buyer_zip_match: false,\n    buyer_city_match: false,\n    buyer_country_match: false,\n  };\n\n  for (const recipient of recipients) {\n    const result = scoreRecipient(invoice, recipient);\n    if (result.score > bestScore) {\n      best = recipient;\n      bestScore = result.score;\n      bestChecks = result.checks;\n    }\n  }\n\n  const passed =\n    bestChecks.buyer_name_match &&\n    (bestChecks.buyer_zip_match || bestChecks.buyer_city_match || bestChecks.buyer_address_match);\n\n  const reasonCodes = [];\n  if (!passed) {\n    if (!bestChecks.buyer_name_match) reasonCodes.push('BUYER_NAME_MISMATCH');\n    if (!bestChecks.buyer_address_match) reasonCodes.push('BUYER_ADDRESS_MISMATCH');\n    if (!bestChecks.buyer_zip_match) reasonCodes.push('BUYER_ZIP_MISMATCH');\n    if (!bestChecks.buyer_city_match) reasonCodes.push('BUYER_CITY_MISMATCH');\n    if (!bestChecks.buyer_country_match) reasonCodes.push('BUYER_COUNTRY_MISMATCH');\n  }\n\n  return {\n    json: {\n      ...item.json,\n      report_id: item.json.report_id || 'REP-AP-SYS-001',\n      process_id: item.json.process_id || 'proc_ap_001',\n      process_instance_id: item.json.process_instance_id || '',\n      process_build_id: item.json.process_build_id || 'proc_ap_001@v0.1.0',\n      workflow_engine: item.json.workflow_engine || 'n8n',\n      workflow_id: item.json.workflow_id || 'wf_invoice_check_x',\n      workflow_run_id: item.json.workflow_run_id || '',\n      reported_at: item.json.reported_at || new Date().toISOString(),\n      k1_result: {\n        status: passed ? 'passed' : 'failed',\n        control_id: 'CTRL-AP-001',\n        control_title: 'Recipient identity validation for Company X',\n        matched_recipient_id: best?.recipient_id || '',\n        match_type: passed ? 'master_data_match' : 'no_reliable_match',\n        sub_checks: bestChecks,\n        reason_codes: reasonCodes,\n        checked_at: new Date().toISOString(),\n      },\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        -256
+      ],
+      "id": "3f79d07a-29f7-4c5b-9dbf-5f9779b0daf4",
+      "name": "K1 Matcher"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(value) {\n  return String(value || '').trim();\n}\n\nfunction vatPrefix(vatId) {\n  const value = clean(vatId).toUpperCase();\n  if (value.length < 2) return '';\n  return value.slice(0, 2);\n}\n\n// Mock normalization for the prototype.\n// Later this should be replaced by a shared normalization function\n// or a proper country-code mapping utility used across the workflow.\nfunction normCountry(value) {\n  const raw = clean(value).toLowerCase();\n\n  const map = {\n    de: 'germany',\n    deutschland: 'germany',\n    germany: 'germany',\n    fr: 'france',\n    frankreich: 'france',\n    france: 'france',\n    se: 'sweden',\n    schweden: 'sweden',\n    sweden: 'sweden',\n    at: 'austria',\n    oesterreich: 'austria',\n    österreich: 'austria',\n    austria: 'austria',\n    nl: 'netherlands',\n    niederlande: 'netherlands',\n    netherlands: 'netherlands',\n    it: 'italy',\n    italien: 'italy',\n    italy: 'italy',\n    es: 'spain',\n    spanien: 'spain',\n    spain: 'spain',\n    pl: 'poland',\n    polen: 'poland',\n    poland: 'poland',\n    cz: 'czech republic',\n    tschechien: 'czech republic',\n    'czech republic': 'czech republic'\n  };\n\n  return map[raw] || raw;\n}\n\nreturn items.map(item => {\n  const invoice = item.json.invoice_extracted || {};\n  const sellerVat = clean(invoice['VAT-ID (Seller)']);\n  const sellerCountryRaw = clean(invoice['Country (Seller)']);\n  const sellerCountry = normCountry(sellerCountryRaw);\n  const prefix = vatPrefix(sellerVat);\n\n  let route = 'missing_vat';\n  let rationale = 'Seller VAT ID missing or unusable.';\n\n  if (!sellerVat || sellerVat.toLowerCase() === 'not found') {\n    route = 'missing_vat';\n    rationale = 'Seller VAT ID missing or unusable.';\n  } else if (prefix === 'DE' || sellerCountry === 'germany') {\n    route = 'domestic';\n    rationale = 'Domestic invoice path, no BZSt foreign validation required.';\n  } else {\n    route = 'foreign';\n    rationale = 'Foreign supplier VAT ID requires BZSt/API validation.';\n  }\n\n  return {\n    json: {\n      ...item.json,\n      vat_route: {\n        route,\n        rationale,\n        seller_vat_id: sellerVat,\n        seller_country: sellerCountryRaw,\n        seller_country_normalized: sellerCountry\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2368,
+        -256
+      ],
+      "id": "1b96f694-a3f6-453e-8394-8a878974f29c",
+      "name": "VAT Route Decision"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.vat_route.route }}",
+                    "rightValue": "foreign",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "3587213b-9875-4c2a-866c-41897b8d9ab4"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "967b75ea-5c69-4ba4-bed0-a4dad194d22b",
+                    "leftValue": "={{ $json.vat_route.route }}",
+                    "rightValue": "domestic",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "0f9682f4-6d68-4090-b946-797b25d271a2",
+                    "leftValue": "={{ $json.vat_route.route }}",
+                    "rightValue": "missing_vat",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2592,
+        -272
+      ],
+      "id": "091c878e-af30-4d02-9512-473ed4afd0a7",
+      "name": "K2 Route"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.evatr.vies.bzst.de/app/v1/abfrage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "anfragendeUstid",
+              "value": "={{ $json.invoice_extracted['VAT-ID (Buyer)'] }}"
+            },
+            {
+              "name": "angefragteUstid",
+              "value": "={{ $json.invoice_extracted['VAT-ID (Seller)'] }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3040,
+        -208
+      ],
+      "id": "3b3203b9-9317-43f6-bda7-9645f7ca681a",
+      "name": "Call BZSt-API",
+      "alwaysOutputData": false,
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(value) {\n  return String(value || '').trim();\n}\n\nreturn items.map(item => {\n  const invoice = item.json.invoice_extracted || {};\n  const sellerVat = clean(invoice['VAT-ID (Seller)']);\n  const buyerVat = clean(invoice['VAT-ID (Buyer)']);\n\n  return {\n    json: {\n      ...item.json,\n      bzst_request: {\n        supplier_vat_id: sellerVat,\n        buyer_vat_id: buyerVat,\n        supplier_name: clean(invoice['Name (Seller)']),\n        supplier_country: clean(invoice['Country (Seller)']),\n        checked_at: new Date().toISOString(),\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2816,
+        -448
+      ],
+      "id": "9fe72aa0-db6d-40dd-ba9f-900b580d5c4a",
+      "name": "Prepare BZSt Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(value) {\n  return String(value ?? '').trim();\n}\n\nfunction upper(value) {\n  return clean(value).toUpperCase();\n}\n\nfunction arrayify(value) {\n  if (Array.isArray(value)) return value;\n  if (typeof value === 'string' && value.trim()) return [value.trim()];\n  return [];\n}\n\nfunction pickBzstStatus(body, j) {\n  return upper(\n    body?.status ||\n    body?.code ||\n    body?.response_status ||\n    j.response_status ||\n    j.bzst_status_code ||\n    j.error?.response_status ||\n    j.error?.code\n  );\n}\n\nfunction pickErrorMessage(j) {\n  return clean(\n    j.error?.message ||\n    j.message ||\n    j.error?.description ||\n    j.error?.reason ||\n    j.statusMessage\n  );\n}\n\nreturn items.map(item => {\n  const j = item.json || {};\n  const invoice = j.invoice_extracted || {};\n  const req = j.bzst_request || {};\n  const body = j.body && typeof j.body === 'object' ? j.body : {};\n\n  const bzstCode = pickBzstStatus(body, j);\n  const errorMessage = pickErrorMessage(j);\n  const errorCode = upper(j.error?.code || j.code);\n\n  let status = 'error';\n  let responseStatus = 'UNKNOWN_BZST_RESULT';\n  let reasonCodes = arrayify(j.reason_codes);\n\n  const isTransportError =\n    !!errorMessage &&\n    (\n      errorCode === 'ECONNRESET' ||\n      errorCode === 'ETIMEDOUT' ||\n      errorCode === 'ECONNABORTED' ||\n      upper(errorMessage).includes('ECONNRESET') ||\n      upper(errorMessage).includes('ETIMEDOUT') ||\n      upper(errorMessage).includes('TLS') ||\n      upper(errorMessage).includes('SECURE TLS CONNECTION') ||\n      upper(errorMessage).includes('SOCKET')\n    );\n\n  if (isTransportError) {\n    status = 'error';\n\n    if (\n      errorCode === 'ECONNRESET' ||\n      upper(errorMessage).includes('ECONNRESET') ||\n      upper(errorMessage).includes('SECURE TLS CONNECTION')\n    ) {\n      responseStatus = 'TLS_CONNECTION_RESET';\n      if (!reasonCodes.length) reasonCodes = ['BZST_TLS_CONNECTION_RESET'];\n    } else if (\n      errorCode === 'ETIMEDOUT' ||\n      upper(errorMessage).includes('ETIMEDOUT')\n    ) {\n      responseStatus = 'BZST_TIMEOUT';\n      if (!reasonCodes.length) reasonCodes = ['BZST_TIMEOUT'];\n    } else {\n      responseStatus = 'TRANSPORT_ERROR';\n      if (!reasonCodes.length) reasonCodes = ['BZST_TRANSPORT_ERROR'];\n    }\n  } else if (bzstCode === 'EVATR-0000') {\n    status = 'passed';\n    responseStatus = 'EVATR-0000';\n    reasonCodes = [];\n  } else if (bzstCode === 'EVATR-0005') {\n    status = 'failed';\n    responseStatus = 'EVATR-0005';\n    if (!reasonCodes.length) reasonCodes = ['EVATR-0005'];\n  } else if (bzstCode === 'EVATR-0002') {\n    status = 'error';\n    responseStatus = 'EVATR-0002';\n    if (!reasonCodes.length) reasonCodes = ['BZST_REQUEST_ERROR', 'EVATR-0002'];\n  } else {\n    status = 'error';\n    responseStatus = bzstCode || 'UNKNOWN_BZST_RESULT';\n    if (!reasonCodes.length && responseStatus) {\n      reasonCodes = ['BZST_UNCLASSIFIED_ERROR', responseStatus];\n    }\n  }\n\n  return {\n    json: {\n      ...j,\n      k2_result: {\n        status,\n        control_id: 'CTRL-AP-002',\n        control_title: 'Supplier VAT ID validation',\n        supplier_vat_id: clean(req.supplier_vat_id || invoice['VAT-ID (Seller)']),\n        buyer_vat_id: clean(req.buyer_vat_id || invoice['VAT-ID (Buyer)']),\n        response_status: responseStatus,\n        bzst_status_code: responseStatus,\n        checked_at: clean(body.anfrageZeitpunkt || req.checked_at || new Date().toISOString()),\n        reason_codes: reasonCodes,\n        mode_frequency_count: Number(item.json.mode_frequency_count || 1),\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3488,
+        -368
+      ],
+      "id": "7732aea0-e9e0-46d9-b54b-8392c683a0d7",
+      "name": "K2 Result Normalizer - Foreign"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0ec177d0-8a9d-458e-85b2-dab7c46d0f38",
+              "leftValue": "={{ $json.trigger_decision.trigger_reqeli.toBoolean() }}",
+              "rightValue": "TRUE",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "reqeli-enabled-env-gate",
+              "leftValue": "={{ $env.REQELI_ENABLED }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4160,
+        16
+      ],
+      "id": "2603ae93-aa84-4c62-9182-daa9a6013807",
+      "name": "Trigger Reqeli?"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(value) {\n  return String(value || '').trim();\n}\n\nreturn items.map(item => {\n  const invoice = item.json.invoice_extracted || {};\n\n  return {\n    json: {\n      ...item.json,\n      k2_result: {\n        status: 'not_run',\n        control_id: 'CTRL-AP-002',\n        control_title: 'Supplier VAT ID validation',\n        supplier_vat_id: clean(invoice['VAT-ID (Seller)']),\n        buyer_vat_id: clean(invoice['VAT-ID (Buyer)']),\n        response_status: 'domestic_not_checked',\n        bzst_status_code: 'domestic_not_checked',\n        checked_at: new Date().toISOString(),\n        reason_codes: [],\n        mode_frequency_count: Number(item.json.mode_frequency_count || 1),\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3488,
+        -16
+      ],
+      "id": "98d9dca9-f699-4dc4-b8b9-af0b74d7d105",
+      "name": "K2 Result - Domestic"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(value) {\n  return String(value || '').trim();\n}\n\nreturn items.map(item => {\n  const invoice = item.json.invoice_extracted || {};\n\n  return {\n    json: {\n      ...item.json,\n      k2_result: {\n        status: 'failed',\n        control_id: 'CTRL-AP-002',\n        control_title: 'Supplier VAT ID validation',\n        supplier_vat_id: '',\n        buyer_vat_id: clean(invoice['VAT-ID (Buyer)']),\n        response_status: 'missing_vat_id',\n        bzst_status_code: 'missing_vat_id',\n        checked_at: new Date().toISOString(),\n        reason_codes: ['VAT_ID_MISSING'],\n        mode_frequency_count: Number(item.json.mode_frequency_count || 1),\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3488,
+        368
+      ],
+      "id": "7dc3d7b0-bcef-43fe-95df-6301a3154d21",
+      "name": "K2 Result - Missing VAT ID"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": false
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3264,
+        -464
+      ],
+      "id": "c381142e-9cee-4e28-9158-d7b1deda0a64",
+      "name": "Merge Success"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": false
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3264,
+        -272
+      ],
+      "id": "fbfd407a-6510-4030-b22d-9fa6862d156e",
+      "name": "Merge Error"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(value) {\n  return String(value ?? '').trim();\n}\n\nreturn items.map(item => {\n  const j = item.json || {};\n  const k1 = j.k1_result || {};\n  const k2 = j.k2_result || {};\n  const vatRoute = j.vat_route || {};\n\n  const thresholdMode = Number(j.threshold_mode || 3);\n  const thresholdTotal = Number(j.threshold_total || 6);\n  const frequency = Number(k2.mode_frequency_count || j.mode_frequency_count || 1);\n\n  const k1Status = clean(k1.status).toLowerCase();\n  const k2Status = clean(k2.status).toLowerCase();\n  const route = clean(vatRoute.route).toLowerCase();\n  const responseStatus = clean(k2.response_status).toUpperCase();\n\n  let trigger_reqeli = 'no';\n  let trigger_flag = 'none';\n  let trigger_reason = 'NO_TRIGGER';\n  let rationale = 'No ReqEli trigger.';\n\n  if (k1Status === 'failed') {\n    trigger_reqeli = 'yes';\n    trigger_flag = 'red';\n    trigger_reason = 'K1_FAILED';\n    rationale = 'Recipient validation failed.';\n  } else if (k2Status === 'failed') {\n    trigger_reqeli = 'yes';\n    trigger_flag = 'red';\n    trigger_reason = 'K2_FAILED';\n    rationale = 'Supplier VAT validation failed.';\n  } else if (k2Status === 'error') {\n    trigger_reqeli = 'yes';\n    trigger_flag = 'red';\n    trigger_reason = 'K2_ERROR';\n    rationale = `Supplier VAT validation could not be completed due to technical or service error (${responseStatus || 'unknown_error'}).`;\n  } else if (route === 'domestic') {\n    trigger_reqeli = 'no';\n    trigger_flag = 'none';\n    trigger_reason = 'DOMESTIC_PATH_NO_REQELI';\n    rationale = 'Domestic invoice path: K1 passed and no foreign VAT validation issue exists.';\n  }\n\n  return {\n    json: {\n      ...j,\n      threshold_mode: thresholdMode,\n      threshold_total: thresholdTotal,\n      mode_frequency_count: frequency,\n      trigger_decision: {\n        trigger_reqeli,\n        trigger_flag,\n        trigger_reason,\n        rationale,\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3712,
+        16
+      ],
+      "id": "4452bc0d-25ba-4f81-9f3f-83e3682e824e",
+      "name": "Trigger Decision"
+    },
+    {
+      "parameters": {
+        "resource": "worksheet",
+        "operation": "append",
+        "workbook": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "REPLACE_WITH_YOUR_WORKBOOK"
+        },
+        "worksheet": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "REPLACE_WITH_YOUR_WORKSHEET"
+        },
+        "dataMode": "autoMap",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftExcel",
+      "typeVersion": 2.2,
+      "position": [
+        5728,
+        48
+      ],
+      "id": "d8b2eb83-237e-4e3f-ac69-fef9300a52c8",
+      "name": "Update Checking for Invoice in Excel",
+      "credentials": {
+        "microsoftExcelOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Microsoft Excel"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => ({\n  json: {\n    reqeli_result: item.json\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5056,
+        80
+      ],
+      "id": "603872a1-f776-4846-b02f-1399756914bf",
+      "name": "Wrap ReqEli Response"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 3,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5280,
+        -80
+      ],
+      "id": "6744a310-6503-4ddf-897b-0a51b153819a",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "function text(value, fallback = '') {\n  if (value === undefined || value === null) return fallback;\n  const s = String(value).trim();\n  return s === '' ? fallback : s;\n}\n\nfunction joinList(values) {\n  if (!Array.isArray(values) || values.length === 0) return '';\n  return values\n    .map(v => String(v || '').trim())\n    .filter(Boolean)\n    .join('; ');\n}\n\nreturn items.map(item => {\n  const j = item.json || {};\n  const base = j.excel_row_base || {};\n  const reqeli = j.reqeli_result || {};\n\n  const pkg = reqeli.package || {};\n  const artifactPaths = reqeli.artifact_paths || {};\n\n  const failureModes = Array.isArray(pkg.failure_modes) ? pkg.failure_modes : [];\n  const risks = Array.isArray(pkg.risk_library) ? pkg.risk_library : [];\n\n  return {\n    json: {\n      report_id: text(j.report_id || base.report_id),\n      process_id: text(base.process_id),\n      process_instance_id: text(base.process_instance_id),\n      process_build_id: text(base.process_build_id),\n      workflow_engine: text(base.workflow_engine),\n      workflow_id: text(base.workflow_id),\n      workflow_run_id: text(base.workflow_run_id),\n      workflow_report_id: text(j.workflow_report_id || base.workflow_report_id),\n      source_report_id: text(j.source_report_id || base.source_report_id),\n      reported_at: text(base.reported_at),\n      processed_at: text(base.processed_at),\n      document_ref: text(base.document_ref),\n      report_source: text(base.report_source),\n\n      'Invoice No': text(base['Invoice No']),\n      'Invoice Date': text(base['Invoice Date']),\n      'VAT-ID (Seller)': text(base['VAT-ID (Seller)']),\n      'VAT-ID (Buyer)': text(base['VAT-ID (Buyer)']),\n      'Name (Seller)': text(base['Name (Seller)']),\n      'Address (Seller)': text(base['Address (Seller)']),\n      'Zip (Seller)': text(base['Zip (Seller)']),\n      'City (Seller)': text(base['City (Seller)']),\n      'Country (Seller)': text(base['Country (Seller)']),\n      'Name (Buyer)': text(base['Name (Buyer)']),\n      'Address (Buyer)': text(base['Address (Buyer)']),\n      'Zip (Buyer)': text(base['Zip (Buyer)']),\n      'City (Buyer)': text(base['City (Buyer)']),\n      'Country (Buyer)': text(base['Country (Buyer)']),\n\n      'K1 Control ID': text(base['K1 Control ID']),\n      'K1 Control Title': text(base['K1 Control Title']),\n      'K1 Status': text(base['K1 Status']),\n      'Matched Recipient ID': text(base['Matched Recipient ID']),\n      'Match Type': text(base['Match Type']),\n      'Buyer Name Match': text(base['Buyer Name Match']),\n      'Buyer Address Match': text(base['Buyer Address Match']),\n      'Buyer Zip Match': text(base['Buyer Zip Match']),\n      'Buyer City Match': text(base['Buyer City Match']),\n      'Buyer Country Match': text(base['Buyer Country Match']),\n      'K1 Reason Codes': text(base['K1 Reason Codes']),\n\n      'K2 Control ID': text(base['K2 Control ID']),\n      'K2 Control Title': text(base['K2 Control Title']),\n      'K2 Status': text(base['K2 Status']),\n      'Supplier VAT ID Checked': text(base['Supplier VAT ID Checked']),\n      'Buyer VAT ID Identified': text(base['Buyer VAT ID Identified']),\n      'BZSt Response Status': text(base['BZSt Response Status']),\n      'BZSt Checked At': text(base['BZSt Checked At']),\n      'K2 Reason Codes': text(base['K2 Reason Codes']),\n\n      'Trigger ReqEli': text(base['Trigger ReqEli']),\n      'Trigger Flag': text(base['Trigger Flag']),\n      'Trigger Reason': text(base['Trigger Reason']),\n\n      'ReqEli Run Status': reqeli.report ? 'completed' : text(base['ReqEli Run Status']),\n      'ReqEli Output Dir': text(\n        artifactPaths.tax_risk_report_path ||\n        artifactPaths.requirements_package_path ||\n        base['ReqEli Output Dir']\n      ),\n\n      'Failure Mode IDs': joinList(failureModes.map(x => x.fm_id)),\n      'Failure Mode Titles': joinList(failureModes.map(x => x.fm_title)),\n      'Tax Hazard IDs': joinList(risks.map(x => x.tax_hazard?.hazard_id)),\n      'Tax Hazard Titles': joinList(risks.map(x => x.tax_hazard?.hazard_title)),\n      'Tax Hazard Status': joinList(risks.map(x => x.tax_hazard?.lifecycle_status || x.tax_hazard?.status)),\n      'Tax Risk IDs': joinList(risks.map(x => x.risk_id)),\n      'Tax Risk Titles': joinList(risks.map(x => x.risk_title)),\n      'Tax Risk Status': joinList(risks.map(x => x.risk_lifecycle_status))\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5504,
+        48
+      ],
+      "id": "0e247438-2739-44ee-a455-6c0eedfa8e60",
+      "name": "Build Report Row"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        -352
+      ],
+      "id": "dd574675-7635-48a5-9400-e2b4025bf954",
+      "name": "End ap 001"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        -64
+      ],
+      "id": "cb3b10cc-115a-48bb-80ce-68a11a8620ec",
+      "name": "Gemini-Service offline"
+    },
+    {
+      "parameters": {
+        "jsCode": "function pick(value, fallback = '') {\n  if (value === undefined || value === null) return fallback;\n  const text = String(value).trim();\n  return text === '' ? fallback : text;\n}\n\nfunction boolText(value) {\n  if (\n    value === true ||\n    String(value).toLowerCase() === 'true' ||\n    String(value).toLowerCase() === 'wahr'\n  ) {\n    return 'true';\n  }\n  if (\n    value === false ||\n    String(value).toLowerCase() === 'false' ||\n    String(value).toLowerCase() === 'falsch'\n  ) {\n    return 'false';\n  }\n  return '';\n}\n\nfunction joinList(values) {\n  if (!Array.isArray(values) || values.length === 0) return '';\n  return values\n    .map((v) => String(v || '').trim())\n    .filter(Boolean)\n    .join('; ');\n}\n\nfunction clean(value) {\n  return String(value ?? '').replace(/^=/, '').trim();\n}\n\nfunction pad2(value) {\n  return String(value).padStart(2, '0');\n}\n\nfunction buildTimestampToken(value) {\n  const date = value ? new Date(value) : new Date();\n  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;\n\n  const yyyy = safeDate.getUTCFullYear();\n  const mm = pad2(safeDate.getUTCMonth() + 1);\n  const dd = pad2(safeDate.getUTCDate());\n  const hh = pad2(safeDate.getUTCHours());\n  const mi = pad2(safeDate.getUTCMinutes());\n  const ss = pad2(safeDate.getUTCSeconds());\n\n  return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;\n}\n\nreturn items.map((item) => {\n  const j = item.json || {};\n  const invoice = j.invoice_extracted || {};\n  const k1 = j.k1_result || {};\n  const k2 = j.k2_result || {};\n  const trigger = j.trigger_decision || {};\n\n  const processId = pick(j.process_id, 'proc_ap_001');\n  const processBuildId = pick(j.process_build_id, 'proc_ap_001@v0.1.0');\n  const workflowId = pick(j.workflow_id, 'wf_invoice_check_x');\n\n  const workflowRunId =\n    pick(j.workflow_run_id) ||\n    pick(j.execution_id) ||\n    pick(j.n8n_execution_id) ||\n    pick(j.run_id) ||\n    pick(j.event_id);\n\n  const reportedAt = pick(j.reported_at, new Date().toISOString());\n  const timestampToken = pick(j.timestamp_token, buildTimestampToken(reportedAt));\n\n  const incomingWorkflowReportId =\n    pick(j.workflow_report_id) ||\n    pick(j.source_report_id);\n\n  const workflowReportBase =\n    incomingWorkflowReportId ||\n    `WF-${processId.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}-${workflowRunId || 'NORUN'}`;\n\n  const workflowReportId = workflowReportBase.endsWith(`-${timestampToken}`)\n    ? workflowReportBase\n    : `${workflowReportBase}-${timestampToken}`;\n\n  const incomingReportId = pick(j.report_id);\n  const reportBase = incomingReportId || 'REP-AP-SYS-001';\n\n  const reportId = reportBase.endsWith(`-${timestampToken}`)\n    ? reportBase\n    : `${reportBase}-${timestampToken}`;\n\n  const sourceReportId = workflowReportId;\n\n  const excel_row_base = {\n    report_id: reportId,\n    process_id: processId,\n    process_instance_id: pick(j.process_instance_id, workflowRunId),\n    process_build_id: processBuildId,\n    workflow_engine: pick(j.workflow_engine, 'n8n'),\n    workflow_id: workflowId,\n    workflow_run_id: workflowRunId,\n    workflow_report_id: workflowReportId,\n    source_report_id: sourceReportId,\n    reported_at: reportedAt,\n    processed_at: pick(j.processed_at, new Date().toISOString()),\n    document_ref: pick(j.document_ref),\n    report_source: pick(j.report_source, 'system'),\n\n    'Invoice No': pick(\n      invoice['Invoice No'] ||\n        invoice['Invoice Number'] ||\n        j['Invoice No'] ||\n        j['Invoice Number']\n    ),\n    'Invoice Date': pick(invoice['Invoice Date'] || j['Invoice Date']),\n    'VAT-ID (Seller)': pick(\n      invoice['VAT-ID (Seller)'] || j['VAT-ID (Seller)']\n    ),\n    'VAT-ID (Buyer)': pick(\n      invoice['VAT-ID (Buyer)'] || j['VAT-ID (Buyer)']\n    ),\n    'Name (Seller)': pick(\n      invoice['Name (Seller)'] ||\n        invoice['Supplier Name'] ||\n        j['Name (Seller)'] ||\n        j['Supplier Name']\n    ),\n    'Address (Seller)': pick(\n      invoice['Address (Seller)'] ||\n        invoice['Supplier Street'] ||\n        j['Address (Seller)']\n    ),\n    'Zip (Seller)': pick(\n      invoice['Zip (Seller)'] ||\n        invoice['Supplier ZIP'] ||\n        j['Zip (Seller)']\n    ),\n    'City (Seller)': pick(\n      invoice['City (Seller)'] ||\n        invoice['Supplier City'] ||\n        j['City (Seller)']\n    ),\n    'Country (Seller)': pick(\n      invoice['Country (Seller)'] ||\n        invoice['Supplier Country'] ||\n        j['Country (Seller)']\n    ),\n    'Name (Buyer)': pick(\n      invoice['Name (Buyer)'] ||\n        invoice['Recipient Name'] ||\n        j['Name (Buyer)']\n    ),\n    'Address (Buyer)': pick(\n      invoice['Address (Buyer)'] ||\n        invoice['Recipient Street'] ||\n        j['Address (Buyer)']\n    ),\n    'Zip (Buyer)': pick(\n      invoice['Zip (Buyer)'] ||\n        invoice['Recipient ZIP'] ||\n        j['Zip (Buyer)']\n    ),\n    'City (Buyer)': pick(\n      invoice['City (Buyer)'] ||\n        invoice['Recipient City'] ||\n        j['City (Buyer)']\n    ),\n    'Country (Buyer)': pick(\n      invoice['Country (Buyer)'] ||\n        invoice['Recipient Country'] ||\n        j['Country (Buyer)']\n    ),\n\n    'K1 Control ID': pick(k1.control_id || j['K1 Control ID'], 'CTRL-AP-001'),\n    'K1 Control Title': pick(k1.control_title || j['K1 Control Title']),\n    'K1 Status': pick(k1.status || j['K1 Status']),\n    'Matched Recipient ID': pick(\n      k1.matched_recipient_id || j['Matched Recipient ID']\n    ),\n    'Match Type': pick(k1.match_type || j['Match Type']),\n    'Buyer Name Match': boolText(\n      k1.sub_checks?.buyer_name_match ?? j['Buyer Name Match']\n    ),\n    'Buyer Address Match': boolText(\n      k1.sub_checks?.buyer_address_match ?? j['Buyer Address Match']\n    ),\n    'Buyer Zip Match': boolText(\n      k1.sub_checks?.buyer_zip_match ?? j['Buyer Zip Match']\n    ),\n    'Buyer City Match': boolText(\n      k1.sub_checks?.buyer_city_match ?? j['Buyer City Match']\n    ),\n    'Buyer Country Match': boolText(\n      k1.sub_checks?.buyer_country_match ?? j['Buyer Country Match']\n    ),\n    'K1 Reason Codes': joinList(\n      k1.reason_codes ||\n        (typeof j['K1 Reason Codes'] === 'string'\n          ? j['K1 Reason Codes'].split(';')\n          : [])\n    ),\n\n    'K2 Control ID': pick(k2.control_id || j['K2 Control ID'], 'CTRL-AP-002'),\n    'K2 Control Title': pick(k2.control_title || j['K2 Control Title']),\n    'K2 Status': pick(k2.status || j['K2 Status']),\n    'Supplier VAT ID Checked': pick(\n      k2.supplier_vat_id || j['Supplier VAT ID Checked']\n    ),\n    'Buyer VAT ID Identified': pick(\n      k2.buyer_vat_id || j['Buyer VAT ID Identified']\n    ),\n    'BZSt Response Status': pick(\n      k2.response_status || j['BZSt Response Status']\n    ),\n    'BZSt Checked At': pick(k2.checked_at || j['BZSt Checked At']),\n    'K2 Reason Codes': joinList(\n      k2.reason_codes ||\n        (typeof j['K2 Reason Codes'] === 'string'\n          ? j['K2 Reason Codes'].split(';')\n          : [])\n    ),\n\n    'Trigger ReqEli': pick(trigger.trigger_reqeli || j['Trigger ReqEli'], 'no'),\n    'Trigger Flag': pick(trigger.trigger_flag || j['Trigger Flag'], 'none'),\n    'Trigger Reason': pick(\n      trigger.trigger_reason || j['Trigger Reason'],\n      'NO_TRIGGER'\n    ),\n\n    'ReqEli Run Status':\n      (trigger.trigger_reqeli || j['Trigger ReqEli']) === 'yes'\n        ? 'requested'\n        : 'not_required',\n    'ReqEli Output Dir': `output/api_invoice_${reportId}`,\n\n    'Failure Mode IDs': '',\n    'Failure Mode Titles': '',\n    'Tax Hazard IDs': '',\n    'Tax Hazard Titles': '',\n    'Tax Hazard Status': '',\n    'Tax Risk IDs': '',\n    'Tax Risk Titles': '',\n    'Tax Risk Status': '',\n  };\n\n  return {\n    json: {\n      ...j,\n      report_id: reportId,\n      workflow_report_id: workflowReportId,\n      source_report_id: sourceReportId,\n      workflow_run_id: workflowRunId,\n      process_id: processId,\n      process_build_id: processBuildId,\n      reported_at: reportedAt,\n      timestamp_token: timestampToken,\n      excel_row_base,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5056,
+        -208
+      ],
+      "id": "e7781eff-ffb2-4ebc-b3d3-5b59c8dea83f",
+      "name": "Build Base Row w Reqeli"
+    },
+    {
+      "parameters": {
+        "jsCode": "function pick(value, fallback = '') {\n  if (value === undefined || value === null) return fallback;\n  const text = String(value).trim();\n  return text === '' ? fallback : text;\n}\n\nfunction boolText(value) {\n  if (value === true || String(value).toLowerCase() === 'true') return 'true';\n  if (value === false || String(value).toLowerCase() === 'false') return 'false';\n  return '';\n}\n\nfunction joinList(values) {\n  if (!Array.isArray(values) || values.length === 0) return '';\n  return values\n    .map(v => String(v || '').trim())\n    .filter(Boolean)\n    .join('; ');\n}\n\nfunction clean(value) {\n  return String(value ?? '').replace(/^=/, '').trim();\n}\n\nfunction pad2(value) {\n  return String(value).padStart(2, '0');\n}\n\nfunction buildTimestampToken(value) {\n  const date = value ? new Date(value) : new Date();\n  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;\n\n  const yyyy = safeDate.getUTCFullYear();\n  const mm = pad2(safeDate.getUTCMonth() + 1);\n  const dd = pad2(safeDate.getUTCDate());\n  const hh = pad2(safeDate.getUTCHours());\n  const mi = pad2(safeDate.getUTCMinutes());\n  const ss = pad2(safeDate.getUTCSeconds());\n\n  return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;\n}\n\nreturn items.map(item => {\n  const j = item.json || {};\n  const invoice = j.invoice_extracted || {};\n  const k1 = j.k1_result || {};\n  const k2 = j.k2_result || {};\n  const trigger = j.trigger_decision || {};\n\n  const processId = pick(j.process_id, 'proc_ap_001');\n  const processBuildId = pick(j.process_build_id, 'proc_ap_001@v0.1.0');\n  const workflowId = pick(j.workflow_id, 'wf_invoice_check_x');\n\n  const workflowRunId =\n    pick(j.workflow_run_id) ||\n    pick(j.execution_id) ||\n    pick(j.n8n_execution_id) ||\n    pick(j.run_id) ||\n    pick(j.event_id);\n\n  const reportedAt = pick(j.reported_at, new Date().toISOString());\n  const timestampToken = pick(j.timestamp_token, buildTimestampToken(reportedAt));\n\n  const incomingWorkflowReportId =\n    pick(j.workflow_report_id) ||\n    pick(j.source_report_id);\n\n  const workflowReportBase =\n    incomingWorkflowReportId ||\n    `WF-${processId.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}-${workflowRunId || 'NORUN'}`;\n\n  const workflowReportId = workflowReportBase.endsWith(`-${timestampToken}`)\n    ? workflowReportBase\n    : `${workflowReportBase}-${timestampToken}`;\n\n  const sourceReportId = workflowReportId;\n\n  const incomingReportId = pick(j.report_id);\n  const reportBase = incomingReportId || 'REP-AP-SYS-001';\n\n  const reportId = reportBase.endsWith(`-${timestampToken}`)\n    ? reportBase\n    : `${reportBase}-${timestampToken}`;\n\n  const excel_row_base = {\n    report_id: reportId,\n    process_id: processId,\n    process_instance_id: pick(j.process_instance_id, workflowRunId),\n    process_build_id: processBuildId,\n    workflow_engine: pick(j.workflow_engine, 'n8n'),\n    workflow_id: workflowId,\n    workflow_run_id: workflowRunId,\n    workflow_report_id: workflowReportId,\n    source_report_id: sourceReportId,\n    reported_at: reportedAt,\n    processed_at: new Date().toISOString(),\n    document_ref: pick(j.document_ref),\n    report_source: pick(j.report_source, 'system'),\n\n    'Invoice No': pick(invoice['Invoice No']),\n    'Invoice Date': pick(invoice['Invoice Date']),\n    'VAT-ID (Seller)': pick(invoice['VAT-ID (Seller)']),\n    'VAT-ID (Buyer)': pick(invoice['VAT-ID (Buyer)']),\n    'Name (Seller)': pick(invoice['Name (Seller)']),\n    'Address (Seller)': pick(invoice['Address (Seller)']),\n    'Zip (Seller)': pick(invoice['Zip (Seller)']),\n    'City (Seller)': pick(invoice['City (Seller)']),\n    'Country (Seller)': pick(invoice['Country (Seller)']),\n    'Name (Buyer)': pick(invoice['Name (Buyer)']),\n    'Address (Buyer)': pick(invoice['Address (Buyer)']),\n    'Zip (Buyer)': pick(invoice['Zip (Buyer)']),\n    'City (Buyer)': pick(invoice['City (Buyer)']),\n    'Country (Buyer)': pick(invoice['Country (Buyer)']),\n\n    'K1 Control ID': pick(k1.control_id, 'CTRL-AP-001'),\n    'K1 Control Title': pick(k1.control_title),\n    'K1 Status': pick(k1.status),\n    'Matched Recipient ID': pick(k1.matched_recipient_id),\n    'Match Type': pick(k1.match_type),\n    'Buyer Name Match': boolText(k1.sub_checks?.buyer_name_match),\n    'Buyer Address Match': boolText(k1.sub_checks?.buyer_address_match),\n    'Buyer Zip Match': boolText(k1.sub_checks?.buyer_zip_match),\n    'Buyer City Match': boolText(k1.sub_checks?.buyer_city_match),\n    'Buyer Country Match': boolText(k1.sub_checks?.buyer_country_match),\n    'K1 Reason Codes': joinList(k1.reason_codes),\n\n    'K2 Control ID': pick(k2.control_id, 'CTRL-AP-002'),\n    'K2 Control Title': pick(k2.control_title),\n    'K2 Status': pick(k2.status),\n    'Supplier VAT ID Checked': pick(k2.supplier_vat_id),\n    'Buyer VAT ID Identified': pick(k2.buyer_vat_id),\n    'BZSt Response Status': pick(k2.response_status),\n    'BZSt Checked At': pick(k2.checked_at),\n    'K2 Reason Codes': joinList(k2.reason_codes),\n\n    'Trigger ReqEli': pick(trigger.trigger_reqeli, 'no'),\n    'Trigger Flag': pick(trigger.trigger_flag, 'none'),\n    'Trigger Reason': pick(trigger.trigger_reason, 'NO_TRIGGER'),\n\n    'ReqEli Run Status': trigger.trigger_reqeli === 'yes' ? 'requested' : 'not_required',\n    'ReqEli Output Dir': `output/api_invoice_${reportId}`,\n\n    'Failure Mode IDs': '',\n    'Failure Mode Titles': '',\n    'Tax Hazard IDs': '',\n    'Tax Hazard Titles': '',\n    'Tax Hazard Status': '',\n    'Tax Risk IDs': '',\n    'Tax Risk Titles': '',\n    'Tax Risk Status': '',\n    'Measure IDs': '',\n    'Requirement IDs': '',\n    'Measurement IDs': ''\n  };\n\n  return {\n    json: {\n      ...j,\n      report_id: reportId,\n      workflow_report_id: workflowReportId,\n      source_report_id: sourceReportId,\n      workflow_run_id: workflowRunId,\n      process_id: processId,\n      process_build_id: processBuildId,\n      reported_at: reportedAt,\n      timestamp_token: timestampToken,\n      excel_row_base\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5280,
+        256
+      ],
+      "id": "c1c97ab8-2d02-4e63-97ac-9918e0fe9f2e",
+      "name": "Build Base Row wo reqeli"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $json && typeof $json === 'object' && !Array.isArray($json) ? $json : {};\n\nfunction clean(value) {\n  return String(value ?? '').replace(/^=/, '').trim();\n}\n\nfunction normalizeSegment(value) {\n  return clean(value)\n    .replace(/[^A-Za-z0-9]+/g, '-')\n    .replace(/^-+|-+$/g, '')\n    .toUpperCase();\n}\n\nfunction lower(value) {\n  return clean(value).toLowerCase();\n}\n\nfunction pad2(value) {\n  return String(value).padStart(2, '0');\n}\n\nfunction buildTimestampToken(value) {\n  const date = value ? new Date(value) : new Date();\n  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;\n\n  const yyyy = safeDate.getUTCFullYear();\n  const mm = pad2(safeDate.getUTCMonth() + 1);\n  const dd = pad2(safeDate.getUTCDate());\n  const hh = pad2(safeDate.getUTCHours());\n  const mi = pad2(safeDate.getUTCMinutes());\n  const ss = pad2(safeDate.getUTCSeconds());\n\n  return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;\n}\n\nconst processId = clean(input.process_id);\n\nconst workflowRunId =\n  clean(input.workflow_run_id) ||\n  clean(input.execution_id) ||\n  clean(input.n8n_execution_id) ||\n  clean(input.run_id) ||\n  clean(input.event_id) ||\n  clean($execution?.id);\n\nif (!processId) {\n  throw new Error('Missing process_id. ReqEli will not guess it for live runs.');\n}\n\nconst timestampToken =\n  clean(input.timestamp_token) ||\n  buildTimestampToken(input.reported_at || input.processed_at);\n\nconst incomingWorkflowReportId =\n  clean(input.workflow_report_id) ||\n  clean(input.source_report_id) ||\n  clean(input.controlExecutionReportId);\n\nconst workflowReportBase =\n  incomingWorkflowReportId ||\n  `WF-${normalizeSegment(processId)}-${normalizeSegment(workflowRunId || 'NORUN')}`;\n\nconst workflowReportId = workflowReportBase.endsWith(`-${timestampToken}`)\n  ? workflowReportBase\n  : `${workflowReportBase}-${timestampToken}`;\n\nconst sourceReportId = workflowReportId;\nconst controlExecutionReportId = workflowReportId;\n\nconst incomingReportId = clean(input.report_id);\nconst reportBase = incomingReportId || 'REP-AP-SYS-001';\n\nconst reportId = reportBase.endsWith(`-${timestampToken}`)\n  ? reportBase\n  : `${reportBase}-${timestampToken}`;\n\nconst invoiceExtracted =\n  input.invoice_extracted && typeof input.invoice_extracted === 'object'\n    ? input.invoice_extracted\n    : {};\n\nconst recipientMaster =\n  input.recipient_master && typeof input.recipient_master === 'object'\n    ? input.recipient_master\n    : {};\n\nconst k1 =\n  input.k1_result && typeof input.k1_result === 'object'\n    ? input.k1_result\n    : {};\n\nconst k2 =\n  input.k2_result && typeof input.k2_result === 'object'\n    ? input.k2_result\n    : {};\n\nconst vatRoute =\n  input.vat_route && typeof input.vat_route === 'object'\n    ? input.vat_route\n    : {};\n\nconst triggerDecision =\n  input.trigger_decision && typeof input.trigger_decision === 'object'\n    ? input.trigger_decision\n    : {};\n\nconst thresholdMode = Number(input.threshold_mode ?? 3) || 3;\nconst thresholdTotal = Number(input.threshold_total ?? 6) || 6;\nconst modeFrequencyCount =\n  Number(input.mode_frequency_count ?? k2.mode_frequency_count ?? 1) || 1;\n\nconst source = {\n  ...input,\n  process_id: processId,\n  report_id: reportId,\n  source_report_id: sourceReportId,\n  workflow_report_id: workflowReportId,\n  controlExecutionReportId,\n  timestamp_token: timestampToken,\n};\n\nif (workflowRunId) {\n  source.workflow_run_id = workflowRunId;\n  if (!clean(source.process_instance_id)) {\n    source.process_instance_id = workflowRunId;\n  }\n}\n\nfunction buildFailureModeRegister() {\n  const register = [];\n\n  if (lower(k1.status) === 'failed') {\n    register.push({\n      fm_id: 'FMR-AP-001',\n      title: 'Empfaenger-Stammdaten weichen von freigegebenen Referenzdaten ab',\n      step_id: 'step_03_k1_recipient_masterdata_validation',\n      risk_type: 'correctness',\n      tax_relevant: true,\n      source_system: 'n8n_invoice_validation',\n      control_id: clean(k1.control_id) || 'CTRL-AP-001',\n      reason_codes: Array.isArray(k1.reason_codes) ? k1.reason_codes : [],\n      expected_evidence: [\n        'k1_result.sub_checks',\n        'k1_result.matched_recipient_id',\n        'recipient_master.approved_recipients',\n      ],\n      register_refs: {\n        symptom_id: 'SYM-AP-007',\n        failure_mode_id: 'FMR-AP-001',\n        tax_hazard_id: 'TH-AP-001',\n        tax_risk_id: 'TCMS-RISK-2',\n      },\n    });\n  }\n\n  if (lower(k2.status) === 'failed') {\n    register.push({\n      fm_id: 'FMR-AP-006',\n      title: 'Lieferanten-USt-Id fehlt, ist ungueltig oder nicht belastbar geprueft',\n      step_id: 'step_10_k2_foreign_vat_validation',\n      risk_type: 'correctness',\n      tax_relevant: true,\n      source_system: 'n8n_invoice_validation',\n      control_id: clean(k2.control_id) || 'CTRL-AP-002',\n      reason_codes: Array.isArray(k2.reason_codes) ? k2.reason_codes : [],\n      expected_evidence: [\n        'k2_result.response_status',\n        'k2_result.reason_codes',\n        'k2_result.supplier_vat_id',\n      ],\n      register_refs: {\n        symptom_id: 'SYM-AP-010',\n        failure_mode_id: 'FMR-AP-006',\n        tax_hazard_id: 'TH-AP-002',\n        tax_risk_id: 'TCMS-RISK-3',\n      },\n    });\n  }\n\n  return register;\n}\n\nfunction buildTaxHazardRegister() {\n  const register = [];\n\n  if (lower(k1.status) === 'failed') {\n    register.push({\n      hazard_id: 'TH-AP-001',\n      title: 'Rechnung nicht belastbar Unternehmen X zuordenbar',\n      risk_type: 'correctness',\n      tax_relevant: true,\n      linked_step_id: 'step_03_k1_recipient_masterdata_validation',\n      linked_failure_mode_ids: ['FMR-AP-001'],\n      rationale:\n        'Empfaengerdaten weichen von freigegebenen Stammdaten ab; die Rechnung ist damit nicht belastbar der rechtlichen Einheit Unternehmen X zuordenbar.',\n      register_refs: {\n        tax_risk_id: 'TCMS-RISK-2',\n      },\n    });\n  }\n\n  if (lower(k2.status) === 'failed') {\n    register.push({\n      hazard_id: 'TH-AP-002',\n      title: 'Auslaendische Lieferanten-USt-Id ungueltig oder nicht belastbar geprueft',\n      risk_type: 'correctness',\n      tax_relevant: true,\n      linked_step_id: 'step_10_k2_foreign_vat_validation',\n      linked_failure_mode_ids: ['FMR-AP-006'],\n      rationale:\n        'Bei auslaendischen Lieferanten ist die steuerliche Weiterverarbeitung ohne belastbare USt-Id-Pruefung nicht abgesichert.',\n      register_refs: {\n        tax_risk_id: 'TCMS-RISK-3',\n      },\n    });\n  }\n\n  return register;\n}\n\nfunction buildOrgConstraints() {\n  const approvedRecipients = Array.isArray(recipientMaster.approved_recipients)\n    ? recipientMaster.approved_recipients\n    : [];\n\n  return {\n    country: 'DE',\n    vat_regime: 'DE_VAT',\n    company_name:\n      clean(recipientMaster.legal_name) ||\n      clean(invoiceExtracted['Name (Buyer)']) ||\n      'Unternehmen X',\n    process_id: processId,\n    process_build_id: clean(input.process_build_id),\n    workflow_engine: clean(input.workflow_engine) || 'n8n',\n    review_hold_required_for_k1_fail: true,\n    review_hold_required_for_k2_fail: true,\n    domestic_k2_not_run_is_expected: true,\n    foreign_k2_validation_required: true,\n    threshold_mode: thresholdMode,\n    threshold_total: thresholdTotal,\n    mode_frequency_count: modeFrequencyCount,\n    vat_route: clean(vatRoute.route),\n    seller_country:\n      clean(invoiceExtracted['Country (Seller)']) ||\n      clean(vatRoute.seller_country),\n    approved_recipient_ids: approvedRecipients\n      .map((item) => clean(item.recipient_id))\n      .filter(Boolean),\n  };\n}\n\nconst reqeliAuthoritativeBundle = {\n  failure_mode_register: buildFailureModeRegister(),\n  tax_hazard_register: buildTaxHazardRegister(),\n  org_constraints: buildOrgConstraints(),\n  existing_requirements: Array.isArray(input.existing_requirements)\n    ? input.existing_requirements\n    : [],\n  requirements_catalog: Array.isArray(input.requirements_catalog)\n    ? input.requirements_catalog\n    : [],\n  measures_catalog: Array.isArray(input.measures_catalog)\n    ? input.measures_catalog\n    : [],\n  measurement_suggestions: Array.isArray(input.measurement_suggestions)\n    ? input.measurement_suggestions\n    : [],\n};\n\nconst reqeliArtifactSources = {\n  failure_mode_register: 'n8n_payload',\n  tax_hazard_register: 'n8n_payload',\n  org_constraints: 'n8n_payload',\n  existing_requirements: 'n8n_payload',\n  requirements_catalog: 'n8n_payload',\n  measures_catalog: 'n8n_payload',\n  measurement_suggestions: 'n8n_payload',\n};\n\nconst frameworkWebhookBody = {\n  success: lower(triggerDecision.trigger_flag) !== 'red',\n  message:\n    clean(triggerDecision.trigger_reason) ||\n    'ReqEli live run prepared by n8n',\n  externalProcessRunId: workflowRunId,\n  sourceReportId: sourceReportId,\n  controlExecutionReportId: controlExecutionReportId,\n  processBuildId: clean(input.process_build_id),\n  reqeliAuthoritativeBundle,\n  reqeliArtifactSources,\n};\n\nconst reqeliRequestBody = {\n  source,\n  output_dir: `output/api_invoice_${reportId}`,\n  run_name: `n8n-${reportId}`,\n  created_by_email: 'ada.adler@acme.de',\n  disable_llm_decisions: true,\n\n  ...reqeliAuthoritativeBundle,\n  authoritative_artifact_sources: reqeliArtifactSources,\n\n  tcms_context_source: 'postgres',\n\n  tcms_postgres: {\n    connection_ref: 'tcms-primary',\n    organization_name: 'Unternehmen X',\n    process_id: processId,\n    use_process_definition: true,\n  },\n\n  tcms_review_postgres: {\n    persist_review: true,\n    connection_ref: 'tcms-primary',\n    organization_name: 'Unternehmen X',\n    process_id: processId,\n    created_by_email: 'ada.adler@acme.de',\n    report_name: `ReqEli n8n Review ${reportId}`,\n  },\n};\n\nreturn [\n  {\n    json: {\n      ...input,\n      report_id: reportId,\n      workflow_report_id: workflowReportId,\n      source_report_id: sourceReportId,\n      controlExecutionReportId: controlExecutionReportId,\n      timestamp_token: timestampToken,\n      workflowReportId,\n      reqeliReportId: reportId,\n      reqeliWorkflowRunId: workflowRunId || '',\n      frameworkWebhookBody,\n      frameworkWebhookBodyJson: JSON.stringify(frameworkWebhookBody),\n      reqeliBody: reqeliRequestBody,\n      reqeliBodyJson: JSON.stringify(reqeliRequestBody),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4384,
+        16
+      ],
+      "id": "f874679d-2e1b-4206-9612-20d2bd0c7e82",
+      "name": "Prepare Reqeli"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $json && typeof $json === 'object' && !Array.isArray($json) ? $json : {};\n\nfunction clean(value) {\n  return String(value ?? '').replace(/^=/, '').trim();\n}\n\nfunction normalizeSegment(value) {\n  return clean(value)\n    .replace(/[^A-Za-z0-9]+/g, '-')\n    .replace(/^-+|-+$/g, '')\n    .toUpperCase();\n}\n\nconst processId = clean(input.process_id);\n\nconst workflowRunId =\n  clean(input.workflow_run_id) ||\n  clean(input.execution_id) ||\n  clean(input.n8n_execution_id) ||\n  clean(input.run_id) ||\n  clean(input.event_id) ||\n  clean($execution?.id);\n\nif (!processId) {\n  throw new Error('Missing process_id for workflow report identity.');\n}\n\nif (!workflowRunId) {\n  throw new Error('Missing workflow/execution id for workflow report identity.');\n}\n\nconst existingWorkflowReportId =\n  clean(input.workflow_report_id) ||\n  clean(input.source_report_id);\n\nconst workflowReportId =\n  existingWorkflowReportId ||\n  `WF-${normalizeSegment(processId)}-${normalizeSegment(workflowRunId)}`;\n\nif (!workflowReportId) {\n  throw new Error('Could not resolve workflow_report_id.');\n}\n\nreturn [\n  {\n    json: {\n      ...input,\n      process_id: processId,\n      workflow_run_id: workflowRunId,\n      workflow_report_id: workflowReportId,\n      source_report_id: workflowReportId,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3936,
+        16
+      ],
+      "id": "a7e0d349-83ca-4099-956e-679359c3cfbb",
+      "name": "Report ID fix"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TCMS_FRAMEWORK_BASE_URL }}/api/webhooks/organizations/{{ $env.TCMS_ORGANIZATION_ID }}/processes/{{ $env.TCMS_PROCESS_ID }}/runs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.frameworkWebhookBody}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4608,
+        16
+      ],
+      "id": "c54c0a88-e5ab-4e1a-a087-645d801a067c",
+      "name": "Request TCMS-Framework"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.REQELI_API_BASE_URL }}/analyze-invoice-report",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$node[\"Prepare Reqeli\"].json.reqeliBody}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4832,
+        16
+      ],
+      "id": "b5873c51-38fb-4851-be8c-dee74dc32118",
+      "name": "Request Reqeli Analysis"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        5952,
+        48
+      ],
+      "id": "fd0f99e2-caf3-4b3c-88cb-60cf1b9552a7",
+      "name": "End Workflow"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "97f5ca9e-0346-4aac-99ec-d7d3eda8d21a",
+      "name": "Start Workflow",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        -2016,
+        48
+      ],
+      "typeVersion": 1.2
+    }
+  ],
+  "connections": {
+    "Split Attachments": {
+      "main": [
+        [
+          {
+            "node": "Merge Attachment + Message Metadata by messageId",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Download Attachments": {
+      "main": [
+        [
+          {
+            "node": "Split Attachments",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Email Metadata for new invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message Classifier": {
+      "main": [
+        [
+          {
+            "node": "Download Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Excluding mail which is not invoice for company",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Excluding mail which is not invoice for company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Invoice Classifier With Gemini 2.5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Markdown": {
+      "main": [
+        [
+          {
+            "node": "Message Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Invoices": {
+      "main": [
+        [
+          {
+            "node": "Has Invoice?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Invoice?": {
+      "main": [
+        [
+          {
+            "node": "Merge to proceed object",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "PDF is not Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Message Classifier",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Messages from one specific Mail-Folder": {
+      "main": [
+        [
+          {
+            "node": "Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Attachment + Message Metadata by messageId": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge to proceed object",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Email Metadata for new invoice": {
+      "main": [
+        [
+          {
+            "node": "Merge Attachment + Message Metadata by messageId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "For Each Invoice": {
+      "main": [
+        [
+          {
+            "node": "End ap 001",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "fix base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge to proceed object": {
+      "main": [
+        [
+          {
+            "node": "For Each Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Output Parser": {
+      "main": [
+        [
+          {
+            "node": "Recipient Master Loader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fix base64": {
+      "main": [
+        [
+          {
+            "node": "Build Gemini Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recipient Master Loader": {
+      "main": [
+        [
+          {
+            "node": "K1 Matcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoice Classifier With Gemini 2.5": {
+      "main": [
+        [
+          {
+            "node": "Filter Invoices",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validator Service offline or data was not pdf",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File-Based OCR with Gemini 2.5": {
+      "main": [
+        [
+          {
+            "node": "Gemini Output Parser",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini-Service offline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gemini Request": {
+      "main": [
+        [
+          {
+            "node": "File-Based OCR with Gemini 2.5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K1 Matcher": {
+      "main": [
+        [
+          {
+            "node": "VAT Route Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VAT Route Decision": {
+      "main": [
+        [
+          {
+            "node": "K2 Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Route": {
+      "main": [
+        [
+          {
+            "node": "Prepare BZSt Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "K2 Result - Domestic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "K2 Result - Missing VAT ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call BZSt-API": {
+      "main": [
+        [
+          {
+            "node": "Merge Success",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Merge Error",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Prepare BZSt Request": {
+      "main": [
+        [
+          {
+            "node": "Call BZSt-API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Success",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Result Normalizer - Foreign": {
+      "main": [
+        [
+          {
+            "node": "Trigger Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Reqeli?": {
+      "main": [
+        [
+          {
+            "node": "Build Base Row w Reqeli",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Reqeli",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Base Row wo reqeli",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Result - Domestic": {
+      "main": [
+        [
+          {
+            "node": "Trigger Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Result - Missing VAT ID": {
+      "main": [
+        [
+          {
+            "node": "Trigger Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Success": {
+      "main": [
+        [
+          {
+            "node": "K2 Result Normalizer - Foreign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Error": {
+      "main": [
+        [
+          {
+            "node": "K2 Result Normalizer - Foreign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Decision": {
+      "main": [
+        [
+          {
+            "node": "Report ID fix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Checking for Invoice in Excel": {
+      "main": [
+        [
+          {
+            "node": "End Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wrap ReqEli Response": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Build Report Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report Row": {
+      "main": [
+        [
+          {
+            "node": "Update Checking for Invoice in Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Base Row w Reqeli": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Build Base Row wo reqeli": {
+      "main": [
+        [
+          {
+            "node": "Build Report Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reqeli": {
+      "main": [
+        [
+          {
+            "node": "Request TCMS-Framework",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report ID fix": {
+      "main": [
+        [
+          {
+            "node": "Trigger Reqeli?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request TCMS-Framework": {
+      "main": [
+        [
+          {
+            "node": "Request Reqeli Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Reqeli Analysis": {
+      "main": [
+        [
+          {
+            "node": "Wrap ReqEli Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Workflow": {
+      "main": [
+        [
+          {
+            "node": "Get All Messages from one specific Mail-Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
