@@ -1,0 +1,366 @@
+{
+  "name": "DigiTax Invoice Phase 1 - Structured Demo",
+  "id": "digitax-invoice-phase1-structured-demo",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "9f2f9286-071d-47ec-9a7f-a2ebd85dffdc",
+      "name": "Start: Select Invoice",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo stand-in for \"select an invoice\": a synthetic, fictional EN16931\n// fixture (\"Unternehmen X\"), embedded so this workflow is self-contained\n// and runnable via `n8n execute` with no filesystem mounts. A production\n// deployment replaces this node with a Form Trigger file-upload field or a\n// Read/Write File From Disk node reading a real inbound invoice.\nconst demoInvoiceBase64 = \"PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4NCg0KPHJzbTpDcm9zc0luZHVzdHJ5SW52b2ljZSB4bWxuczpyc209InVybjp1bjp1bmVjZTp1bmNlZmFjdDpkYXRhOnN0YW5kYXJkOkNyb3NzSW5kdXN0cnlJbnZvaWNlOjEwMCIgeG1sbnM6eHNpPSJodHRwOi8vd3d3LnczLm9yZy8yMDAxL1hNTFNjaGVtYS1pbnN0YW5jZSIgeG1sbnM6cmFtPSJ1cm46dW46dW5lY2U6dW5jZWZhY3Q6ZGF0YTpzdGFuZGFyZDpSZXVzYWJsZUFnZ3JlZ2F0ZUJ1c2luZXNzSW5mb3JtYXRpb25FbnRpdHk6MTAwIiB4bWxuczp1ZHQ9InVybjp1bjp1bmVjZTp1bmNlZmFjdDpkYXRhOnN0YW5kYXJkOlVucXVhbGlmaWVkRGF0YVR5cGU6MTAwIj4NCiAgPHJzbTpFeGNoYW5nZWREb2N1bWVudENvbnRleHQ+DQogICAgPHJhbTpHdWlkZWxpbmVTcGVjaWZpZWREb2N1bWVudENvbnRleHRQYXJhbWV0ZXI+DQogICAgICA8cmFtOklEPnVybjpjZW4uZXU6ZW4xNjkzMToyMDE3PC9yYW06SUQ+DQogICAgPC9yYW06R3VpZGVsaW5lU3BlY2lmaWVkRG9jdW1lbnRDb250ZXh0UGFyYW1ldGVyPg0KICA8L3JzbTpFeGNoYW5nZWREb2N1bWVudENvbnRleHQ+DQogIDxyc206RXhjaGFuZ2VkRG9jdW1lbnQ+DQogICAgPHJhbTpJRD5VWC0yMDI2LTAwMTwvcmFtOklEPg0KICAgIDxyYW06VHlwZUNvZGU+MzgwPC9yYW06VHlwZUNvZGU+DQogICAgPHJhbTpJc3N1ZURhdGVUaW1lPg0KICAgICAgPHVkdDpEYXRlVGltZVN0cmluZyBmb3JtYXQ9IjEwMiI+MjAyNjA4MDU8L3VkdDpEYXRlVGltZVN0cmluZz4NCiAgICA8L3JhbTpJc3N1ZURhdGVUaW1lPg0KICA8L3JzbTpFeGNoYW5nZWREb2N1bWVudD4NCiAgPHJzbTpTdXBwbHlDaGFpblRyYWRlVHJhbnNhY3Rpb24+DQogICAgPHJhbTpJbmNsdWRlZFN1cHBseUNoYWluVHJhZGVMaW5lSXRlbT4NCiAgICAgIDxyYW06QXNzb2NpYXRlZERvY3VtZW50TGluZURvY3VtZW50Pg0KICAgICAgICA8cmFtOkxpbmVJRD4xPC9yYW06TGluZUlEPg0KICAgICAgPC9yYW06QXNzb2NpYXRlZERvY3VtZW50TGluZURvY3VtZW50Pg0KICAgICAgPHJhbTpTcGVjaWZpZWRUcmFkZVByb2R1Y3Q+DQogICAgICAgIDxyYW06TmFtZT5TeW50aGV0aWMgY29uc3VsdGluZyBzZXJ2aWNlPC9yYW06TmFtZT4NCiAgICAgICAgPHJhbTpEZXNjcmlwdGlvbj5GaWN0aW9uYWwgZGVtbyBsaW5lIGl0ZW0gZm9yIFVudGVybmVobWVuIFg8L3JhbTpEZXNjcmlwdGlvbj4NCiAgICAgIDwvcmFtOlNwZWNpZmllZFRyYWRlUHJvZHVjdD4NCiAgICAgIDxyYW06U3BlY2lmaWVkTGluZVRyYWRlQWdyZWVtZW50Pg0KICAgICAgICA8cmFtOkdyb3NzUHJpY2VQcm9kdWN0VHJhZGVQcmljZT4NCiAgICAgICAgICA8cmFtOkNoYXJnZUFtb3VudD4xMDAuMDAwMDwvcmFtOkNoYXJnZUFtb3VudD4NCiAgICAgICAgICA8cmFtOkJhc2lzUXVhbnRpdHkgdW5pdENvZGU9IkhVUiI+MS4wMDAwPC9yYW06QmFzaXNRdWFudGl0eT4NCiAgICAgICAgPC9yYW06R3Jvc3NQcmljZVByb2R1Y3RUcmFkZVByaWNlPg0KICAgICAgICA8cmFtOk5ldFByaWNlUHJvZHVjdFRyYWRlUHJpY2U+DQogICAgICAgICAgPHJhbTpDaGFyZ2VBbW91bnQ+MTAwLjAwMDA8L3JhbTpDaGFyZ2VBbW91bnQ+DQogICAgICAgICAgPHJhbTpCYXNpc1F1YW50aXR5IHVuaXRDb2RlPSJIVVIiPjEuMDAwMDwvcmFtOkJhc2lzUXVhbnRpdHk+DQogICAgICAgIDwvcmFtOk5ldFByaWNlUHJvZHVjdFRyYWRlUHJpY2U+DQogICAgICA8L3JhbTpTcGVjaWZpZWRMaW5lVHJhZGVBZ3JlZW1lbnQ+DQogICAgICA8cmFtOlNwZWNpZmllZExpbmVUcmFkZURlbGl2ZXJ5Pg0KICAgICAgICA8cmFtOkJpbGxlZFF1YW50aXR5IHVuaXRDb2RlPSJIVVIiPjEuMDAwMDwvcmFtOkJpbGxlZFF1YW50aXR5Pg0KICAgICAgPC9yYW06U3BlY2lmaWVkTGluZVRyYWRlRGVsaXZlcnk+DQogICAgICA8cmFtOlNwZWNpZmllZExpbmVUcmFkZVNldHRsZW1lbnQ+DQogICAgICAgIDxyYW06QXBwbGljYWJsZVRyYWRlVGF4Pg0KICAgICAgICAgIDxyYW06VHlwZUNvZGU+VkFUPC9yYW06VHlwZUNvZGU+DQogICAgICAgICAgPHJhbTpDYXRlZ29yeUNvZGU+UzwvcmFtOkNhdGVnb3J5Q29kZT4NCiAgICAgICAgICA8cmFtOlJhdGVBcHBsaWNhYmxlUGVyY2VudD4xOS4wMDwvcmFtOlJhdGVBcHBsaWNhYmxlUGVyY2VudD4NCiAgICAgICAgPC9yYW06QXBwbGljYWJsZVRyYWRlVGF4Pg0KICAgICAgICA8cmFtOlNwZWNpZmllZFRyYWRlU2V0dGxlbWVudExpbmVNb25ldGFyeVN1bW1hdGlvbj4NCiAgICAgICAgICA8cmFtOkxpbmVUb3RhbEFtb3VudD4xMDAuMDA8L3JhbTpMaW5lVG90YWxBbW91bnQ+DQogICAgICAgIDwvcmFtOlNwZWNpZmllZFRyYWRlU2V0dGxlbWVudExpbmVNb25ldGFyeVN1bW1hdGlvbj4NCiAgICAgIDwvcmFtOlNwZWNpZmllZExpbmVUcmFkZVNldHRsZW1lbnQ+DQogICAgPC9yYW06SW5jbHVkZWRTdXBwbHlDaGFpblRyYWRlTGluZUl0ZW0+DQogICAgPHJhbTpBcHBsaWNhYmxlSGVhZGVyVHJhZGVBZ3JlZW1lbnQ+DQogICAgICA8cmFtOkJ1eWVyUmVmZXJlbmNlPlVYLVJFRi0wMDE8L3JhbTpCdXllclJlZmVyZW5jZT4NCiAgICAgIDxyYW06U2VsbGVyVHJhZGVQYXJ0eT4NCiAgICAgICAgPHJhbTpOYW1lPkJlaXNwaWVsIExpZWZlcmFudCBHbWJIPC9yYW06TmFtZT4NCiAgICAgICAgPHJhbTpQb3N0YWxUcmFkZUFkZHJlc3M+DQogICAgICAgICAgPHJhbTpQb3N0Y29kZUNvZGU+MTAxMTU8L3JhbTpQb3N0Y29kZUNvZGU+DQogICAgICAgICAgPHJhbTpMaW5lT25lPkxpZWZlcndlZyAxPC9yYW06TGluZU9uZT4NCiAgICAgICAgICA8cmFtOkNpdHlOYW1lPkJlcmxpbjwvcmFtOkNpdHlOYW1lPg0KICAgICAgICAgIDxyYW06Q291bnRyeUlEPkRFPC9yYW06Q291bnRyeUlEPg0KICAgICAgICA8L3JhbTpQb3N0YWxUcmFkZUFkZHJlc3M+DQogICAgICAgIDxyYW06U3BlY2lmaWVkVGF4UmVnaXN0cmF0aW9uPg0KICAgICAgICAgIDxyYW06SUQgc2NoZW1lSUQ9IlZBIj5ERTExMTExMTExMTwvcmFtOklEPg0KICAgICAgICA8L3JhbTpTcGVjaWZpZWRUYXhSZWdpc3RyYXRpb24+DQogICAgICA8L3JhbTpTZWxsZXJUcmFkZVBhcnR5Pg0KICAgICAgPHJhbTpCdXllclRyYWRlUGFydHk+DQogICAgICAgIDxyYW06SUQ+VU5URVJORUhNRU4tWDwvcmFtOklEPg0KICAgICAgICA8cmFtOk5hbWU+VW50ZXJuZWhtZW4gWDwvcmFtOk5hbWU+DQogICAgICAgIDxyYW06UG9zdGFsVHJhZGVBZGRyZXNzPg0KICAgICAgICAgIDxyYW06UG9zdGNvZGVDb2RlPjA0MTA5PC9yYW06UG9zdGNvZGVDb2RlPg0KICAgICAgICAgIDxyYW06TGluZU9uZT5NdXN0ZXJ3ZWcgMTA8L3JhbTpMaW5lT25lPg0KICAgICAgICAgIDxyYW06Q2l0eU5hbWU+TGVpcHppZzwvcmFtOkNpdHlOYW1lPg0KICAgICAgICAgIDxyYW06Q291bnRyeUlEPkRFPC9yYW06Q291bnRyeUlEPg0KICAgICAgICA8L3JhbTpQb3N0YWxUcmFkZUFkZHJlc3M+DQogICAgICA8L3JhbTpCdXllclRyYWRlUGFydHk+DQogICAgPC9yYW06QXBwbGljYWJsZUhlYWRlclRyYWRlQWdyZWVtZW50Pg0KICAgIDxyYW06QXBwbGljYWJsZUhlYWRlclRyYWRlRGVsaXZlcnk+DQogICAgICA8cmFtOkFjdHVhbERlbGl2ZXJ5U3VwcGx5Q2hhaW5FdmVudD4NCiAgICAgICAgPHJhbTpPY2N1cnJlbmNlRGF0ZVRpbWU+DQogICAgICAgICAgPHVkdDpEYXRlVGltZVN0cmluZyBmb3JtYXQ9IjEwMiI+MjAyNjA4MDM8L3VkdDpEYXRlVGltZVN0cmluZz4NCiAgICAgICAgPC9yYW06T2NjdXJyZW5jZURhdGVUaW1lPg0KICAgICAgPC9yYW06QWN0dWFsRGVsaXZlcnlTdXBwbHlDaGFpbkV2ZW50Pg0KICAgIDwvcmFtOkFwcGxpY2FibGVIZWFkZXJUcmFkZURlbGl2ZXJ5Pg0KICAgIDxyYW06QXBwbGljYWJsZUhlYWRlclRyYWRlU2V0dGxlbWVudD4NCiAgICAgIDxyYW06UGF5bWVudFJlZmVyZW5jZT5VWC0yMDI2LTAwMTwvcmFtOlBheW1lbnRSZWZlcmVuY2U+DQogICAgICA8cmFtOkludm9pY2VDdXJyZW5jeUNvZGU+RVVSPC9yYW06SW52b2ljZUN1cnJlbmN5Q29kZT4NCiAgICAgIDxyYW06U3BlY2lmaWVkVHJhZGVTZXR0bGVtZW50UGF5bWVudE1lYW5zPg0KICAgICAgICA8cmFtOlR5cGVDb2RlPjQyPC9yYW06VHlwZUNvZGU+DQogICAgICAgIDxyYW06SW5mb3JtYXRpb24+QmFuayB0cmFuc2ZlcjwvcmFtOkluZm9ybWF0aW9uPg0KICAgICAgICA8cmFtOlBheWVlUGFydHlDcmVkaXRvckZpbmFuY2lhbEFjY291bnQ+DQogICAgICAgICAgPHJhbTpJQkFOSUQ+REU4ODIwMDgwMDAwMDk3MDM3NTcwMDwvcmFtOklCQU5JRD4NCiAgICAgICAgICA8cmFtOkFjY291bnROYW1lPkJlaXNwaWVsIExpZWZlcmFudCBHbWJIPC9yYW06QWNjb3VudE5hbWU+DQogICAgICAgIDwvcmFtOlBheWVlUGFydHlDcmVkaXRvckZpbmFuY2lhbEFjY291bnQ+DQogICAgICAgIDxyYW06UGF5ZWVTcGVjaWZpZWRDcmVkaXRvckZpbmFuY2lhbEluc3RpdHV0aW9uPg0KICAgICAgICAgIDxyYW06QklDSUQ+Q09CQURFRkZYWFg8L3JhbTpCSUNJRD4NCiAgICAgICAgPC9yYW06UGF5ZWVTcGVjaWZpZWRDcmVkaXRvckZpbmFuY2lhbEluc3RpdHV0aW9uPg0KICAgICAgPC9yYW06U3BlY2lmaWVkVHJhZGVTZXR0bGVtZW50UGF5bWVudE1lYW5zPg0KICAgICAgPHJhbTpBcHBsaWNhYmxlVHJhZGVUYXg+DQogICAgICAgIDxyYW06Q2FsY3VsYXRlZEFtb3VudD4xOS4wMDwvcmFtOkNhbGN1bGF0ZWRBbW91bnQ+DQogICAgICAgIDxyYW06VHlwZUNvZGU+VkFUPC9yYW06VHlwZUNvZGU+DQogICAgICAgIDxyYW06QmFzaXNBbW91bnQ+MTAwLjAwPC9yYW06QmFzaXNBbW91bnQ+DQogICAgICAgIDxyYW06Q2F0ZWdvcnlDb2RlPlM8L3JhbTpDYXRlZ29yeUNvZGU+DQogICAgICAgIDxyYW06UmF0ZUFwcGxpY2FibGVQZXJjZW50PjE5LjAwPC9yYW06UmF0ZUFwcGxpY2FibGVQZXJjZW50Pg0KICAgICAgPC9yYW06QXBwbGljYWJsZVRyYWRlVGF4Pg0KICAgICAgPHJhbTpTcGVjaWZpZWRUcmFkZVBheW1lbnRUZXJtcz4NCiAgICAgICAgPHJhbTpEZXNjcmlwdGlvbj5aYWhsYmFyIG9obmUgQWJ6dWcgYmlzIDIwLjA4LjIwMjY8L3JhbTpEZXNjcmlwdGlvbj4NCiAgICAgICAgPHJhbTpEdWVEYXRlRGF0ZVRpbWU+DQogICAgICAgICAgPHVkdDpEYXRlVGltZVN0cmluZyBmb3JtYXQ9IjEwMiI+MjAyNjA4MjA8L3VkdDpEYXRlVGltZVN0cmluZz4NCiAgICAgICAgPC9yYW06RHVlRGF0ZURhdGVUaW1lPg0KICAgICAgPC9yYW06U3BlY2lmaWVkVHJhZGVQYXltZW50VGVybXM+DQogICAgICA8cmFtOlNwZWNpZmllZFRyYWRlU2V0dGxlbWVudEhlYWRlck1vbmV0YXJ5U3VtbWF0aW9uPg0KICAgICAgICA8cmFtOkxpbmVUb3RhbEFtb3VudD4xMDAuMDA8L3JhbTpMaW5lVG90YWxBbW91bnQ+DQogICAgICAgIDxyYW06Q2hhcmdlVG90YWxBbW91bnQ+MC4wMDwvcmFtOkNoYXJnZVRvdGFsQW1vdW50Pg0KICAgICAgICA8cmFtOkFsbG93YW5jZVRvdGFsQW1vdW50PjAuMDA8L3JhbTpBbGxvd2FuY2VUb3RhbEFtb3VudD4NCiAgICAgICAgPHJhbTpUYXhCYXNpc1RvdGFsQW1vdW50PjEwMC4wMDwvcmFtOlRheEJhc2lzVG90YWxBbW91bnQ+DQogICAgICAgIDxyYW06VGF4VG90YWxBbW91bnQgY3VycmVuY3lJRD0iRVVSIj4xOS4wMDwvcmFtOlRheFRvdGFsQW1vdW50Pg0KICAgICAgICA8cmFtOkdyYW5kVG90YWxBbW91bnQ+MTE5LjAwPC9yYW06R3JhbmRUb3RhbEFtb3VudD4NCiAgICAgICAgPHJhbTpUb3RhbFByZXBhaWRBbW91bnQ+MC4wMDwvcmFtOlRvdGFsUHJlcGFpZEFtb3VudD4NCiAgICAgICAgPHJhbTpEdWVQYXlhYmxlQW1vdW50PjExOS4wMDwvcmFtOkR1ZVBheWFibGVBbW91bnQ+DQogICAgICA8L3JhbTpTcGVjaWZpZWRUcmFkZVNldHRsZW1lbnRIZWFkZXJNb25ldGFyeVN1bW1hdGlvbj4NCiAgICA8L3JhbTpBcHBsaWNhYmxlSGVhZGVyVHJhZGVTZXR0bGVtZW50Pg0KICA8L3JzbTpTdXBwbHlDaGFpblRyYWRlVHJhbnNhY3Rpb24+DQo8L3JzbTpDcm9zc0luZHVzdHJ5SW52b2ljZT4NCg==\";\n\nconst buffer = Buffer.from(demoInvoiceBase64, \"base64\");\nconst binaryData = await this.helpers.prepareBinaryData(\n  buffer,\n  \"invoice.xml\",\n  \"application/xml\"\n);\n\nreturn [\n  {\n    json: {\n      demoNote: \"Synthetic fictional EN16931 invoice (Unternehmen X) -- no real invoice or organization data.\",\n    },\n    binary: {\n      invoiceFile: binaryData,\n    },\n  },\n];\n"
+      },
+      "id": "304249c2-20d1-4917-ab87-fbfb0f7bac1d",
+      "name": "Select Invoice (Demo Fixture)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/capabilities",
+        "options": {}
+      },
+      "id": "18225c0d-3a1c-427e-8982-bfcc91303575",
+      "name": "GET /capabilities",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "position": [
+        -1060,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const capabilities = $input.first().json;\nconst facturX = capabilities.structuredFormats[\"factur-x\"];\n\nconst versionNote = facturX.legacyBaseline\n  ? `Using LEGACY validator baseline: XSD ${facturX.xsdVersion} ` +\n    `(processable profiles: ${facturX.processableLevels.join(\", \")}). ` +\n    `Upgrade to Factur-X 1.09.2 + Schematron is tracked separately and ` +\n    `does not block this demo.`\n  : `Using validator baseline: XSD ${facturX.xsdVersion}.`;\n\n// HTTP Request and Code nodes don't automatically carry binary data\n// forward from earlier nodes -- reach back to where the demo invoice was\n// attached so the next node (POST /v1/invoices/process) still has it.\nconst invoiceBinary = $('Select Invoice (Demo Fixture)').item.binary;\n\nreturn [\n  {\n    json: {\n      versionNote,\n      xsdVersion: facturX.xsdVersion,\n      legacyBaseline: facturX.legacyBaseline,\n      processableLevels: facturX.processableLevels,\n      schematronStatus: capabilities.schematron.status,\n    },\n    binary: invoiceBinary,\n  },\n];\n"
+      },
+      "id": "90d1da97-0d1f-4c02-9513-462f64ffc0bc",
+      "name": "Check Factur-X Version",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -840,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/process",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "invoiceFile"
+            },
+            {
+              "parameterType": "formData",
+              "name": "organizationId",
+              "value": "unternehmen-x-demo"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1097923e-4747-4e51-8428-53c4ad86f8c2",
+      "name": "POST /v1/invoices/process",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "position": [
+        -620,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bounded retry on \"GET /capabilities\" is already exhausted by the time\n// this node runs (onError: continueErrorOutput on that node). Build a safe\n// nicht_pruefbar human-review payload instead of letting the execution fail\n// unhandled -- per AGENTS.md, technical failures must retain the failed\n// step, a stable error code, and a correlation ID.\nconst raw = $input.first().json;\nconst explanation =\n  (raw && raw.error && (raw.error.message || raw.error)) ||\n  (raw && raw.message) ||\n  \"The capabilities service did not respond after the bounded retry.\";\n\nconst correlationId =\n  typeof crypto !== \"undefined\" && crypto.randomUUID\n    ? crypto.randomUUID()\n    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;\n\nconst failedStep = \"GET /capabilities\";\nconst errorCode = \"CAPABILITIES_SERVICE_UNAVAILABLE\";\n\nconst summaryLines = [\n  \"Technical failure while contacting the Factur-X Phase 1 API.\",\n  \"\",\n  `Failed step: ${failedStep}`,\n  `Error code: ${errorCode}`,\n  `Correlation ID: ${correlationId}`,\n  `Explanation: ${explanation}`,\n  \"\",\n  \"OVERALL STATUS: nicht_pruefbar (routing: technical_review)\",\n  \"\",\n  \"This is a Phase 1 technical-failure finding for human review only -- it\",\n  \"is not an approval, rejection, booking, payment, or supplier communication.\",\n];\n\nreturn [\n  {\n    json: {\n      reviewSummary: summaryLines.join(\"\\n\"),\n      status: \"nicht_pruefbar\",\n      routing: \"technical_review\",\n      failedStep,\n      errorCode,\n      correlationId,\n      explanation,\n      failedControlCount: null,\n      failedControls: [],\n      reportId: null,\n      runId: null,\n      sourceSha256: null,\n    },\n  },\n];\n"
+      },
+      "id": "b3c0e4a1-6d3f-4a2e-9c8b-5f1d2e7a9c40",
+      "name": "API Failure - Capabilities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1060,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bounded retry on \"POST /v1/invoices/process\" is already exhausted by the\n// time this node runs (onError: continueErrorOutput on that node). Build a\n// safe nicht_pruefbar human-review payload instead of letting the\n// execution fail unhandled -- per AGENTS.md, technical failures must\n// retain the failed step, a stable error code, and a correlation ID.\nconst raw = $input.first().json;\nconst explanation =\n  (raw && raw.error && (raw.error.message || raw.error)) ||\n  (raw && raw.message) ||\n  \"The invoice processing service did not respond after the bounded retry.\";\n\nconst correlationId =\n  typeof crypto !== \"undefined\" && crypto.randomUUID\n    ? crypto.randomUUID()\n    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;\n\nconst failedStep = \"POST /v1/invoices/process\";\nconst errorCode = \"INVOICE_PROCESSING_SERVICE_UNAVAILABLE\";\n\nconst summaryLines = [\n  \"Technical failure while contacting the Factur-X Phase 1 API.\",\n  \"\",\n  `Failed step: ${failedStep}`,\n  `Error code: ${errorCode}`,\n  `Correlation ID: ${correlationId}`,\n  `Explanation: ${explanation}`,\n  \"\",\n  \"OVERALL STATUS: nicht_pruefbar (routing: technical_review)\",\n  \"\",\n  \"This is a Phase 1 technical-failure finding for human review only -- it\",\n  \"is not an approval, rejection, booking, payment, or supplier communication.\",\n];\n\nreturn [\n  {\n    json: {\n      reviewSummary: summaryLines.join(\"\\n\"),\n      status: \"nicht_pruefbar\",\n      routing: \"technical_review\",\n      failedStep,\n      errorCode,\n      correlationId,\n      explanation,\n      failedControlCount: null,\n      failedControls: [],\n      reportId: null,\n      runId: null,\n      sourceSha256: null,\n    },\n  },\n];\n"
+      },
+      "id": "c4d1f5b2-7e40-4b3f-ad9c-601e3f8bad51",
+      "name": "API Failure - Process Invoice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -620,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst invoice = response.canonicalInvoice.invoice;\nconst document = response.canonicalInvoice.document;\nconst report = response.phase1ControlReport;\n\nconst failedControls = report.controls.filter(\n  (c) => ![\"passed\", \"not_applicable\", \"not_run\"].includes(c.outcome)\n);\n\nconst summaryLines = [\n  `Invoice ${invoice.invoiceNumber || \"(missing)\"} dated ${invoice.issueDate || \"(missing)\"}`,\n  `Supplier: ${invoice.supplier.name || \"(missing)\"} -> Buyer: ${invoice.buyer.name || \"(missing)\"}`,\n  `Totals: net ${invoice.totals.lineNet}, tax ${invoice.totals.taxAmount}, gross ${invoice.totals.grossAmount}, payable ${invoice.totals.payableAmount} ${invoice.currency || \"\"}`,\n  `Detected format/profile: ${document.detectedFormat} / ${document.profile || \"(none)\"}`,\n  `Catalog ${report.catalogVersion} / control profile ${report.controlProfileId} v${report.controlProfileVersion}`,\n  ``,\n  `OVERALL STATUS: ${report.status} (routing: ${report.routing})`,\n  ``,\n  failedControls.length === 0\n    ? \"All applicable controls passed.\"\n    : `${failedControls.length} control(s) require human review:`,\n  ...failedControls.map(\n    (c) =>\n      `  - ${c.controlId} [${c.outcome}/${c.severity}] ${c.reasonCodes.join(\", \")}: ` +\n      `${c.message || \"(no message)\"}` +\n      (c.details ? ` | details: ${JSON.stringify(c.details)}` : \"\") +\n      ` | evidence: ${c.evidenceRefs.join(\", \")}`\n  ),\n  ``,\n  `This is a Phase 1 finding for human review only -- it is not an approval,`,\n  `rejection, booking, payment, or supplier communication.`,\n];\n\nreturn [\n  {\n    json: {\n      reviewSummary: summaryLines.join(\"\\n\"),\n      status: report.status,\n      routing: report.routing,\n      failedControlCount: failedControls.length,\n      failedControls,\n      reportId: report.reportId,\n      runId: report.runId,\n      sourceSha256: report.sourceSha256,\n    },\n  },\n];\n"
+      },
+      "id": "3a4b76c0-2fc0-4abd-aa5a-f7997faf1168",
+      "name": "Build Review Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "standard-review",
+                    "leftValue": "={{ $json.routing }}",
+                    "rightValue": "standard_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "standard_review"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "prioritized-review",
+                    "leftValue": "={{ $json.routing }}",
+                    "rightValue": "prioritized_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "prioritized_review"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "3fdd90f0-5f2d-41e8-860e-546deb87bd2e",
+      "name": "Status Routing",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -180,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "55ca48bc-347a-42bc-a0b6-9296cf02ee4e",
+      "name": "Human Review - Standard",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        40,
+        -80
+      ],
+      "notes": "Phase 1 ends here: routed for standard-priority human review. No automated approval, booking, payment, or supplier communication."
+    },
+    {
+      "parameters": {},
+      "id": "c88fdc48-ea80-4b18-893d-547933fb77ef",
+      "name": "Human Review - Prioritized",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        40,
+        80
+      ],
+      "notes": "Phase 1 ends here: routed for prioritized human review (klaerung_erforderlich or nicht_pruefbar). No automated approval, booking, payment, or supplier communication."
+    },
+    {
+      "parameters": {},
+      "id": "7ae5c4c8-c4e1-4b8d-9719-70d3cf7993b9",
+      "name": "Human Review - Unclassified (fallback)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        40,
+        240
+      ],
+      "notes": "Safety fallback: an unrecognized routing value, and any technical API failure (nicht_pruefbar/technical_review) after bounded retries are exhausted, also goes to human review -- never silently ignored and never an unhandled execution error."
+    }
+  ],
+  "connections": {
+    "Start: Select Invoice": {
+      "main": [
+        [
+          {
+            "node": "Select Invoice (Demo Fixture)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Invoice (Demo Fixture)": {
+      "main": [
+        [
+          {
+            "node": "GET /capabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /capabilities": {
+      "main": [
+        [
+          {
+            "node": "Check Factur-X Version",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API Failure - Capabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Factur-X Version": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/invoices/process",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /v1/invoices/process": {
+      "main": [
+        [
+          {
+            "node": "Build Review Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API Failure - Process Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Failure - Capabilities": {
+      "main": [
+        [
+          {
+            "node": "Status Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Failure - Process Invoice": {
+      "main": [
+        [
+          {
+            "node": "Status Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review Summary": {
+      "main": [
+        [
+          {
+            "node": "Status Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status Routing": {
+      "main": [
+        [
+          {
+            "node": "Human Review - Standard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Human Review - Prioritized",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Human Review - Unclassified (fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {}
+}
