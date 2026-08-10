@@ -15,23 +15,36 @@ for official business rules.
 
 ## Required refinement order
 
-1. **Implemented** (first Phase 1 vertical slice). `GET /health` and
-   `GET /capabilities` report supported formats, versions, profiles, the
-   XSD baseline (explicitly flagged `legacyBaseline: true`, see item 2), and
-   Schematron status (`not_implemented`, see item 3).
-2. **Not implemented; tracked separately.** The XSD baseline stays at
-   Factur-X 1.07.2 / ZUGFeRD 2.3.2 for this slice -- upgrading means fetching
-   and bundling a new official schema package with its own licensing check,
-   which is intentionally kept out of this slice. See the follow-up issue
-   referenced from the repository issue tracker (filed alongside issue #1)
-   for the ZUGFeRD 2.5 / Factur-X 1.09 upgrade.
-3. **Not implemented.** No official Schematron/business-rule artifacts are
-   bundled or fetched. `STR-004` is defined in the control catalog but is
-   deliberately excluded from the `inbound-starter-de-v1` starter profile
-   rather than reported as passed or run -- see
-   `facturx/phase1/controls/catalog.py`. XSD validation (the other half of
-   this item) is implemented and returns findings with rule ID, severity,
-   and message via `STR-003`.
+1. **Implemented** (first Phase 1 vertical slice, extended in the Factur-X
+   1.09/Schematron round). `GET /health` and `GET /capabilities` report
+   supported formats, versions, profiles, the per-level XSD baseline
+   (`structuredFormats["factur-x"].xsdBaselines`), and Schematron status
+   (`"implemented"`, `scope: ["en16931"]`, see item 3).
+2. **Implemented for EN16931; other profiles unchanged.** EN16931 now
+   validates against the vendored, hash-verified Factur-X 1.09 XSD (see
+   `facturx/phase1/resources/facturx-1.09-en16931/PROVENANCE.json` for full
+   source/hash/license provenance -- vendor-copied from the pinned,
+   PyPI-hash-verified `factur-x==6.6` wheel, per the reviewed Stage 1
+   decision). `minimum`/`basicwl`/`basic`/`extended` remain on the legacy
+   Factur-X 1.07.2 / ZUGFeRD 2.3.2 XSDs, since only EN16931 has reviewed
+   content controls and a reviewed Schematron artifact so far. This is
+   Factur-X **1.09**, not the true ZUGFeRD 2.5.2 / Factur-X 1.09.2
+   corrigendum (published 2026-08-04, primarily affecting EXTENDED) --
+   that official package is gated behind a personal-data registration form
+   on ferd-net.de/fnfe-mpe.org with no direct download; acquiring the true
+   1.09.2 artifacts (if they differ from 1.09 for EN16931 at all) remains a
+   separate follow-up.
+3. **Implemented for EN16931.** The official, vendored Factur-X 1.09 EN16931
+   compiled Schematron business rules are executed offline via pinned
+   `saxonche` (SaxonC-HE 13.0, no Java, no network at runtime) -- see
+   `facturx/phase1/validate/schematron.py`. `STR-004` is now selected in the
+   `inbound-starter-de-v1` starter profile (bumped to version `0.2.0`) and
+   returns real rule IDs (`FX-SCH-A-nnnnnn`), the official BR-*/BR-CO-*
+   text, and an XPath location per finding. It only runs once XSD validation
+   (`STR-003`) has passed (Schematron's arithmetic assumes XSD-conformant
+   types) and only for EN16931 (not yet reviewed for the other recognized
+   profiles); a Saxon/resource failure, timeout, or unparseable output
+   reports `not_reliable`, forcing `nicht_pruefbar`, never `passed`.
 4. **Implemented** for the new `/v1/invoices/*` endpoints
    (`facturx/phase1/api.py`): a stable JSON envelope
    (`{"canonicalInvoice": ..., "phase1ControlReport": ...}`), each part
@@ -68,10 +81,10 @@ All four are implemented in `facturx/phase1/api.py`.
 - `POST /v1/invoices/normalize`: extract/normalize structured or plain-PDF
   invoice data into `canonical_invoice`. No organization context required
   (it runs no controls).
-- `POST /v1/invoices/validate`: return XSD findings as JSON for a structured
-  document (`applicable: false` for a plain PDF, not an error). Schematron
-  is reported as `"not_implemented"`, never silently omitted from the
-  response.
+- `POST /v1/invoices/validate`: return XSD and (for EN16931) Schematron
+  findings as JSON for a structured document (`applicable: false` for a
+  plain PDF, not an error). The `schematron` field is always an object with
+  a `status`, never silently omitted from the response.
 - `POST /v1/invoices/process`: the full pipeline -- normalize, run the
   starter control profile, aggregate, return `canonicalInvoice` +
   `phase1ControlReport`.

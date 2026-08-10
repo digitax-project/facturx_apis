@@ -60,9 +60,10 @@ review.
 - `POST /v1/invoices/inspect` - detect source type, format, and version
 - `POST /v1/invoices/normalize` - extract/normalize into `canonicalInvoice`
   only, no controls run, no organization context required
-- `POST /v1/invoices/validate` - XSD findings for a structured document
-  (`applicable: false` for a plain PDF); Schematron reported as
-  `"not_implemented"`, never silently omitted
+- `POST /v1/invoices/validate` - XSD and (for EN16931) Schematron findings
+  for a structured document (`applicable: false` for a plain PDF); the
+  `schematron` field is an object (`status`, and `findings`/`errorDetail`
+  depending on status), never silently omitted
 - `POST /v1/invoices/process` - the full pipeline; multipart form with
   `file`, plus either `organizationId=unternehmen-x-demo` or
   `demoMode=true` (there is no silent fallback to demo master data).
@@ -81,14 +82,27 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
 
 #### Known limitations (also reported by `/capabilities`)
 
-- **XSD baseline is Factur-X 1.07.2 / ZUGFeRD 2.3.2**, not the current
-  ZUGFeRD 2.5 / Factur-X 1.09 package. `/capabilities` flags this
-  explicitly as `legacyBaseline: true`. The upgrade is tracked as a
-  separate follow-up issue (see `docs/invoice_phase1/service_gap_analysis.md`).
-- **Schematron/official business-rule validation is not implemented.** No
-  Schematron artifacts are bundled or fetched. The corresponding control
-  (`STR-004`) is defined in the candidate catalog but deliberately left out
-  of the starter control profile, not reported as passed or run.
+- **EN16931 XSD baseline is Factur-X 1.09**; `minimum`/`basicwl`/`basic`/
+  `extended` remain on the legacy Factur-X 1.07.2 / ZUGFeRD 2.3.2 XSDs, since
+  only EN16931 has reviewed content controls and a reviewed Schematron
+  artifact so far (see `/capabilities`' `structuredFormats["factur-x"]
+  .xsdBaselines`, per level, and
+  `facturx/phase1/resources/facturx-1.09-en16931/PROVENANCE.json` for full
+  source/hash/license provenance). This is Factur-X **1.09**, not the true
+  ZUGFeRD 2.5.2 / Factur-X 1.09.2 corrigendum (published 2026-08-04,
+  primarily affecting EXTENDED) -- that official package is gated behind a
+  personal-data registration form on ferd-net.de/fnfe-mpe.org with no direct
+  download; acquiring it is a separate follow-up, not done here.
+- **Official EN16931 Schematron business-rule validation (`STR-004`) is
+  implemented**, executed offline via pinned `saxonche` (SaxonC-HE 13.0, no
+  Java, no network at runtime) against the vendored 1.09 stylesheet. It only
+  runs on an already-XSD-valid EN16931 document (Schematron's arithmetic
+  assumes XSD-conformant types -- verified directly that running it against
+  XSD-invalid content makes the engine raise a type error, not a meaningful
+  finding); it is not yet reviewed for the other recognized profiles, where
+  it reports `not_applicable`/`UNSUPPORTED_PROFILE` rather than running
+  unreviewed. A Saxon/resource failure, timeout, or unparseable output
+  reports `not_reliable` (forcing `nicht_pruefbar`), never `passed`.
 - **Plain-PDF extraction uses a mock adapter**, not real OCR/LLM. It exists
   to prove the field-evidence/confidence contract a real adapter must
   satisfy (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via
