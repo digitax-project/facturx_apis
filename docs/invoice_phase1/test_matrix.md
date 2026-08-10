@@ -5,9 +5,9 @@ data, addresses, or free text may be committed.
 
 | ID | Input | Expected path | Expected status |
 |---|---|---|---|
-| FX-01 | valid ZUGFeRD 2.5 / Factur-X 1.09 EN16931 | embedded XML, official validation, normalize, selected starter profile | unauffaellig |
-| FX-02 | valid older explicitly supported Factur-X fixture | version-specific validation and normalize | unauffaellig or hinweis |
-| FX-03 | hybrid PDF without embedded XML | no silent PDF fallback unless workflow explicitly allows it | nicht_pruefbar |
+| FX-01 | valid Factur-X 1.09 / ZUGFeRD 2.5 EN16931 | embedded XML, official validation, normalize, selected starter profile | unauffaellig |
+| FX-02 | valid recognized but not processable Factur-X profile, currently MINIMUM | detect profile, stop before unreviewed content controls | nicht_pruefbar / UNSUPPORTED_PROFILE |
+| FX-03 | PDF without an accepted embedded XML filename | classify as plain PDF; current mock adapter result is test-only and not production evidence | adapter-dependent; must not be presented as structured validation |
 | FX-04 | XML with XSD or Schematron failure | structured findings retained | klaerung_erforderlich |
 | FX-05 | valid XML with buyer master-data mismatch | ORG-001 finding | klaerung_erforderlich |
 | PDF-01 | readable PDF with all fields selected by the starter profile | OCR/LLM, confidence evidence, normalize, shared selected controls | unauffaellig |

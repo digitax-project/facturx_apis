@@ -134,10 +134,11 @@ def evaluate_str_004(
 ) -> ControlResult:
     """Official EN16931 Schematron business rules, executed offline via
     saxonche against the vendored Factur-X 1.09 stylesheet (see
-    validate/schematron.py). A flag="warning" finding is an advisory
-    PEPPOL-EN16931-R00x recommendation, not a rule violation -- present with
-    zero non-warning findings still passes, but keeps the warnings visible in
-    `details` rather than silently dropping them.
+    validate/schematron.py). A flag="warning" finding is advisory according
+    to the vendored artifact; the three current warnings include PEPPOL and
+    Factur-X references. With zero non-warning findings STR-004 currently
+    passes, but keeps the warnings visible in `details` rather than silently
+    dropping them.
 
     `xsd_valid=False` means STR-003 already failed: real EN16931 Schematron
     rules assume XSD-valid input (its arithmetic/type conversions are not
@@ -193,7 +194,7 @@ def evaluate_str_004(
             rule_version=definition.rule_version, message=message, details=details,
         )
     if warnings:
-        message = f"{len(warnings)} advisory EN16931/PEPPOL warning(s), no blocking rule violations."
+        message = f"{len(warnings)} advisory Schematron warning(s), no blocking rule violations."
         details = {"schematronFindings": [_finding_dict(f) for f in warnings]}
         return ControlResult(
             "STR-004", definition.title, "passed", "none",

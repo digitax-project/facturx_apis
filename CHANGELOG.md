@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Corrected the unsupported documentation claim about a Factur-X 1.09.2 /
+  ZUGFeRD 2.5.2 release. Official FeRD/FNFE-MPE sources checked on 2026-08-10
+  identify Factur-X 1.09 / ZUGFeRD 2.5 as current.
+- Added a dated official-standard baseline with source URLs and a mandatory
+  update procedure.
+- Added a generated inventory of all 427 contextual Schematron assertions,
+  including 302 unique technical IDs, rule families, severity, messages,
+  XPath expressions, source lines, and source hash.
+
 ## v1.0.0 - 2026-08-10
 
 First stable DigiTax Phase 1 invoice-preprocessing release.
