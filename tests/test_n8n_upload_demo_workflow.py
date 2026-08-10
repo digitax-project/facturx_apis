@@ -1,4 +1,6 @@
-"""Regression guard for examples/n8n/digitax_invoice_phase1_upload_demo.json.
+"""Regression guard for
+examples/n8n/digitax_invoice_phase1_flow1a_upload_v1_0_0.json
+("DigiTax | Invoice Phase 1 | Flow 1a | Upload Demo | v1.0.0").
 
 Structural check only -- examples/n8n/README.md and the coordination
 handover log record the real webhook-execution evidence (via the isolated
@@ -16,7 +18,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_upload_demo.json"
+    / "digitax_invoice_phase1_flow1a_upload_v1_0_0.json"
 )
 
 FORBIDDEN_PATTERNS = [
@@ -25,12 +27,18 @@ FORBIDDEN_PATTERNS = [
     (re.compile(r"vn ?impex", re.IGNORECASE), "the real organization name"),
 ]
 
-HTTP_NODE_NAMES = ("GET /capabilities", "POST /v1/invoices/process")
+WEBHOOK_NODE = "01.1 Receive invoice upload"
+RUN_CONTEXT_NODE = "01.2 Build run context"
+HTTP_NODE_NAMES = ("02.1 Read API capabilities", "03.1 Run DigiTax controls")
+CLASSIFY_RESPONSE_NODE = "03.2 Classify controls response"
+BUILD_REPORT_NODE = "04.1 Build control report"
+RESPOND_NODE = "04.2 Respond to browser"
+STATUS_ROUTING_NODE = "04.3 Route by review status"
 REVIEW_NODES = (
-    "Human Review - Standard",
-    "Human Review - Prioritized",
-    "Human Review - Technical",
-    "Human Review - Unknown (fallback)",
+    "05.1 Human review - standard",
+    "05.2 Human review - prioritized",
+    "05.3 Human review - technical",
+    "05.4 Human review - unknown",
 )
 
 
@@ -94,7 +102,7 @@ def test_workflow_connections_reference_existing_nodes_no_duplicates():
 
 def test_webhook_trigger_accepts_post_multipart():
     data = _load_workflow()
-    webhook = _nodes_by_name(data)["Webhook: Invoice Upload"]
+    webhook = _nodes_by_name(data)[WEBHOOK_NODE]
     assert webhook["type"] == "n8n-nodes-base.webhook"
     assert webhook["parameters"]["httpMethod"] == "POST"
     assert webhook["parameters"]["responseMode"] == "responseNode"
@@ -102,17 +110,17 @@ def test_webhook_trigger_accepts_post_multipart():
 
 def test_run_context_created_before_any_http_call():
     data = _load_workflow()
-    # Build Run Context must be the webhook's immediate next node -- the
+    # Build run context must be the webhook's immediate next node -- the
     # correlation ID has to exist before either HTTP node runs.
-    first_hop = data["connections"]["Webhook: Invoice Upload"]["main"][0][0]["node"]
-    assert first_hop == "Build Run Context"
-    code = _nodes_by_name(data)["Build Run Context"]["parameters"]["jsCode"]
+    first_hop = data["connections"][WEBHOOK_NODE]["main"][0][0]["node"]
+    assert first_hop == RUN_CONTEXT_NODE
+    code = _nodes_by_name(data)[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
     assert "correlationId" in code
 
 
 def test_organization_id_only_defaults_under_explicit_demo_mode():
     data = _load_workflow()
-    code = _nodes_by_name(data)["Build Run Context"]["parameters"]["jsCode"]
+    code = _nodes_by_name(data)[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
     assert "demoModeRequested" in code
     assert '"unternehmen-x-demo"' in code
     # The default must be conditioned on demoModeRequested, not unconditional.
@@ -149,7 +157,7 @@ def test_4xx_and_5xx_responses_are_never_retried_only_classified():
     responsible for 4xx/5xx -- and it must say so explicitly, not silently
     retry a deterministic input/contract error."""
     data = _load_workflow()
-    code = _nodes_by_name(data)["Classify Process Response"]["parameters"]["jsCode"]
+    code = _nodes_by_name(data)[CLASSIFY_RESPONSE_NODE]["parameters"]["jsCode"]
     assert "Not retried" in code
     assert "input/contract error" in code
 
@@ -164,7 +172,7 @@ def test_api_urls_are_configurable_via_env_expression():
 
 def test_organization_id_sent_dynamically_not_hardcoded():
     data = _load_workflow()
-    process_node = _nodes_by_name(data)["POST /v1/invoices/process"]
+    process_node = _nodes_by_name(data)["03.1 Run DigiTax controls"]
     params = process_node["parameters"]["bodyParameters"]["parameters"]
     org_param = next(p for p in params if p["name"] == "organizationId")
     assert org_param["value"].startswith("={{"), "organizationId must come from run context, not a literal"
@@ -174,7 +182,7 @@ def test_organization_id_sent_dynamically_not_hardcoded():
 
 def test_explicit_technical_review_route_distinct_from_unknown_fallback():
     data = _load_workflow()
-    switch_node = _nodes_by_name(data)["Status Routing"]
+    switch_node = _nodes_by_name(data)[STATUS_ROUTING_NODE]
     rule_values = {
         cond["rightValue"]
         for rule in switch_node["parameters"]["rules"]["values"]
@@ -185,7 +193,7 @@ def test_explicit_technical_review_route_distinct_from_unknown_fallback():
     )
     assert switch_node["parameters"]["options"]["fallbackOutput"] == "extra"
 
-    branches = data["connections"]["Status Routing"]["main"]
+    branches = data["connections"][STATUS_ROUTING_NODE]["main"]
     assert len(branches) == 4
     targets = [b[0]["node"] for b in branches]
     assert targets == list(REVIEW_NODES)
@@ -202,33 +210,33 @@ def test_all_four_review_terminal_nodes_exist_and_are_noops():
 
 def test_every_failure_and_success_path_converges_on_single_response_builder():
     """No duplicated respond-to-browser or routing logic: every payload
-    source feeds the same Build Browser Response node, which feeds the same
-    Respond to Webhook node, which feeds the same Status Routing switch."""
+    source feeds the same control-report builder node, which feeds the same
+    browser-response node, which feeds the same status-routing switch."""
     data = _load_workflow()
     payload_sources = (
-        "Build Invalid Upload Payload",
-        "Build Technical Failure Payload (Capabilities)",
-        "Build Capability Gate Failure Payload",
-        "Classify Process Response",
-        "Build Technical Failure Payload (Process Invoice)",
+        "01.5 Handle invalid upload",
+        "02.3 Handle capabilities failure",
+        "02.5 Handle capability gate failure",
+        "03.2 Classify controls response",
+        "03.3 Handle controls-call failure",
     )
     for source in payload_sources:
         targets = {edge["node"] for branch in data["connections"][source]["main"] for edge in branch}
-        assert targets == {"Build Browser Response"}, f"{source!r} must feed Build Browser Response"
+        assert targets == {BUILD_REPORT_NODE}, f"{source!r} must feed {BUILD_REPORT_NODE!r}"
 
-    assert data["connections"]["Build Browser Response"]["main"][0][0]["node"] == "Respond to Webhook"
-    assert data["connections"]["Respond to Webhook"]["main"][0][0]["node"] == "Status Routing"
+    assert data["connections"][BUILD_REPORT_NODE]["main"][0][0]["node"] == RESPOND_NODE
+    assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
 
 
 def test_browser_response_is_html_and_never_requires_raw_json_inspection():
     data = _load_workflow()
-    respond_node = _nodes_by_name(data)["Respond to Webhook"]
+    respond_node = _nodes_by_name(data)[RESPOND_NODE]
     assert respond_node["parameters"]["respondWith"] == "text"
     headers = respond_node["parameters"]["options"]["responseHeaders"]["entries"]
     content_type = next(h["value"] for h in headers if h["name"] == "Content-Type")
     assert "text/html" in content_type
 
-    builder_code = _nodes_by_name(data)["Build Browser Response"]["parameters"]["jsCode"]
+    builder_code = _nodes_by_name(data)[BUILD_REPORT_NODE]["parameters"]["jsCode"]
     for expected_field in ("invoiceNumber", "totals", "correlationId", "controls"):
         assert expected_field in builder_code, f"response HTML must surface {expected_field!r}"
 

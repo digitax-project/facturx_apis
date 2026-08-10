@@ -7,10 +7,12 @@
 .DESCRIPTION
   Wraps docker-compose.phase1-upload-demo.yml so start/stop/smoke-test
   happen in the right order: bring the stack up, wait for both real health
-  endpoints (never assume "container started" means "ready"), import both
-  workflows idempotently (n8n's CLI import upserts by the workflow JSON's
-  own "id" field -- reimporting never creates a duplicate), then optionally
-  run a smoke test and save sanitized evidence.
+  endpoints (never assume "container started" means "ready"), import all
+  four workflows idempotently (n8n's CLI import upserts by the workflow
+  JSON's own "id" field -- reimporting never creates a duplicate), publish
+  only Upload and Batch Item so their webhooks go live, verify Structured
+  Regression and Flow 1b (concept, credentials pending) stay inactive, then
+  optionally run a smoke test and save sanitized evidence.
 
   Reset is a separate, explicitly confirmed action. It never runs as part
   of Start/Stop, and it re-verifies the exact volume name before removing
@@ -50,6 +52,16 @@ $N8nHealthUrl = "http://localhost:5679/healthz"
 $RegressionWorkflowId = "digitax-invoice-phase1-structured-demo"
 $UploadWorkflowId = "digitax-invoice-phase1-upload-demo"
 $BatchWorkflowId = "digitax-invoice-phase1-batch-item"
+$Flow1bWorkflowId = "digitax-invoice-phase1-flow1b-pdf-ocr"
+
+# Workflow ids are deterministic and unchanged by the 2026-08-10
+# final-demo-ui renaming round; only display names and export filenames
+# changed (see examples/n8n/README.md's naming table). Re-importing the
+# same id always updates in place, never creates a duplicate.
+$StructuredRegressionFile = "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json"
+$UploadFile = "digitax_invoice_phase1_flow1a_upload_v1_0_0.json"
+$BatchItemFile = "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json"
+$Flow1bFile = "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json"
 
 $EvidenceDir = [System.IO.Path]::GetFullPath((Join-Path $N8nDir "..\..\..\..\..\output\bpmn\renders\versions\digitax_flow01_n8n\upload-automation\review_evidence"))
 
@@ -110,7 +122,7 @@ function Assert-NoDuplicateWorkflows {
         throw "n8n list:workflow failed (exit $LASTEXITCODE):`n$listOutput"
     }
     Write-Host $listOutput
-    foreach ($id in @($RegressionWorkflowId, $UploadWorkflowId, $BatchWorkflowId)) {
+    foreach ($id in @($RegressionWorkflowId, $UploadWorkflowId, $BatchWorkflowId, $Flow1bWorkflowId)) {
         $idMatches = @($listOutput | Select-String -SimpleMatch $id)
         if ($idMatches.Count -gt 1) {
             throw "Duplicate workflow detected for id $id ($($idMatches.Count) entries) -- import is not idempotent"
@@ -119,7 +131,30 @@ function Assert-NoDuplicateWorkflows {
             throw "Expected workflow id $id not found after import"
         }
     }
-    Write-Host "No duplicate workflows: all three demo workflow ids appear exactly once."
+    Write-Host "No duplicate workflows: all four demo workflow ids appear exactly once."
+}
+
+function Assert-CorrectActiveState {
+    # Required policy (2026-08-10 final-demo-ui round): only Upload and
+    # Batch (+ its Batch Item subworkflow) are active. Structured
+    # Regression stays inactive (CI/regression helper only, triggered via
+    # `n8n execute`, never a live webhook). Flow 1b stays inactive --
+    # concept-only, credentials/API convergence pending, must never
+    # receive live traffic.
+    $activeOutput = docker exec $N8nContainer n8n list:workflow --active=true 2>&1
+    $inactiveOutput = docker exec $N8nContainer n8n list:workflow --active=false 2>&1
+
+    foreach ($id in @($UploadWorkflowId, $BatchWorkflowId)) {
+        if (-not ($activeOutput | Select-String -SimpleMatch $id)) {
+            throw "Expected $id to be active, but it is not -- demo webhook would not respond"
+        }
+    }
+    foreach ($id in @($RegressionWorkflowId, $Flow1bWorkflowId)) {
+        if (-not ($inactiveOutput | Select-String -SimpleMatch $id)) {
+            throw "Expected $id to be inactive, but it is active -- Flow 1b and the regression helper must never receive live traffic"
+        }
+    }
+    Write-Host "Active-state policy confirmed: Upload + Batch Item active; Structured Regression + Flow 1b inactive."
 }
 
 switch ($Action) {
@@ -131,11 +166,13 @@ switch ($Action) {
         Wait-ForHealth -Url $ApiHealthUrl -Label "Factur-X Phase 1 API"
         Wait-ForHealth -Url $N8nHealthUrl -Label "n8n 2.33.7"
 
-        Invoke-N8nImport -WorkflowFileName "digitax_invoice_phase1_structured_demo.json"
-        Invoke-N8nImport -WorkflowFileName "digitax_invoice_phase1_upload_demo.json"
-        Invoke-N8nImport -WorkflowFileName "digitax_invoice_phase1_batch_item.json"
+        Invoke-N8nImport -WorkflowFileName $StructuredRegressionFile
+        Invoke-N8nImport -WorkflowFileName $UploadFile
+        Invoke-N8nImport -WorkflowFileName $BatchItemFile
+        Invoke-N8nImport -WorkflowFileName $Flow1bFile
         Assert-NoDuplicateWorkflows
         Publish-DemoWebhooks
+        Assert-CorrectActiveState
 
         Write-Host ""
         Write-Host "Stack is up:"
@@ -144,6 +181,7 @@ switch ($Action) {
         Write-Host "  Batch UI:    http://localhost:6970/demo/batch"
         Write-Host "  API:         http://localhost:6970 (host) / http://api:6969 (container network)"
         Write-Host "  Volume:      $VolumeName (preserved across Stop)"
+        Write-Host "  Flow 1b:     imported inactive (concept only, credentials pending) -- not part of the demo"
     }
 
     "Stop" {
@@ -193,9 +231,9 @@ switch ($Action) {
         # boundary) -- decodes the same already-accepted embedded XML the
         # regression demo already carries, into a throwaway temp file only
         # for the duration of this check.
-        $structuredWorkflowPath = Join-Path $N8nDir "digitax_invoice_phase1_structured_demo.json"
+        $structuredWorkflowPath = Join-Path $N8nDir $StructuredRegressionFile
         $wf = Get-Content -Raw -Path $structuredWorkflowPath | ConvertFrom-Json
-        $selectNode = $wf.nodes | Where-Object { $_.name -eq "Select Invoice (Demo Fixture)" }
+        $selectNode = $wf.nodes | Where-Object { $_.name -eq "01.2 Load demo fixture" }
         if (-not ($selectNode.parameters.jsCode -match 'const demoInvoiceBase64 = "([^"]+)"')) {
             throw "Could not locate the embedded demo invoice base64 in $structuredWorkflowPath"
         }

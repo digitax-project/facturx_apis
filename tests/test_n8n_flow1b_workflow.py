@@ -1,4 +1,6 @@
-"""Regression guard for examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr.json.
+"""Regression guard for
+examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json
+("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0").
 
 Structural checks plus real execution of the two business-logic-bearing Code
 nodes (ORG-001 evaluation, status aggregation) via Node.js -- this workflow
@@ -19,7 +21,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_flow1b_pdf_ocr.json"
+    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json"
 )
 INTAKE_WORKFLOW_PATH = (
     Path(__file__).parent.parent / "examples" / "n8n" / "digitax_invoice_intake.json"
@@ -27,19 +29,64 @@ INTAKE_WORKFLOW_PATH = (
 EXAMPLES_N8N_DIR = Path(__file__).parent.parent / "examples" / "n8n"
 
 EXPECTED_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
-EXPECTED_WORKFLOW_NAME = "DigiTax Flow 1b - PDF OCR/LLM"
+EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0"
 
+# Node name mapping (2026-08-10, final-demo-ui round): every node was
+# renamed to a short, action-oriented, phase-prefixed name, consistent with
+# the naming scheme used in every other workflow in this project. These
+# constants are the single place that mapping is recorded for this test file.
+WEBHOOK_NODE = "01.1 Receive PDF upload"
+RUN_CONTEXT_NODE = "01.2 Build run context"
+FIX_BASE64_NODE = "02.1 Encode PDF for OCR"
+GEMINI_REQUEST_NODE = "02.2 Build OCR/LLM request"
+GEMINI_HTTP_NODE = "02.3 Run OCR/LLM extraction (Gemini)"
+GEMINI_PARSER_NODE = "02.5 Parse OCR/LLM output"
+ORG001_NODE = "03.1 Run DigiTax controls (concept)"
+BUILD_SUMMARY_NODE = "04.1 Build control report"
+BUILD_RESPONSE_NODE = "04.2 Render control report"
+RESPOND_NODE = "04.3 Respond to browser"
+STATUS_ROUTING_NODE = "04.4 Route by review status"
+
+# "02.2 Build OCR/LLM request" (Build Gemini Request in the historical
+# workflow) is deliberately NOT in this list: its prompt text was corrected
+# (2026-08-10, final-demo-ui round) to remove the master-data leak the
+# historical workflow had -- see
+# test_build_gemini_request_prompt_has_no_master_data_leak below and the
+# node's own "notes" field for why it's the one intentional divergence from
+# byte-for-byte reuse.
 REUSED_OCR_NODE_NAMES = (
-    "fix base64",
-    "Build Gemini Request",
-    "File-Based OCR with Gemini 2.5",
-    "Gemini Output Parser",
+    FIX_BASE64_NODE,
+    GEMINI_HTTP_NODE,
+    GEMINI_PARSER_NODE,
 )
+# The historical digitax_invoice_intake.json node names these map onto.
+INTAKE_NODE_NAMES = {
+    FIX_BASE64_NODE: "fix base64",
+    GEMINI_HTTP_NODE: "File-Based OCR with Gemini 2.5",
+    GEMINI_PARSER_NODE: "Gemini Output Parser",
+}
+
+# Values that must never appear in the OCR prompt -- if the model is told
+# the expected answer in advance, ORG-001's downstream comparison against
+# that same master data is meaningless.
+MASTER_DATA_LEAK_PATTERNS = [
+    re.compile(r"Unternehmen X", re.IGNORECASE),
+    re.compile(r"Unternehmen Y", re.IGNORECASE),
+    re.compile(r"Musterweg"),
+    re.compile(r"Industriestrasse"),
+    re.compile(r"04109"),
+    re.compile(r"01067"),
+    re.compile(r"Leipzig"),
+    re.compile(r"Dresden"),
+    re.compile(r"DE450224353"),
+    re.compile(r"\bexpected\b", re.IGNORECASE),
+    re.compile(r"\bapproved\b", re.IGNORECASE),
+]
 REVIEW_NODES = (
-    "Human Review - Standard",
-    "Human Review - Prioritized",
-    "Human Review - Technical",
-    "Human Review - Unknown (fallback)",
+    "05.1 Human review - standard",
+    "05.2 Human review - prioritized",
+    "05.3 Human review - technical",
+    "05.4 Human review - unknown",
 )
 
 FORBIDDEN_PATTERNS = [
@@ -127,18 +174,22 @@ def test_workflow_has_no_forbidden_content():
 
 
 def test_ocr_nodes_reused_verbatim_from_intake_workflow():
-    """The four proven OCR nodes must not have their extraction logic
+    """Three of the four OCR nodes must not have their extraction logic
     replaced -- same node id, same jsCode/core parameters as the historical
-    digitax_invoice_intake.json. The only permitted addition is fail-safe
-    error-handling wiring (onError), never a logic change."""
+    digitax_invoice_intake.json (under its own, unrenamed node names -- only
+    Flow 1b's copies were renamed). The only permitted addition is fail-safe
+    error-handling wiring (onError), never a logic change. "Build OCR/LLM
+    request" is intentionally excluded here -- see
+    test_build_gemini_request_prompt_has_no_master_data_leak."""
     flow1b_nodes = _nodes_by_name(_load_workflow())
     intake_nodes = _nodes_by_name(_load_intake_workflow())
 
     for name in REUSED_OCR_NODE_NAMES:
+        intake_name = INTAKE_NODE_NAMES[name]
         assert name in flow1b_nodes, f"missing reused node {name!r}"
-        assert name in intake_nodes, f"reference node {name!r} missing from intake workflow"
+        assert intake_name in intake_nodes, f"reference node {intake_name!r} missing from intake workflow"
         flow1b_node = flow1b_nodes[name]
-        intake_node = intake_nodes[name]
+        intake_node = intake_nodes[intake_name]
         assert flow1b_node["id"] == intake_node["id"], f"{name!r} node id must be unchanged"
 
         if "jsCode" in flow1b_node.get("parameters", {}):
@@ -157,19 +208,54 @@ def test_ocr_nodes_reused_verbatim_from_intake_workflow():
 
     # The one documented, deliberate addition: Gemini Output Parser gets
     # fail-safe error routing that the historical workflow never had.
-    assert flow1b_nodes["Gemini Output Parser"].get("onError") == "continueErrorOutput"
-    assert "onError" not in intake_nodes["Gemini Output Parser"]
+    assert flow1b_nodes[GEMINI_PARSER_NODE].get("onError") == "continueErrorOutput"
+    assert "onError" not in intake_nodes[INTAKE_NODE_NAMES[GEMINI_PARSER_NODE]]
+
+
+def test_build_gemini_request_prompt_has_no_master_data_leak():
+    """The OCR prompt must extract only what is visible in the invoice.
+    Master data (expected buyer, approved addresses, VAT IDs, or the word
+    "expected"/"approved" as a hint) may only be used downstream, by the
+    control logic, after extraction -- never fed to the model in advance.
+    This test would have caught the original digitax_invoice_intake.json-
+    derived prompt, which hardcoded exactly these values."""
+    data = _load_workflow()
+    prompt_code = _nodes_by_name(data)[GEMINI_REQUEST_NODE]["parameters"]["jsCode"]
+    for pattern in MASTER_DATA_LEAK_PATTERNS:
+        assert not pattern.search(prompt_code), (
+            f"master-data reference value {pattern.pattern!r} leaked into the "
+            "OCR prompt -- extraction must not know the expected answer"
+        )
+    # A sanity check that this test isn't vacuously passing against an
+    # empty/wrong node: the corrected prompt must still ask the model to
+    # distinguish buyer from seller using the document itself.
+    assert "document" in prompt_code.lower()
+    assert "VAT-ID (Buyer)" in prompt_code and "VAT-ID (Seller)" in prompt_code
+
+
+def test_intake_workflow_prompt_still_has_the_original_leak_unremediated():
+    """Documents, on purpose, that digitax_invoice_intake.json itself is
+    NOT corrected -- it remains an untouched historical reference (per the
+    Flow 1b task's original instruction), so its prompt still contains the
+    master-data leak that Flow 1b's own copy no longer has. If this test
+    ever starts failing because someone "fixed" the historical file, that's
+    a sign this test (and its docstring) need to be revisited deliberately,
+    not that the fix should be silently reverted."""
+    intake_nodes = _nodes_by_name(_load_intake_workflow())
+    intake_prompt = intake_nodes["Build Gemini Request"]["parameters"]["jsCode"]
+    assert "Unternehmen X" in intake_prompt
 
 
 def test_fix_base64_binary_property_matches_run_context_output():
-    """fix base64 is reused with its hardcoded binaryPropertyName='data' --
-    Build Run Context must attach the upload under that same property name,
-    not the 'invoiceFile' name used by the unrelated Flow 1a upload demo."""
+    """The reused OCR node is reused with its hardcoded
+    binaryPropertyName='data' -- Build run context must attach the upload
+    under that same property name, not the 'invoiceFile' name used by the
+    unrelated Flow 1a upload demo."""
     data = _load_workflow()
     nodes = _nodes_by_name(data)
-    fix_base64_code = nodes["fix base64"]["parameters"]["jsCode"]
+    fix_base64_code = nodes[FIX_BASE64_NODE]["parameters"]["jsCode"]
     assert "binaryPropertyName = 'data'" in fix_base64_code
-    run_context_code = nodes["Build Run Context"]["parameters"]["jsCode"]
+    run_context_code = nodes[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
     assert "item.binary.data" in run_context_code
 
 
@@ -194,7 +280,7 @@ def test_workflow_connections_reference_existing_nodes_no_duplicates():
 
 def test_org_001_control_naming_matches_spec():
     data = _load_workflow()
-    code = _nodes_by_name(data)["Evaluate ORG-001 (temporary mirror)"]["parameters"]["jsCode"]
+    code = _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
     assert 'CONTROL_ID = "ORG-001"' in code
     assert 'TITLE = "Stammdatenabgleich Rechnungsempfänger"' in code
     assert "zugferd" not in code.lower() and "gateway" not in code.lower(), (
@@ -204,7 +290,7 @@ def test_org_001_control_naming_matches_spec():
 
 def test_org_001_compares_exactly_the_five_required_buyer_fields():
     data = _load_workflow()
-    code = _nodes_by_name(data)["Evaluate ORG-001 (temporary mirror)"]["parameters"]["jsCode"]
+    code = _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
     for field in (
         "invoice.buyer.name",
         "invoice.buyer.address.street",
@@ -217,13 +303,13 @@ def test_org_001_compares_exactly_the_five_required_buyer_fields():
 
 def test_confidence_threshold_matches_api_default():
     data = _load_workflow()
-    code = _nodes_by_name(data)["Evaluate ORG-001 (temporary mirror)"]["parameters"]["jsCode"]
+    code = _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
     assert "THRESHOLD = 0.70" in code
 
 
 def test_explicit_technical_review_route_distinct_from_unknown_fallback():
     data = _load_workflow()
-    switch_node = _nodes_by_name(data)["Status Routing"]
+    switch_node = _nodes_by_name(data)[STATUS_ROUTING_NODE]
     rule_values = {
         cond["rightValue"]
         for rule in switch_node["parameters"]["rules"]["values"]
@@ -232,7 +318,7 @@ def test_explicit_technical_review_route_distinct_from_unknown_fallback():
     assert {"standard_review", "prioritized_review", "technical_review"} <= rule_values
     assert switch_node["parameters"]["options"]["fallbackOutput"] == "extra"
 
-    branches = data["connections"]["Status Routing"]["main"]
+    branches = data["connections"][STATUS_ROUTING_NODE]["main"]
     assert len(branches) == 4
     targets = [b[0]["node"] for b in branches]
     assert targets == list(REVIEW_NODES)
@@ -250,23 +336,23 @@ def test_all_four_review_terminal_nodes_exist_and_are_noops():
 def test_every_failure_and_success_path_converges_on_single_response_builder():
     data = _load_workflow()
     payload_sources = (
-        "Build Invalid Upload Payload",
-        "Build Unknown Organization Payload",
-        "Build OCR Service Failure Payload",
-        "Build OCR Parse Failure Payload",
-        "Build Review Summary",
+        "01.5 Handle invalid upload",
+        "01.8 Handle unknown organization",
+        "02.4 Handle OCR service failure",
+        "02.6 Handle OCR parse failure",
+        BUILD_SUMMARY_NODE,
     )
     for source in payload_sources:
         targets = {edge["node"] for branch in data["connections"][source]["main"] for edge in branch}
-        assert targets == {"Build Browser Response"}, f"{source!r} must feed Build Browser Response"
+        assert targets == {BUILD_RESPONSE_NODE}, f"{source!r} must feed {BUILD_RESPONSE_NODE!r}"
 
-    assert data["connections"]["Build Browser Response"]["main"][0][0]["node"] == "Respond to Webhook"
-    assert data["connections"]["Respond to Webhook"]["main"][0][0]["node"] == "Status Routing"
+    assert data["connections"][BUILD_RESPONSE_NODE]["main"][0][0]["node"] == RESPOND_NODE
+    assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
 
 
 def test_browser_response_is_html():
     data = _load_workflow()
-    respond_node = _nodes_by_name(data)["Respond to Webhook"]
+    respond_node = _nodes_by_name(data)[RESPOND_NODE]
     assert respond_node["parameters"]["respondWith"] == "text"
     headers = respond_node["parameters"]["options"]["responseHeaders"]["entries"]
     content_type = next(h["value"] for h in headers if h["name"] == "Content-Type")
@@ -277,7 +363,7 @@ def test_temporary_implementation_is_disclosed_in_the_response():
     """Prompt item 6: never fake API reuse -- the browser-facing result
     itself must say this is a temporary n8n-side implementation."""
     data = _load_workflow()
-    code = _nodes_by_name(data)["Build Browser Response"]["parameters"]["jsCode"]
+    code = _nodes_by_name(data)[BUILD_RESPONSE_NODE]["parameters"]["jsCode"]
     assert "temporary n8n-side implementation" in code
     assert "cannot yet consume" in code or "no injection seam" in code
 
@@ -338,7 +424,7 @@ process.stdout.write(JSON.stringify(result[0].json));
 
 def _org001_code() -> str:
     data = _load_workflow()
-    return _nodes_by_name(data)["Evaluate ORG-001 (temporary mirror)"]["parameters"]["jsCode"]
+    return _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
@@ -443,7 +529,7 @@ def test_org001_real_execution_fails_closed_on_missing_field():
 
 def _aggregation_code() -> str:
     data = _load_workflow()
-    return _nodes_by_name(data)["Build Review Summary"]["parameters"]["jsCode"]
+    return _nodes_by_name(data)[BUILD_SUMMARY_NODE]["parameters"]["jsCode"]
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")

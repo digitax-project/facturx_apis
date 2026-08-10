@@ -1,4 +1,6 @@
-"""Regression guard for examples/n8n/digitax_invoice_phase1_structured_demo.json.
+"""Regression guard for
+examples/n8n/digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json
+("DigiTax | Invoice Phase 1 | Flow 1a | Structured Regression | v1.0.0").
 
 This is a structural check, not a live n8n import -- examples/n8n/README.md
 records the real import/execution evidence (via the pinned n8nio/n8n:2.33.6
@@ -17,7 +19,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_structured_demo.json"
+    / "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json"
 )
 
 FORBIDDEN_PATTERNS = [
@@ -26,11 +28,17 @@ FORBIDDEN_PATTERNS = [
     (re.compile(r"vn ?impex", re.IGNORECASE), "the real organization name"),
 ]
 
-HTTP_NODE_NAMES = ("GET /capabilities", "POST /v1/invoices/process")
+HTTP_NODE_NAMES = ("02.1 Read API capabilities", "03.1 Run DigiTax controls")
 FAILURE_NODE_NAMES = {
-    "GET /capabilities": "API Failure - Capabilities",
-    "POST /v1/invoices/process": "API Failure - Process Invoice",
+    "02.1 Read API capabilities": "02.3 Handle capabilities failure",
+    "03.1 Run DigiTax controls": "03.2 Handle controls-call failure",
 }
+STATUS_ROUTING_NODE = "04.2 Route by review status"
+REVIEW_NODES = (
+    "05.1 Human review - standard",
+    "05.2 Human review - prioritized",
+    "05.3 Human review - unclassified",
+)
 
 
 def _load_workflow() -> dict:
@@ -139,7 +147,7 @@ def test_api_failure_nodes_feed_into_status_routing():
     for failure_name in FAILURE_NODE_NAMES.values():
         branches = data["connections"][failure_name]["main"]
         targets = {edge["node"] for branch in branches for edge in branch}
-        assert targets == {"Status Routing"}, (
+        assert targets == {STATUS_ROUTING_NODE}, (
             f"{failure_name!r} must route through the existing Status Routing switch, "
             "not duplicate its logic"
         )
@@ -148,9 +156,9 @@ def test_api_failure_nodes_feed_into_status_routing():
 def test_technical_review_routing_value_falls_through_to_fallback():
     """The failure nodes emit routing="technical_review", which must not match
     either explicit Switch rule -- it must fall through to the fallback output,
-    landing on Human Review - Unclassified (fallback), not a specific queue."""
+    landing on the unclassified human-review node, not a specific queue."""
     data = _load_workflow()
-    switch_node = _nodes_by_name(data)["Status Routing"]
+    switch_node = _nodes_by_name(data)[STATUS_ROUTING_NODE]
     rule_values = {
         cond["rightValue"]
         for rule in switch_node["parameters"]["rules"]["values"]
@@ -163,24 +171,16 @@ def test_technical_review_routing_value_falls_through_to_fallback():
 def test_both_human_review_routes_and_fallback_exist():
     data = _load_workflow()
     name_set = {n["name"] for n in data["nodes"]}
-    for required in (
-        "Human Review - Standard",
-        "Human Review - Prioritized",
-        "Human Review - Unclassified (fallback)",
-    ):
+    for required in REVIEW_NODES:
         assert required in name_set, f"missing required terminal node {required!r}"
 
 
 def test_status_routing_has_three_outputs_wired_to_review_nodes():
     data = _load_workflow()
-    branches = data["connections"]["Status Routing"]["main"]
+    branches = data["connections"][STATUS_ROUTING_NODE]["main"]
     assert len(branches) == 3
     targets = [b[0]["node"] for b in branches]
-    assert targets == [
-        "Human Review - Standard",
-        "Human Review - Prioritized",
-        "Human Review - Unclassified (fallback)",
-    ]
+    assert targets == list(REVIEW_NODES)
 
 
 def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
@@ -191,5 +191,5 @@ def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
         assert not any(term in lowered for term in forbidden_terms), (
             f"node {node['name']!r} looks like it goes past the Phase 1 human-review boundary"
         )
-    terminal_types = {n["type"] for n in data["nodes"] if n["name"].startswith("Human Review")}
+    terminal_types = {n["type"] for n in data["nodes"] if n["name"] in REVIEW_NODES}
     assert terminal_types == {"n8n-nodes-base.noOp"}, "human-review endpoints must be no-ops"
