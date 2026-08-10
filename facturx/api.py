@@ -23,7 +23,7 @@ from .phase1.api import router as phase1_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("facturx-api")
 
-API_VERSION = "1.0.0"
+API_VERSION = "1.0.1"
 
 # Show all recognized XML filenames at startup
 logger.info(f"Supported XML filenames: {ALL_FILENAMES}")

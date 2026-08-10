@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.1 - 2026-08-10
 
 - Corrected the unsupported documentation claim about a Factur-X 1.09.2 /
   ZUGFeRD 2.5.2 release. Official FeRD/FNFE-MPE sources checked on 2026-08-10
