@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitax.example/schemas/canonical-invoice-1.0.0.json",
+  "title": "DigiTax canonical invoice",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "document", "extraction", "invoice", "fieldEvidence"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceType", "filename", "mimeType", "sha256", "detectedFormat"],
+      "properties": {
+        "sourceType": { "enum": ["hybrid_pdf", "plain_pdf", "xml"] },
+        "filename": { "type": "string", "minLength": 1 },
+        "mimeType": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "detectedFormat": { "enum": ["factur-x", "xrechnung", "pdf", "unknown"] },
+        "formatVersion": { "type": ["string", "null"] },
+        "profile": { "type": ["string", "null"] }
+      }
+    },
+    "extraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "status", "overallConfidence"],
+      "properties": {
+        "method": { "enum": ["embedded_xml", "direct_xml", "ocr_llm"] },
+        "status": { "enum": ["completed", "partial", "failed"] },
+        "overallConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "adapterVersion": { "type": ["string", "null"] },
+        "warnings": { "type": "array", "items": { "type": "string" }, "default": [] }
+      }
+    },
+    "invoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invoiceNumber", "issueDate", "currency", "supplier", "buyer", "supply", "totals", "lineItems"],
+      "properties": {
+        "invoiceNumber": { "type": ["string", "null"] },
+        "issueDate": { "type": ["string", "null"], "format": "date" },
+        "typeCode": { "type": ["string", "null"] },
+        "currency": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" },
+        "supplier": { "$ref": "#/$defs/party" },
+        "buyer": { "$ref": "#/$defs/party" },
+        "supply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["description", "deliveryDate", "periodStart", "periodEnd"],
+          "properties": {
+            "description": { "type": ["string", "null"] },
+            "deliveryDate": { "type": ["string", "null"], "format": "date" },
+            "periodStart": { "type": ["string", "null"], "format": "date" },
+            "periodEnd": { "type": ["string", "null"], "format": "date" }
+          }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lineNet", "taxBasis", "taxAmount", "grossAmount", "payableAmount"],
+          "properties": {
+            "lineNet": { "type": ["number", "null"] },
+            "taxBasis": { "type": ["number", "null"] },
+            "taxAmount": { "type": ["number", "null"] },
+            "grossAmount": { "type": ["number", "null"] },
+            "payableAmount": { "type": ["number", "null"] }
+          }
+        },
+        "lineItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description", "quantity", "netAmount", "vatRate"],
+            "properties": {
+              "description": { "type": ["string", "null"] },
+              "quantity": { "type": ["number", "null"] },
+              "netAmount": { "type": ["number", "null"] },
+              "vatRate": { "type": ["number", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "fieldEvidence": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/evidence" }
+    }
+  },
+  "$defs": {
+    "party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "address", "taxId", "vatId"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "address": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["street", "postalCode", "city", "countryCode"],
+          "properties": {
+            "street": { "type": ["string", "null"] },
+            "postalCode": { "type": ["string", "null"] },
+            "city": { "type": ["string", "null"] },
+            "countryCode": { "type": ["string", "null"], "pattern": "^[A-Z]{2}$" }
+          }
+        },
+        "taxId": { "type": ["string", "null"] },
+        "vatId": { "type": ["string", "null"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "confidence", "locator"],
+      "properties": {
+        "method": { "enum": ["xml", "ocr", "llm", "derived", "master_data"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "locator": { "type": "string" },
+        "rawValue": { "type": ["string", "number", "boolean", "null"] }
+      }
+    }
+  }
+}
