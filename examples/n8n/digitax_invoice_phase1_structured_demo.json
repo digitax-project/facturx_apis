@@ -38,6 +38,10 @@
       "name": "GET /capabilities",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
       "position": [
         -1060,
         0
@@ -82,9 +86,39 @@
       "name": "POST /v1/invoices/process",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
       "position": [
         -620,
         0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bounded retry on \"GET /capabilities\" is already exhausted by the time\n// this node runs (onError: continueErrorOutput on that node). Build a safe\n// nicht_pruefbar human-review payload instead of letting the execution fail\n// unhandled -- per AGENTS.md, technical failures must retain the failed\n// step, a stable error code, and a correlation ID.\nconst raw = $input.first().json;\nconst explanation =\n  (raw && raw.error && (raw.error.message || raw.error)) ||\n  (raw && raw.message) ||\n  \"The capabilities service did not respond after the bounded retry.\";\n\nconst correlationId =\n  typeof crypto !== \"undefined\" && crypto.randomUUID\n    ? crypto.randomUUID()\n    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;\n\nconst failedStep = \"GET /capabilities\";\nconst errorCode = \"CAPABILITIES_SERVICE_UNAVAILABLE\";\n\nconst summaryLines = [\n  \"Technical failure while contacting the Factur-X Phase 1 API.\",\n  \"\",\n  `Failed step: ${failedStep}`,\n  `Error code: ${errorCode}`,\n  `Correlation ID: ${correlationId}`,\n  `Explanation: ${explanation}`,\n  \"\",\n  \"OVERALL STATUS: nicht_pruefbar (routing: technical_review)\",\n  \"\",\n  \"This is a Phase 1 technical-failure finding for human review only -- it\",\n  \"is not an approval, rejection, booking, payment, or supplier communication.\",\n];\n\nreturn [\n  {\n    json: {\n      reviewSummary: summaryLines.join(\"\\n\"),\n      status: \"nicht_pruefbar\",\n      routing: \"technical_review\",\n      failedStep,\n      errorCode,\n      correlationId,\n      explanation,\n      failedControlCount: null,\n      failedControls: [],\n      reportId: null,\n      runId: null,\n      sourceSha256: null,\n    },\n  },\n];\n"
+      },
+      "id": "b3c0e4a1-6d3f-4a2e-9c8b-5f1d2e7a9c40",
+      "name": "API Failure - Capabilities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1060,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bounded retry on \"POST /v1/invoices/process\" is already exhausted by the\n// time this node runs (onError: continueErrorOutput on that node). Build a\n// safe nicht_pruefbar human-review payload instead of letting the\n// execution fail unhandled -- per AGENTS.md, technical failures must\n// retain the failed step, a stable error code, and a correlation ID.\nconst raw = $input.first().json;\nconst explanation =\n  (raw && raw.error && (raw.error.message || raw.error)) ||\n  (raw && raw.message) ||\n  \"The invoice processing service did not respond after the bounded retry.\";\n\nconst correlationId =\n  typeof crypto !== \"undefined\" && crypto.randomUUID\n    ? crypto.randomUUID()\n    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;\n\nconst failedStep = \"POST /v1/invoices/process\";\nconst errorCode = \"INVOICE_PROCESSING_SERVICE_UNAVAILABLE\";\n\nconst summaryLines = [\n  \"Technical failure while contacting the Factur-X Phase 1 API.\",\n  \"\",\n  `Failed step: ${failedStep}`,\n  `Error code: ${errorCode}`,\n  `Correlation ID: ${correlationId}`,\n  `Explanation: ${explanation}`,\n  \"\",\n  \"OVERALL STATUS: nicht_pruefbar (routing: technical_review)\",\n  \"\",\n  \"This is a Phase 1 technical-failure finding for human review only -- it\",\n  \"is not an approval, rejection, booking, payment, or supplier communication.\",\n];\n\nreturn [\n  {\n    json: {\n      reviewSummary: summaryLines.join(\"\\n\"),\n      status: \"nicht_pruefbar\",\n      routing: \"technical_review\",\n      failedStep,\n      errorCode,\n      correlationId,\n      explanation,\n      failedControlCount: null,\n      failedControls: [],\n      reportId: null,\n      runId: null,\n      sourceSha256: null,\n    },\n  },\n];\n"
+      },
+      "id": "c4d1f5b2-7e40-4b3f-ad9c-601e3f8bad51",
+      "name": "API Failure - Process Invoice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -620,
+        220
       ]
     },
     {
@@ -195,7 +229,7 @@
         40,
         240
       ],
-      "notes": "Safety fallback: an unrecognized routing value also goes to human review, never silently ignored."
+      "notes": "Safety fallback: an unrecognized routing value, and any technical API failure (nicht_pruefbar/technical_review) after bounded retries are exhausted, also goes to human review -- never silently ignored and never an unhandled execution error."
     }
   ],
   "connections": {
@@ -229,6 +263,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "API Failure - Capabilities",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -248,6 +289,35 @@
         [
           {
             "node": "Build Review Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API Failure - Process Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Failure - Capabilities": {
+      "main": [
+        [
+          {
+            "node": "Status Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Failure - Process Invoice": {
+      "main": [
+        [
+          {
+            "node": "Status Routing",
             "type": "main",
             "index": 0
           }
