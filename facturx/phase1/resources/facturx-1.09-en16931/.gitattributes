@@ -1,0 +1,8 @@
+# These are vendor-copied, SHA-256-provenance-pinned upstream artifacts (see
+# PROVENANCE.json). Git's line-ending normalization (core.autocrlf) must
+# never touch them -- it silently corrupted 5 of the 6 files here on a
+# Windows commit (CRLF -> LF), breaking their recorded hashes on any
+# platform/checkout that doesn't happen to reintroduce CRLF. "binary" turns
+# off all text conversion/diffing so the exact upstream bytes are preserved
+# everywhere, matching PROVENANCE.json on every platform.
+* binary

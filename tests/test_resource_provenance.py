@@ -48,7 +48,11 @@ def test_every_manifest_file_exists_and_hash_matches():
 def test_no_extra_undocumented_files_in_resource_directory():
     manifest = _load_manifest()
     documented = {entry["filename"] for entry in manifest["files"]}
+    # PROVENANCE.json itself and .gitattributes (forces these hash-pinned
+    # vendored files to be stored as binary -- see its own comment for why)
+    # are repo-control files, not vendored/hash-tracked artifacts.
     documented.add("PROVENANCE.json")
+    documented.add(".gitattributes")
     on_disk = {p.name for p in RESOURCE_DIR.iterdir() if p.is_file()}
     assert on_disk == documented, (
         f"undocumented files in {RESOURCE_DIR}: {on_disk - documented}"
