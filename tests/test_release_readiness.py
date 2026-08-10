@@ -10,7 +10,7 @@ def test_openapi_exposes_release_version(client):
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
-    assert API_VERSION == "1.0.0"
+    assert API_VERSION == "1.0.1"
     assert response.json()["info"]["version"] == API_VERSION
 
 
