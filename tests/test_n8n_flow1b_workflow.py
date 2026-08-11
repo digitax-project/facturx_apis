@@ -798,6 +798,18 @@ def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
         )
 
     try:
+        # Image acquisition is separated from container startup and given a
+        # much larger, dedicated timeout: a clean CI runner (no local image
+        # cache) can easily take longer than the 60s that's plenty for
+        # starting an already-pulled image. `docker run` below then only
+        # ever has to start a cached image, so it keeps a short timeout --
+        # a real hang there is a genuine problem, not a slow first pull.
+        # Found 2026-08-11: this test's original single 60s timeout on
+        # `docker run` covered both concerns at once and timed out on a
+        # clean GitHub Actions runner during the image pull.
+        pull = _docker("pull", N8N_IMAGE, timeout=300)
+        assert pull.returncode == 0, f"docker pull {N8N_IMAGE} failed: {pull.stderr}"
+
         run = _docker(
             "run", "-d", "--name", container,
             "-p", f"{port}:5678",
@@ -805,6 +817,7 @@ def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
             "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
             "-e", "N8N_DIAG_ENABLED=false",
             N8N_IMAGE,
+            timeout=30,
         )
         assert run.returncode == 0, f"docker run failed: {run.stderr}"
 
@@ -816,8 +829,8 @@ def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
         imp = _docker("exec", container, "n8n", "import:workflow", "--input=/tmp/flow1b.json")
         assert imp.returncode == 0, f"n8n import:workflow failed: {imp.stderr}\n{imp.stdout}"
 
-        act = _docker("exec", container, "n8n", "update:workflow", f"--id={FLOW1B_WORKFLOW_ID}", "--active=true")
-        assert act.returncode == 0, f"n8n update:workflow --active=true failed: {act.stderr}\n{act.stdout}"
+        act = _docker("exec", container, "n8n", "publish:workflow", f"--id={FLOW1B_WORKFLOW_ID}")
+        assert act.returncode == 0, f"n8n publish:workflow failed: {act.stderr}\n{act.stdout}"
 
         # Activation of an already-running instance requires a restart --
         # documented n8n 2.33.7 behavior, not specific to this workflow.
