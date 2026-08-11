@@ -1,13 +1,14 @@
 """Regression guard for
-examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json
-("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0").
+examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json
+("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0").
 
-Structural checks plus real execution of the two business-logic-bearing Code
-nodes (ORG-001 evaluation, status aggregation) via Node.js -- this workflow
-has no live Gemini credentials in CI, so this is the strongest verification
-available short of a real end-to-end run. The coordination handover log
-records the real `n8n import:workflow` evidence against n8nio/n8n:2.33.7
-separately; this test is not a substitute for that.
+Structural checks plus real execution of the business-logic-bearing Code
+nodes (AI-profile resolution, ORG-001 evaluation, status aggregation) via
+Node.js -- this workflow has no live Gemini/local-LLM credentials in CI, so
+this is the strongest verification available short of a real end-to-end run.
+The coordination handover log records the real `n8n import:workflow`
+evidence against n8nio/n8n:2.33.7 separately; this test is not a substitute
+for that.
 """
 import json
 import re
@@ -21,7 +22,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json"
+    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json"
 )
 INTAKE_WORKFLOW_PATH = (
     Path(__file__).parent.parent / "examples" / "n8n" / "digitax_invoice_intake.json"
@@ -29,7 +30,7 @@ INTAKE_WORKFLOW_PATH = (
 EXAMPLES_N8N_DIR = Path(__file__).parent.parent / "examples" / "n8n"
 
 EXPECTED_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
-EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0"
+EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0"
 
 # Node name mapping (2026-08-10, final-demo-ui round): every node was
 # renamed to a short, action-oriented, phase-prefixed name, consistent with
@@ -47,6 +48,18 @@ BUILD_RESPONSE_NODE = "04.2 Render control report"
 RESPOND_NODE = "04.3 Respond to browser"
 STATUS_ROUTING_NODE = "04.4 Route by review status"
 
+# AI-execution-profile nodes (2026-08-11, dev-stack/AI-selection round).
+RESOLVE_AI_PROFILE_NODE = "01.9 Resolve AI execution profile"
+AI_PROFILE_SWITCH_NODE = "01.10 Route by AI profile"
+UNRESOLVED_AI_PROFILE_NODE = "01.11 Handle unresolved AI profile"
+LOCAL_ENCODE_NODE = "02.1L Encode PDF for local OCR"
+LOCAL_REQUEST_NODE = "02.2L Build local OCR/LLM request"
+LOCAL_HTTP_NODE = "02.3L Run OCR/LLM extraction (local)"
+LOCAL_SERVICE_FAILURE_NODE = "02.4L Handle local OCR service failure"
+LOCAL_PARSER_NODE = "02.5L Parse local OCR/LLM output"
+LOCAL_PARSE_FAILURE_NODE = "02.6L Handle local OCR parse failure"
+NORMALIZE_NODE = "02.7 Normalize invoice (concept)"
+
 # "02.2 Build OCR/LLM request" (Build Gemini Request in the historical
 # workflow) is deliberately NOT in this list: its prompt text was corrected
 # (2026-08-10, final-demo-ui round) to remove the master-data leak the
@@ -54,10 +67,16 @@ STATUS_ROUTING_NODE = "04.4 Route by review status"
 # test_build_gemini_request_prompt_has_no_master_data_leak below and the
 # node's own "notes" field for why it's the one intentional divergence from
 # byte-for-byte reuse.
+# "02.5 Parse OCR/LLM output" (Gemini Output Parser in the historical
+# workflow) is ALSO deliberately NOT in this list as of the 2026-08-11
+# dev-stack/AI-selection round: it now emits an additional `aiMeta` field so
+# its output converges with the local lane's parser -- see
+# test_cloud_parser_extends_intake_logic_without_replacing_it below, which
+# checks the reused parsing/normalization logic is still byte-for-byte
+# present, just with one addition appended.
 REUSED_OCR_NODE_NAMES = (
     FIX_BASE64_NODE,
     GEMINI_HTTP_NODE,
-    GEMINI_PARSER_NODE,
 )
 # The historical digitax_invoice_intake.json node names these map onto.
 INTAKE_NODE_NAMES = {
@@ -212,6 +231,34 @@ def test_ocr_nodes_reused_verbatim_from_intake_workflow():
     assert "onError" not in intake_nodes[INTAKE_NODE_NAMES[GEMINI_PARSER_NODE]]
 
 
+def test_cloud_parser_extends_intake_logic_without_replacing_it():
+    """02.5 Parse OCR/LLM output ("Gemini Output Parser" in the historical
+    workflow) is excluded from REUSED_OCR_NODE_NAMES because it now also
+    emits `aiMeta` (2026-08-11, dev-stack/AI-selection round). This test
+    checks the underlying parsing/normalization logic -- markdown-fence
+    stripping, JSON parsing, the fixed 14-field shape -- is still present
+    unchanged, i.e. this was an addition, not a rewrite."""
+    flow1b_nodes = _nodes_by_name(_load_workflow())
+    intake_nodes = _nodes_by_name(_load_intake_workflow())
+    flow1b_code = flow1b_nodes[GEMINI_PARSER_NODE]["parameters"]["jsCode"]
+    intake_code = intake_nodes[INTAKE_NODE_NAMES[GEMINI_PARSER_NODE]]["parameters"]["jsCode"]
+
+    for fn_signature in (
+        "function extractTextFromGeminiResponse(item)",
+        "function stripMarkdownFences(text)",
+        "function ensureField(obj, key)",
+    ):
+        assert fn_signature in flow1b_code
+        assert fn_signature in intake_code
+
+    for field in ("Invoice No", "VAT-ID (Seller)", "VAT-ID (Buyer)", "Name (Buyer)"):
+        assert field in flow1b_code and field in intake_code
+
+    # The documented addition itself.
+    assert "aiMeta" in flow1b_code
+    assert "aiMeta" not in intake_code
+
+
 def test_build_gemini_request_prompt_has_no_master_data_leak():
     """The OCR prompt must extract only what is visible in the invoice.
     Master data (expected buyer, approved addresses, VAT IDs, or the word
@@ -338,8 +385,11 @@ def test_every_failure_and_success_path_converges_on_single_response_builder():
     payload_sources = (
         "01.5 Handle invalid upload",
         "01.8 Handle unknown organization",
+        UNRESOLVED_AI_PROFILE_NODE,
         "02.4 Handle OCR service failure",
         "02.6 Handle OCR parse failure",
+        LOCAL_SERVICE_FAILURE_NODE,
+        LOCAL_PARSE_FAILURE_NODE,
         BUILD_SUMMARY_NODE,
     )
     for source in payload_sources:
@@ -348,6 +398,121 @@ def test_every_failure_and_success_path_converges_on_single_response_builder():
 
     assert data["connections"][BUILD_RESPONSE_NODE]["main"][0][0]["node"] == RESPOND_NODE
     assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
+
+
+def test_both_extraction_lanes_converge_on_shared_normalize_node():
+    """Local and cloud extraction are technically separate paths (own encode/
+    request/HTTP/parse nodes) but must feed the exact same normalize node --
+    this is what makes the two lanes produce one identical canonical
+    contract, per the AI-selection spec."""
+    data = _load_workflow()
+    cloud_targets = {
+        edge["node"] for edge in data["connections"]["02.5 Parse OCR/LLM output"]["main"][0]
+    }
+    local_targets = {
+        edge["node"] for edge in data["connections"][LOCAL_PARSER_NODE]["main"][0]
+    }
+    assert cloud_targets == {NORMALIZE_NODE}
+    assert local_targets == {NORMALIZE_NODE}
+
+
+def test_ai_profile_switch_routes_local_cloud_and_unresolved_separately():
+    data = _load_workflow()
+    switch_node = _nodes_by_name(data)[AI_PROFILE_SWITCH_NODE]
+    rule_values = {
+        cond["rightValue"]
+        for rule in switch_node["parameters"]["rules"]["values"]
+        for cond in rule["conditions"]["conditions"]
+    }
+    assert rule_values == {"local", "cloud"}
+    assert switch_node["parameters"]["options"]["fallbackOutput"] == "extra"
+
+    branches = data["connections"][AI_PROFILE_SWITCH_NODE]["main"]
+    assert len(branches) == 3
+    targets = [b[0]["node"] for b in branches]
+    assert targets == [LOCAL_ENCODE_NODE, "02.1 Encode PDF for OCR", UNRESOLVED_AI_PROFILE_NODE]
+
+
+def test_ai_profile_resolution_never_defaults_unknown_to_cloud():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[RESOLVE_AI_PROFILE_NODE]["parameters"]["jsCode"]
+    assert '"unknown"' in code
+    assert '"local_unavailable"' in code
+    # The only two recognized profile IDs -- anything else must resolve to
+    # "unknown", not silently fall through to a default.
+    assert '"local-default"' in code and '"cloud-gemini"' in code
+
+
+def test_unresolved_ai_profile_handler_never_reports_cloud_processing():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[UNRESOLVED_AI_PROFILE_NODE]["parameters"]["jsCode"]
+    assert '"technical_review"' in code
+    assert "AI_LOCAL_PROVIDER_UNAVAILABLE" in code
+    assert "AI_PROFILE_UNKNOWN" in code
+    assert "processingLocation: null" in code
+
+
+def test_local_lane_has_bounded_retry_and_no_hardcoded_endpoint():
+    data = _load_workflow()
+    node = _nodes_by_name(data)[LOCAL_HTTP_NODE]
+    assert node["parameters"]["url"] == "={{ $env.LOCAL_LLM_BASE_URL }}/chat/completions"
+    assert node.get("retryOnFail") is True
+    assert isinstance(node.get("maxTries"), int) and 1 < node["maxTries"] <= 5
+    assert node.get("onError") == "continueErrorOutput"
+    assert "credentials" not in node, "local dev endpoint must not carry a credential reference"
+
+
+def test_local_and_cloud_lanes_emit_identical_ai_meta_shape():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    cloud_code = nodes["02.5 Parse OCR/LLM output"]["parameters"]["jsCode"]
+    local_code = nodes[LOCAL_PARSER_NODE]["parameters"]["jsCode"]
+    for field in ("aiProvider", "modelId", "modelVersion", "processingLocation", "promptVersion", "fallbackUsed"):
+        assert field in cloud_code, f"cloud parser missing aiMeta.{field}"
+        assert field in local_code, f"local parser missing aiMeta.{field}"
+
+
+def test_normalize_node_accepts_either_lane_raw_text_field():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[NORMALIZE_NODE]["parameters"]["jsCode"]
+    assert "gemini_raw_text || parsed.raw_text" in code
+    assert "aiMeta: parsed.aiMeta" in code
+
+
+def test_control_report_carries_required_audit_fields():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[BUILD_SUMMARY_NODE]["parameters"]["jsCode"]
+    for field in (
+        "processingPath",
+        "aiExecutionProfile",
+        "aiProvider",
+        "modelId",
+        "modelVersion",
+        "processingLocation",
+        "promptVersion",
+        "fallbackUsed",
+    ):
+        assert field in code, f"04.1 Build control report must emit {field!r}"
+
+
+def test_no_secrets_or_internal_urls_in_ai_selection_nodes():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    ai_node_names = (
+        RESOLVE_AI_PROFILE_NODE,
+        UNRESOLVED_AI_PROFILE_NODE,
+        LOCAL_REQUEST_NODE,
+        LOCAL_HTTP_NODE,
+        LOCAL_SERVICE_FAILURE_NODE,
+        LOCAL_PARSER_NODE,
+        LOCAL_PARSE_FAILURE_NODE,
+    )
+    for name in ai_node_names:
+        node = nodes[name]
+        assert "credentials" not in node
+        text = json.dumps(node)
+        assert "REPLACE_WITH_YOUR_CREDENTIAL_ID" not in text
+        assert not re.search(r"https?://(?!\{\{)", text), f"{name!r} must not hardcode a URL"
 
 
 def test_browser_response_is_html():
@@ -567,3 +732,138 @@ def test_status_aggregation_matches_real_aggregate_py_semantics(
     result = _run_node_snippet(_aggregation_code(), invoice_input)
     assert result["status"] == expected_status
     assert result["routing"] == expected_routing
+
+
+# ---------------------------------------------------------------------------
+# Real n8n E2E: a genuinely fresh, ephemeral n8n container (own container
+# name/volume/port, torn down in a finally block), the real workflow file
+# imported and activated, and a real webhook POST -- not a structural check.
+#
+# Guards a real regression found 2026-08-11: cloud-gemini without a
+# configured credential used to return an unhandled, empty HTTP 200 (a
+# binary-passthrough bug at "01.3 Validate upload request" silently dropped
+# the uploaded file from the item, so "02.1 Encode PDF for OCR"'s
+# getBinaryDataBuffer crashed with an opaque "Unknown error" before any of
+# this workflow's own error handling ever ran). It must now converge to a
+# proper, non-empty nicht_pruefbar/technical_review/OCR_SERVICE_UNAVAILABLE
+# payload -- exactly like a real unreachable Gemini service would.
+# ---------------------------------------------------------------------------
+
+import socket
+import time
+import uuid
+
+import httpx
+
+DOCKER_AVAILABLE = shutil.which("docker") is not None
+N8N_IMAGE = "n8nio/n8n:2.33.7"
+FLOW1B_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
+
+
+def _free_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_http_ok(url: str, timeout_seconds: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(url, timeout=2.0)
+            if resp.status_code == 200:
+                return
+        except httpx.HTTPError as exc:
+            last_error = exc
+        time.sleep(1.0)
+    raise TimeoutError(f"{url} never returned 200 within {timeout_seconds}s (last error: {last_error})")
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
+def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
+    port = _free_tcp_port()
+    suffix = uuid.uuid4().hex[:8]
+    container = f"flow1b-e2e-test-{suffix}"
+    volume = f"flow1b-e2e-test-vol-{suffix}"
+
+    def _docker(*args, timeout=60):
+        return subprocess.run(
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+
+    try:
+        # Image acquisition is separated from container startup and given a
+        # much larger, dedicated timeout: a clean CI runner (no local image
+        # cache) can easily take longer than the 60s that's plenty for
+        # starting an already-pulled image. `docker run` below then only
+        # ever has to start a cached image, so it keeps a short timeout --
+        # a real hang there is a genuine problem, not a slow first pull.
+        # Found 2026-08-11: this test's original single 60s timeout on
+        # `docker run` covered both concerns at once and timed out on a
+        # clean GitHub Actions runner during the image pull.
+        pull = _docker("pull", N8N_IMAGE, timeout=300)
+        assert pull.returncode == 0, f"docker pull {N8N_IMAGE} failed: {pull.stderr}"
+
+        run = _docker(
+            "run", "-d", "--name", container,
+            "-p", f"{port}:5678",
+            "-v", f"{volume}:/home/node/.n8n",
+            "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
+            "-e", "N8N_DIAG_ENABLED=false",
+            N8N_IMAGE,
+            timeout=30,
+        )
+        assert run.returncode == 0, f"docker run failed: {run.stderr}"
+
+        _wait_for_http_ok(f"http://127.0.0.1:{port}/healthz")
+
+        cp = _docker("cp", str(WORKFLOW_PATH), f"{container}:/tmp/flow1b.json")
+        assert cp.returncode == 0, f"docker cp failed: {cp.stderr}"
+
+        imp = _docker("exec", container, "n8n", "import:workflow", "--input=/tmp/flow1b.json")
+        assert imp.returncode == 0, f"n8n import:workflow failed: {imp.stderr}\n{imp.stdout}"
+
+        act = _docker("exec", container, "n8n", "publish:workflow", f"--id={FLOW1B_WORKFLOW_ID}")
+        assert act.returncode == 0, f"n8n publish:workflow failed: {act.stderr}\n{act.stdout}"
+
+        # Activation of an already-running instance requires a restart --
+        # documented n8n 2.33.7 behavior, not specific to this workflow.
+        restart = _docker("restart", container)
+        assert restart.returncode == 0, f"docker restart failed: {restart.stderr}"
+
+        _wait_for_http_ok(f"http://127.0.0.1:{port}/healthz")
+
+        # /healthz can return 200 slightly before webhook registration for
+        # newly-activated workflows finishes on startup -- retry briefly
+        # rather than treating a transient 404 as the real failure mode
+        # this test exists to catch.
+        response = None
+        for _ in range(10):
+            response = httpx.post(
+                f"http://127.0.0.1:{port}/webhook/phase1-flow1b-pdf-upload",
+                data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "cloud-gemini"},
+                files={"data": ("test-invoice.pdf", b"%PDF-1.4 not a real pdf, content is irrelevant here", "application/pdf")},
+                timeout=30.0,
+            )
+            if response.status_code != 404:
+                break
+            time.sleep(1.0)
+
+        assert response.status_code == 200
+        assert len(response.content) > 0, (
+            "cloud-gemini without a configured credential must never return an "
+            "empty response -- it must converge to a proper technical_review payload"
+        )
+        body = response.text
+        assert "nicht_pruefbar" in body
+        assert "technical_review" in body
+        assert "OCR_SERVICE_UNAVAILABLE" in body
+    finally:
+        _docker("rm", "-f", container, timeout=30)
+        _docker("volume", "rm", volume, timeout=30)

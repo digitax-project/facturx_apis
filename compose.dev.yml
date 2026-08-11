@@ -1,0 +1,104 @@
+# DigiTax Phase 1 developer stack: API + n8n UI + the four versioned DigiTax
+# workflows, importable and (for Flow 1a) runnable with a single,
+# platform-independent command:
+#
+#   docker compose -f compose.dev.yml up --build
+#
+# This file is intentionally separate from:
+#   - the minimal root docker-compose.yml (API only, no n8n)
+#   - examples/n8n/docker-compose.phase1-upload-demo.yml (presentation/demo
+#     stack, its own container names/network/volume, its own PowerShell
+#     helper script)
+# Neither of those is modified or replaced by this file. All three can
+# coexist; just don't start the demo stack and this dev stack at the same
+# time, since both default to host ports 6970/5679 for their own API/n8n.
+#
+# See README.md ("Developer stack") and examples/n8n/README.md for the full
+# walkthrough, including how to reset the dedicated dev volume and how to
+# opt into local or cloud AI for Flow 1b.
+name: digitax-phase1-devstack
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: digitax-devstack-api
+    ports:
+      - "6970:6969"
+    environment:
+      - FACTURX_ENABLE_DEMO_ENDPOINTS=true
+    networks:
+      - devstack
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # One-shot initializer: imports every versioned DigiTax workflow and
+  # publishes (activates) only Flow 1a Upload Demo + Batch Item, using the
+  # SAME shared named volume the long-running "n8n" service below will read
+  # on its own startup. This container must run to completion, successfully,
+  # BEFORE "n8n" starts (enforced by n8n's `depends_on: condition:
+  # service_completed_successfully`) -- it never runs against an
+  # already-started n8n server, and nothing here uses `docker exec` or a
+  # server restart. See examples/n8n/scripts/n8n-init.sh for the exact
+  # commands and for the empirical verification notes (n8nio/n8n:2.33.7).
+  n8n-init:
+    image: n8nio/n8n:2.33.7
+    container_name: digitax-devstack-n8n-init
+    entrypoint: ["sh", "/data/scripts/n8n-init.sh"]
+    environment:
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_DIAG_ENABLED=false
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+    volumes:
+      - digitax_devstack_n8n_data:/home/node/.n8n
+      - ./examples/n8n:/data/workflows:ro
+      - ./examples/n8n/scripts:/data/scripts:ro
+    networks:
+      - devstack
+
+  n8n:
+    image: n8nio/n8n:2.33.7
+    container_name: digitax-devstack-n8n
+    ports:
+      - "5679:5678"
+    environment:
+      - FACTURX_API_BASE_URL=http://api:6969
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_DIAG_ENABLED=false
+      # Empty by default: the stack must start without AI credentials. Flow
+      # 1b stays visible but inactive/unconfigured until you set these (see
+      # .env.example) and select a real Google Gemini credential in the n8n
+      # UI for the cloud lane, or point LOCAL_LLM_BASE_URL at your own
+      # already-running OpenAI-compatible endpoint for the local lane. No
+      # model is bundled or downloaded by this compose file.
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+    volumes:
+      - digitax_devstack_n8n_data:/home/node/.n8n
+    networks:
+      - devstack
+    depends_on:
+      api:
+        condition: service_healthy
+      n8n-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+networks:
+  devstack:
+    name: digitax-phase1-devstack-net
+
+volumes:
+  digitax_devstack_n8n_data:
+    name: digitax_devstack_n8n_data
