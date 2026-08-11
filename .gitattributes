@@ -1,0 +1,12 @@
+# Force LF line endings for files that run as scripts inside Linux
+# containers, regardless of the checkout platform's core.autocrlf setting.
+#
+# Without this, a Windows checkout with the common core.autocrlf=true
+# converts LF to CRLF on checkout -- which silently breaks any POSIX shell
+# script mounted into a container (a CRLF-corrupted `set -eu` line becomes
+# `set -eu\r`, which `sh` rejects with "illegal option -", failing the
+# script). Confirmed empirically: examples/n8n/scripts/n8n-init.sh, checked
+# out fresh with core.autocrlf=true, fails compose.dev.yml's `n8n-init`
+# step this exact way. See tests/test_repo_hygiene.py for the regression
+# guard that checks tracked shell scripts never contain CRLF.
+*.sh text eol=lf
