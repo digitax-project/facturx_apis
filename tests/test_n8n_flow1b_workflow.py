@@ -1,13 +1,14 @@
 """Regression guard for
-examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json
-("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0").
+examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json
+("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0").
 
-Structural checks plus real execution of the two business-logic-bearing Code
-nodes (ORG-001 evaluation, status aggregation) via Node.js -- this workflow
-has no live Gemini credentials in CI, so this is the strongest verification
-available short of a real end-to-end run. The coordination handover log
-records the real `n8n import:workflow` evidence against n8nio/n8n:2.33.7
-separately; this test is not a substitute for that.
+Structural checks plus real execution of the business-logic-bearing Code
+nodes (AI-profile resolution, ORG-001 evaluation, status aggregation) via
+Node.js -- this workflow has no live Gemini/local-LLM credentials in CI, so
+this is the strongest verification available short of a real end-to-end run.
+The coordination handover log records the real `n8n import:workflow`
+evidence against n8nio/n8n:2.33.7 separately; this test is not a substitute
+for that.
 """
 import json
 import re
@@ -21,7 +22,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json"
+    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json"
 )
 INTAKE_WORKFLOW_PATH = (
     Path(__file__).parent.parent / "examples" / "n8n" / "digitax_invoice_intake.json"
@@ -29,7 +30,7 @@ INTAKE_WORKFLOW_PATH = (
 EXAMPLES_N8N_DIR = Path(__file__).parent.parent / "examples" / "n8n"
 
 EXPECTED_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
-EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0"
+EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0"
 
 # Node name mapping (2026-08-10, final-demo-ui round): every node was
 # renamed to a short, action-oriented, phase-prefixed name, consistent with
@@ -47,6 +48,18 @@ BUILD_RESPONSE_NODE = "04.2 Render control report"
 RESPOND_NODE = "04.3 Respond to browser"
 STATUS_ROUTING_NODE = "04.4 Route by review status"
 
+# AI-execution-profile nodes (2026-08-11, dev-stack/AI-selection round).
+RESOLVE_AI_PROFILE_NODE = "01.9 Resolve AI execution profile"
+AI_PROFILE_SWITCH_NODE = "01.10 Route by AI profile"
+UNRESOLVED_AI_PROFILE_NODE = "01.11 Handle unresolved AI profile"
+LOCAL_ENCODE_NODE = "02.1L Encode PDF for local OCR"
+LOCAL_REQUEST_NODE = "02.2L Build local OCR/LLM request"
+LOCAL_HTTP_NODE = "02.3L Run OCR/LLM extraction (local)"
+LOCAL_SERVICE_FAILURE_NODE = "02.4L Handle local OCR service failure"
+LOCAL_PARSER_NODE = "02.5L Parse local OCR/LLM output"
+LOCAL_PARSE_FAILURE_NODE = "02.6L Handle local OCR parse failure"
+NORMALIZE_NODE = "02.7 Normalize invoice (concept)"
+
 # "02.2 Build OCR/LLM request" (Build Gemini Request in the historical
 # workflow) is deliberately NOT in this list: its prompt text was corrected
 # (2026-08-10, final-demo-ui round) to remove the master-data leak the
@@ -54,10 +67,16 @@ STATUS_ROUTING_NODE = "04.4 Route by review status"
 # test_build_gemini_request_prompt_has_no_master_data_leak below and the
 # node's own "notes" field for why it's the one intentional divergence from
 # byte-for-byte reuse.
+# "02.5 Parse OCR/LLM output" (Gemini Output Parser in the historical
+# workflow) is ALSO deliberately NOT in this list as of the 2026-08-11
+# dev-stack/AI-selection round: it now emits an additional `aiMeta` field so
+# its output converges with the local lane's parser -- see
+# test_cloud_parser_extends_intake_logic_without_replacing_it below, which
+# checks the reused parsing/normalization logic is still byte-for-byte
+# present, just with one addition appended.
 REUSED_OCR_NODE_NAMES = (
     FIX_BASE64_NODE,
     GEMINI_HTTP_NODE,
-    GEMINI_PARSER_NODE,
 )
 # The historical digitax_invoice_intake.json node names these map onto.
 INTAKE_NODE_NAMES = {
@@ -212,6 +231,34 @@ def test_ocr_nodes_reused_verbatim_from_intake_workflow():
     assert "onError" not in intake_nodes[INTAKE_NODE_NAMES[GEMINI_PARSER_NODE]]
 
 
+def test_cloud_parser_extends_intake_logic_without_replacing_it():
+    """02.5 Parse OCR/LLM output ("Gemini Output Parser" in the historical
+    workflow) is excluded from REUSED_OCR_NODE_NAMES because it now also
+    emits `aiMeta` (2026-08-11, dev-stack/AI-selection round). This test
+    checks the underlying parsing/normalization logic -- markdown-fence
+    stripping, JSON parsing, the fixed 14-field shape -- is still present
+    unchanged, i.e. this was an addition, not a rewrite."""
+    flow1b_nodes = _nodes_by_name(_load_workflow())
+    intake_nodes = _nodes_by_name(_load_intake_workflow())
+    flow1b_code = flow1b_nodes[GEMINI_PARSER_NODE]["parameters"]["jsCode"]
+    intake_code = intake_nodes[INTAKE_NODE_NAMES[GEMINI_PARSER_NODE]]["parameters"]["jsCode"]
+
+    for fn_signature in (
+        "function extractTextFromGeminiResponse(item)",
+        "function stripMarkdownFences(text)",
+        "function ensureField(obj, key)",
+    ):
+        assert fn_signature in flow1b_code
+        assert fn_signature in intake_code
+
+    for field in ("Invoice No", "VAT-ID (Seller)", "VAT-ID (Buyer)", "Name (Buyer)"):
+        assert field in flow1b_code and field in intake_code
+
+    # The documented addition itself.
+    assert "aiMeta" in flow1b_code
+    assert "aiMeta" not in intake_code
+
+
 def test_build_gemini_request_prompt_has_no_master_data_leak():
     """The OCR prompt must extract only what is visible in the invoice.
     Master data (expected buyer, approved addresses, VAT IDs, or the word
@@ -338,8 +385,11 @@ def test_every_failure_and_success_path_converges_on_single_response_builder():
     payload_sources = (
         "01.5 Handle invalid upload",
         "01.8 Handle unknown organization",
+        UNRESOLVED_AI_PROFILE_NODE,
         "02.4 Handle OCR service failure",
         "02.6 Handle OCR parse failure",
+        LOCAL_SERVICE_FAILURE_NODE,
+        LOCAL_PARSE_FAILURE_NODE,
         BUILD_SUMMARY_NODE,
     )
     for source in payload_sources:
@@ -348,6 +398,121 @@ def test_every_failure_and_success_path_converges_on_single_response_builder():
 
     assert data["connections"][BUILD_RESPONSE_NODE]["main"][0][0]["node"] == RESPOND_NODE
     assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
+
+
+def test_both_extraction_lanes_converge_on_shared_normalize_node():
+    """Local and cloud extraction are technically separate paths (own encode/
+    request/HTTP/parse nodes) but must feed the exact same normalize node --
+    this is what makes the two lanes produce one identical canonical
+    contract, per the AI-selection spec."""
+    data = _load_workflow()
+    cloud_targets = {
+        edge["node"] for edge in data["connections"]["02.5 Parse OCR/LLM output"]["main"][0]
+    }
+    local_targets = {
+        edge["node"] for edge in data["connections"][LOCAL_PARSER_NODE]["main"][0]
+    }
+    assert cloud_targets == {NORMALIZE_NODE}
+    assert local_targets == {NORMALIZE_NODE}
+
+
+def test_ai_profile_switch_routes_local_cloud_and_unresolved_separately():
+    data = _load_workflow()
+    switch_node = _nodes_by_name(data)[AI_PROFILE_SWITCH_NODE]
+    rule_values = {
+        cond["rightValue"]
+        for rule in switch_node["parameters"]["rules"]["values"]
+        for cond in rule["conditions"]["conditions"]
+    }
+    assert rule_values == {"local", "cloud"}
+    assert switch_node["parameters"]["options"]["fallbackOutput"] == "extra"
+
+    branches = data["connections"][AI_PROFILE_SWITCH_NODE]["main"]
+    assert len(branches) == 3
+    targets = [b[0]["node"] for b in branches]
+    assert targets == [LOCAL_ENCODE_NODE, "02.1 Encode PDF for OCR", UNRESOLVED_AI_PROFILE_NODE]
+
+
+def test_ai_profile_resolution_never_defaults_unknown_to_cloud():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[RESOLVE_AI_PROFILE_NODE]["parameters"]["jsCode"]
+    assert '"unknown"' in code
+    assert '"local_unavailable"' in code
+    # The only two recognized profile IDs -- anything else must resolve to
+    # "unknown", not silently fall through to a default.
+    assert '"local-default"' in code and '"cloud-gemini"' in code
+
+
+def test_unresolved_ai_profile_handler_never_reports_cloud_processing():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[UNRESOLVED_AI_PROFILE_NODE]["parameters"]["jsCode"]
+    assert '"technical_review"' in code
+    assert "AI_LOCAL_PROVIDER_UNAVAILABLE" in code
+    assert "AI_PROFILE_UNKNOWN" in code
+    assert "processingLocation: null" in code
+
+
+def test_local_lane_has_bounded_retry_and_no_hardcoded_endpoint():
+    data = _load_workflow()
+    node = _nodes_by_name(data)[LOCAL_HTTP_NODE]
+    assert node["parameters"]["url"] == "={{ $env.LOCAL_LLM_BASE_URL }}/chat/completions"
+    assert node.get("retryOnFail") is True
+    assert isinstance(node.get("maxTries"), int) and 1 < node["maxTries"] <= 5
+    assert node.get("onError") == "continueErrorOutput"
+    assert "credentials" not in node, "local dev endpoint must not carry a credential reference"
+
+
+def test_local_and_cloud_lanes_emit_identical_ai_meta_shape():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    cloud_code = nodes["02.5 Parse OCR/LLM output"]["parameters"]["jsCode"]
+    local_code = nodes[LOCAL_PARSER_NODE]["parameters"]["jsCode"]
+    for field in ("aiProvider", "modelId", "modelVersion", "processingLocation", "promptVersion", "fallbackUsed"):
+        assert field in cloud_code, f"cloud parser missing aiMeta.{field}"
+        assert field in local_code, f"local parser missing aiMeta.{field}"
+
+
+def test_normalize_node_accepts_either_lane_raw_text_field():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[NORMALIZE_NODE]["parameters"]["jsCode"]
+    assert "gemini_raw_text || parsed.raw_text" in code
+    assert "aiMeta: parsed.aiMeta" in code
+
+
+def test_control_report_carries_required_audit_fields():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[BUILD_SUMMARY_NODE]["parameters"]["jsCode"]
+    for field in (
+        "processingPath",
+        "aiExecutionProfile",
+        "aiProvider",
+        "modelId",
+        "modelVersion",
+        "processingLocation",
+        "promptVersion",
+        "fallbackUsed",
+    ):
+        assert field in code, f"04.1 Build control report must emit {field!r}"
+
+
+def test_no_secrets_or_internal_urls_in_ai_selection_nodes():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    ai_node_names = (
+        RESOLVE_AI_PROFILE_NODE,
+        UNRESOLVED_AI_PROFILE_NODE,
+        LOCAL_REQUEST_NODE,
+        LOCAL_HTTP_NODE,
+        LOCAL_SERVICE_FAILURE_NODE,
+        LOCAL_PARSER_NODE,
+        LOCAL_PARSE_FAILURE_NODE,
+    )
+    for name in ai_node_names:
+        node = nodes[name]
+        assert "credentials" not in node
+        text = json.dumps(node)
+        assert "REPLACE_WITH_YOUR_CREDENTIAL_ID" not in text
+        assert not re.search(r"https?://(?!\{\{)", text), f"{name!r} must not hardcode a URL"
 
 
 def test_browser_response_is_html():

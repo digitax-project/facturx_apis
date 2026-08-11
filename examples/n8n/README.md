@@ -23,7 +23,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Upload Demo \| v1.0.0` | `digitax_invoice_phase1_flow1a_upload_v1_0_0.json` | `digitax-invoice-phase1-upload-demo` | demo-ready (active) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Demo \| v1.0.0` | n/a -- browser page `facturx/phase1/static/batch_demo.html`, not an n8n workflow | n/a | demo-ready (served whenever `FACTURX_ENABLE_DEMO_ENDPOINTS=true`) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.0.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo) |
-| `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.1.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
+| `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.2.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
 
 Workflow **ids are deterministic and never change** across a rename --
 `n8n import:workflow` upserts by id, so re-importing an updated export
@@ -428,31 +428,48 @@ Full detail in `coordination/claude-codex/handover-log.md` and
 are the CI structural guards; they are not a substitute for the real
 evidence above.
 
-## digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json
+## digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json
 
-`DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0` --
+`DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0` --
 processes a plain PDF invoice (no embedded structured XML) via OCR/LLM
-extraction (Gemini) instead of XML parsing, reusing three of the four
-proven OCR nodes from `digitax_invoice_intake.json` **unmodified**
-(the fourth, the prompt-builder, was deliberately corrected -- see below):
+extraction instead of XML parsing. `v0.2.0` (2026-08-11, dev-stack/
+AI-selection round) adds an explicit local-vs-cloud AI execution choice in
+front of the extraction step; `v0.1.0`'s single Gemini-only path is now the
+*cloud* lane of two technically separate lanes that converge on one
+canonical output. Three of the original four OCR nodes remain reused from
+`digitax_invoice_intake.json` **unmodified** (the prompt-builder was
+deliberately corrected in the prior round; the parser gained one addition
+in this round -- see below):
 
 ```
 01.1 Receive PDF upload (POST multipart/form-data, file field "data")
   -> 01.2 Build run context      -- correlation ID before any call,
                                      organizationId (explicit, or the
-                                     fictional default only under demoMode=true)
+                                     fictional default only under demoMode=true),
+                                     aiExecutionProfile (stable profile ID only)
   -> 01.3 Validate upload request
   -> 01.4 Has valid upload?
        -> [invalid] 01.5 Handle invalid upload    never retried, no call made
        -> [valid]   01.6 Resolve organization profile (concept)
   -> 01.7 Organization profile known?
        -> [unknown] 01.8 Handle unknown organization
-       -> [known]   02.1 Encode PDF for OCR -> 02.2 Build OCR/LLM request
-                       -> 02.3 Run OCR/LLM extraction (Gemini) (bounded retry, maxTries: 5)
-                       -> 02.5 Parse OCR/LLM output
-  -> 02.7 Normalize invoice (concept)
+       -> [known]   01.9 Resolve AI execution profile
+  -> 01.10 Route by AI profile (Switch: local / cloud / unresolved)
+       -> [unresolved]  01.11 Handle unresolved AI profile   unknown profile ID, or
+                                                               local-default without a
+                                                               configured endpoint --
+                                                               never a cloud default
+       -> [local]  02.1L Encode PDF for local OCR -> 02.2L Build local OCR/LLM request
+                      -> 02.3L Run OCR/LLM extraction (local) (bounded retry, maxTries: 3)
+                      -> 02.5L Parse local OCR/LLM output
+       -> [cloud]  02.1 Encode PDF for OCR -> 02.2 Build OCR/LLM request
+                      -> 02.3 Run OCR/LLM extraction (Gemini) (bounded retry, maxTries: 5)
+                      -> 02.5 Parse OCR/LLM output
+  -> 02.7 Normalize invoice (concept)      -- single shared node for both lanes
   -> 03.1 Run DigiTax controls (concept)     -- ORG-001 evaluation
-  -> 04.1 Build control report
+  -> 04.1 Build control report      -- adds processingPath/aiExecutionProfile/
+                                        aiProvider/modelId/modelVersion/
+                                        processingLocation/promptVersion/fallbackUsed
   -> 04.2 Render control report      -- single convergence point, HTML, with an
                                          explicit "temporary implementation" notice
   -> 04.3 Respond to browser (HTML)
@@ -466,14 +483,28 @@ chain was extracted from. Unrelated scope from that workflow (Outlook
 mailbox intake, BZSt VAT lookup, Excel reporting, Reqeli analysis) is not
 present here at all, per the task's explicit scope reduction.
 
-### The reused OCR nodes: byte-for-byte, not just "similar" -- except one, corrected on purpose
+### The reused OCR nodes: byte-for-byte, not just "similar" -- except two, changed on purpose
 
-`02.1 Encode PDF for OCR`, `02.3 Run OCR/LLM extraction (Gemini)`, and
-`02.5 Parse OCR/LLM output` carry the *exact same* `jsCode`/parameters and
-node `id`s as `digitax_invoice_intake.json`'s `fix base64`,
-`File-Based OCR with Gemini 2.5`, and `Gemini Output Parser` -- verified by
+`02.1 Encode PDF for OCR` and `02.3 Run OCR/LLM extraction (Gemini)` carry
+the *exact same* `jsCode`/parameters and node `id`s as
+`digitax_invoice_intake.json`'s `fix base64` and
+`File-Based OCR with Gemini 2.5` -- verified by
 `tests/test_n8n_flow1b_workflow.py::test_ocr_nodes_reused_verbatim_from_intake_workflow`,
 which diffs the two files directly rather than trusting a copy-paste by eye.
+
+`02.5 Parse OCR/LLM output` (`Gemini Output Parser` in the historical
+workflow) keeps its parsing/normalization logic byte-for-byte (markdown-
+fence stripping, JSON parsing, the fixed 14-field shape -- verified by
+`test_cloud_parser_extends_intake_logic_without_replacing_it`), with one
+addition in this round: it now also emits `aiMeta` (provider/model/
+processingLocation/promptVersion/fallbackUsed) so its output converges with
+the local lane's `02.5L Parse local OCR/LLM output`, which parses an
+OpenAI-compatible `choices[0].message.content` shape instead of Gemini's
+`candidates[...]` shape but emits the exact same `{invoice_extracted,
+aiMeta}` contract. Both feed the single, shared `02.7 Normalize invoice
+(concept)` node -- there is one canonical invoice/`fieldEvidence` contract
+regardless of which lane ran, per the AI-selection spec's convergence
+requirement.
 
 **`02.2 Build OCR/LLM request` (`Build Gemini Request` in the historical
 workflow) is the one deliberate exception**, corrected in this round: the
@@ -505,6 +536,62 @@ fail-safe wrapping around that at all. This workflow must never end as an
 unhandled execution error, so the thrown error is now routed to a proper
 `nicht_pruefbar`/`technical_review` payload. This is error-handling wiring
 only -- the parsing logic itself is untouched.
+
+### AI execution profile selection (local vs. cloud)
+
+Added 2026-08-11 (dev-stack/AI-selection round), per
+`coordination/claude-codex/prompts/2026-08-11_ai_execution_selection_ui.md`.
+The shared upload page
+([`phase1_upload_demo_page.html`](phase1_upload_demo_page.html)) sends only
+a stable profile ID -- never a provider URL, model name, or credential:
+
+```json
+{
+  "processingPath": "structured" | "pdf_ocr",
+  "aiExecutionProfile": null | "local-default" | "cloud-gemini",
+  "organizationId": "unternehmen-x-demo"
+}
+```
+
+`01.9 Resolve AI execution profile` resolves the ID entirely server-side
+(reading `LOCAL_LLM_BASE_URL`/`LOCAL_LLM_MODEL` via `$env`, and hardcoding
+`gemini-2.5-pro` for the cloud profile) and classifies the request as
+`local`, `cloud`, `unknown` (unrecognized/missing ID), or
+`local_unavailable` (`local-default` selected but no local endpoint is
+configured). `01.10 Route by AI profile` sends `unknown` and
+`local_unavailable` to the same explicit failure node,
+`01.11 Handle unresolved AI profile`, which reports
+`nicht_pruefbar`/`technical_review` with a distinct error code
+(`AI_PROFILE_UNKNOWN` or `AI_LOCAL_PROVIDER_UNAVAILABLE`) -- **never** a
+default to cloud. Security rules enforced by this design (all verified
+live against the running dev stack, see "Verification" below):
+
+- **No silent local-to-cloud fallback.** A configured-but-unreachable local
+  endpoint fails the run; it does not retry against Gemini.
+- **Unknown/missing profile ID aborts safely**, never defaults to cloud.
+- **Cloud requires an explicit selection every time** -- the browser never
+  remembers or defaults to `cloud-gemini`; see the upload page's disabled
+  submit button until a PDF-path choice is made.
+- **No secrets or internal URLs ever reach the browser or the control
+  report.** The upload page's "provider/model status" text is static,
+  descriptive copy (e.g. "Provider: local (configured server-side)"), never
+  the actual `LOCAL_LLM_BASE_URL` value.
+
+Both lanes converge on `02.7 Normalize invoice (concept)` with an identical
+canonical invoice/`fieldEvidence` shape (see above), so `03.1 Run DigiTax
+controls (concept)` and everything downstream is unaware of which lane ran.
+`04.1 Build control report` adds eight audit fields to every response
+(success or failure): `processingPath`, `aiExecutionProfile`, `aiProvider`,
+`modelId`, `modelVersion`, `processingLocation` (`local`/`cloud`/`null`),
+`promptVersion`, `fallbackUsed` (always `false` -- there is no fallback path
+in this design to set it `true`).
+
+The local lane (`02.1L`-`02.6L`) is a CONCEPT: it assumes a local,
+OpenAI-compatible endpoint that accepts a base64 PDF as an `image_url`
+content part (the convention several local inference servers use). No model
+is bundled, downloaded, or run by this repository or by `compose.dev.yml`
+-- see the root README's "Optional: local AI for Flow 1b" section. The
+cloud lane is unchanged from `v0.1.0`'s Gemini path.
 
 ### Missing API contract -- this is a temporary implementation, not a shortcut
 
@@ -562,40 +649,55 @@ verified with real Node.js execution, not just asserted.
 
 ### Import status: imported, credentials pending
 
-Imported as **inactive** into the isolated `digitax-phase1-demo-n8n`
-(`n8nio/n8n:2.33.7`) container, confirmed via
-`n8n list:workflow --active=false`; re-imported multiple times with no
-duplicate created and confirmed to stay inactive every time (the
-active-state policy check in `Manage-Phase1UploadDemo.ps1` verifies this
-explicitly on every `Start`). **No Gemini credential is configured in that
-instance.** `02.3 Run OCR/LLM extraction (Gemini)` still carries the same
-`REPLACE_WITH_YOUR_CREDENTIAL_ID` placeholder as the historical workflow --
-nothing was copied from the pre-existing, separately managed `n8n`
-container (port 5678) or from anywhere else. Before a real end-to-end run:
+Imported as **inactive** by both the presentation demo stack
+(`digitax-phase1-demo-n8n`) and the developer stack's `n8n-init`
+(`digitax_devstack_n8n_data` volume) -- neither activates Flow 1b by
+default. **No Gemini credential and no `LOCAL_LLM_BASE_URL` are configured
+in either environment.** `02.3 Run OCR/LLM extraction (Gemini)` still
+carries the same `REPLACE_WITH_YOUR_CREDENTIAL_ID` placeholder as the
+historical workflow -- nothing was copied from any other n8n instance.
+Before a real end-to-end run:
 
-1. Open the n8n UI at `http://localhost:5679`.
-2. Select **DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.1.0**.
-3. On the `02.3 Run OCR/LLM extraction (Gemini)` node, select or create a
-   real **Google Gemini (PaLM) API** credential (Google AI Studio API key).
+1. Open the n8n UI (`http://localhost:5679` for either stack).
+2. Select **DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0**.
+3. For cloud AI: on the `02.3 Run OCR/LLM extraction (Gemini)` node, select
+   or create a real **Google Gemini (PaLM) API** credential (Google AI
+   Studio API key). For local AI: set `LOCAL_LLM_BASE_URL`/`LOCAL_LLM_MODEL`
+   in `.env` (dev stack) before starting, pointing at an OpenAI-compatible
+   endpoint you already run yourself.
 4. Activate the workflow only after that -- it is deliberately left
-   inactive on import, and is **not part of tomorrow's demo**.
+   inactive on import.
 
 Status is **imported, inactive, visually structured, credentials/API
 convergence pending** -- not "working." No E2E claim is made without a
-credential actually present.
+credential or a real local endpoint actually present.
 
 ### Verification
 
-- `pytest`: full suite green (152 tests across all n8n workflow test
-  files), including `tests/test_n8n_flow1b_workflow.py` (structural checks
-  plus real Node.js execution of the ORG-001 evaluator and status
-  aggregator against synthetic inputs -- the actual reused JS logic, not a
-  re-implementation assumption).
-- Real `n8n import:workflow` against pinned `n8nio/n8n:2.33.7` in the
-  running isolated container (not a one-shot `--rm` container -- the same
-  persistent stack the Flow 1a workflows already use), re-imported twice
-  with no duplicates and confirmed inactive both times.
-- Full detail, exact commands, and the "credentials pending" scope in
+- `pytest`: full suite green (162 tests across all n8n workflow test
+  files as of the dev-stack/AI-selection round), including
+  `tests/test_n8n_flow1b_workflow.py` (structural checks plus real Node.js
+  execution of the ORG-001 evaluator and status aggregator against
+  synthetic inputs -- the actual reused JS logic, not a re-implementation
+  assumption).
+- Real `n8n import:workflow`/`update:workflow` against pinned
+  `n8nio/n8n:2.33.7`, both in the presentation stack's persistent container
+  and in a from-scratch `compose.dev.yml up --build` run (fresh volume,
+  then a second startup without reset) -- 4 workflows, no duplicates,
+  correct active state, both times.
+- Live webhook evidence against the running dev stack: all 7 Unternehmen
+  X/Y profile-matrix invoices through `phase1-invoice-upload` and one
+  through `phase1-invoice-batch-item`, a faulty (missing-file) upload
+  routed to `nicht_pruefbar`/`MISSING_INVOICE_FILE`, and -- with Flow 1b
+  temporarily activated for this check only -- an unknown AI profile, a
+  missing AI profile, and an unconfigured local provider each independently
+  confirmed to route to `nicht_pruefbar`/`technical_review` rather than a
+  cloud default or a silent fallback. The cloud lane itself fails at
+  credential resolution in this environment (no real Gemini credential is
+  configured anywhere in this repository or its containers), so it is
+  reported as configured/importable but not E2E-verified, per the
+  AI-selection spec's own instruction for that case.
+- Full detail, exact commands, and evidence in
   `coordination/claude-codex/handover-log.md` and
   `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.
 

@@ -135,7 +135,85 @@ The complete candidate catalog, including controls not yet selected for the
 starter profile, is documented in
 [`docs/invoice_phase1/control_catalog.md`](docs/invoice_phase1/control_catalog.md).
 
-### Run the batch and profile-comparison demo
+### Developer stack (API + n8n UI + versioned workflows)
+
+One command, any OS (Windows, Linux, macOS with Docker Compose):
+
+```bash
+docker compose -f compose.dev.yml up --build
+```
+
+- API/Swagger: http://localhost:6970/docs
+- Batch UI: http://localhost:6970/demo/batch
+- n8n UI: http://localhost:5679 (no login by default)
+
+On first start, a one-shot `n8n-init` container imports all four versioned
+DigiTax workflows into the shared `digitax_devstack_n8n_data` volume and
+publishes only `Flow 1a | Upload Demo` and `Flow 1a | Batch Item`;
+`Flow 1a | Structured Regression` and `Flow 1b | PDF OCR/LLM Concept` stay
+inactive. `n8n-init` runs to completion, successfully, before the `n8n`
+service starts -- there is no `docker exec`-then-restart step, and the whole
+`up` fails if import or publication fails.
+
+Flow 1a works with zero external credentials: generate a synthetic invoice
+(`python examples/demo/generate_demo_invoices.py --output-dir .demo-output`,
+or `GET http://localhost:6970/v1/demo/mock-invoices/{scenario_id}`) and
+upload it via
+[`examples/n8n/phase1_upload_demo_page.html`](examples/n8n/phase1_upload_demo_page.html)
+or `POST http://localhost:5679/webhook/phase1-invoice-upload` to get the
+full Phase 1 control report.
+
+```bash
+docker compose -f compose.dev.yml ps
+docker compose -f compose.dev.yml down
+```
+
+**Resetting the dev volume.** All of the dev n8n instance's state (imported
+workflows, any credentials you add) lives in the named Docker volume
+`digitax_devstack_n8n_data`. This is *not* part of normal startup/shutdown --
+plain `down` never touches it.
+
+> **Warning:** this permanently deletes every workflow edit and credential
+> in the dev n8n instance. The next `up` re-imports the four versioned
+> workflows from a clean state.
+
+```bash
+docker compose -f compose.dev.yml down -v   # removes the shared dev volume
+```
+
+This dev stack is separate from, and does not modify:
+
+- the minimal root `docker-compose.yml` (API only, no n8n) -- for
+  API-only development with no Docker n8n at all;
+- `examples/n8n/docker-compose.phase1-upload-demo.yml` (the
+  presentation/demo stack behind `docs/invoice_phase1/batch_demo_runbook.md`)
+  -- its own container names, network, and volume.
+
+Both default to the same host ports (`6970`/`5679`) as this dev stack, so
+don't run more than one of them at the same time.
+
+#### Optional: local AI for Flow 1b
+
+Flow 1b ("PDF OCR/LLM Concept") stays inactive by default. To try its
+*local* AI lane, copy `.env.example` to `.env`, set `LOCAL_LLM_BASE_URL`/
+`LOCAL_LLM_MODEL` to an OpenAI-compatible chat-completions endpoint you
+already run yourself, then activate the workflow in the n8n UI. No model is
+bundled, downloaded, or run by this repository -- expect real GPU/disk cost
+if you stand one up yourself. If the endpoint is unset or unreachable, the
+flow reports `nicht_pruefbar`/`technical_review`
+(`AI_LOCAL_PROVIDER_UNAVAILABLE`); it never silently falls back to cloud AI.
+
+#### Optional: cloud AI for Flow 1b
+
+To try the *cloud* AI lane, select a real Google Gemini (PaLM) API
+credential inside the n8n UI (the "02.3 Run OCR/LLM extraction (Gemini)"
+node) and activate the workflow. This is never configured via an
+environment variable or the browser -- the credential lives only in n8n's
+own credential store. See [`examples/n8n/README.md`](examples/n8n/README.md)
+for the exact steps, and for why Flow 1b's ORG-001 evaluation is a
+temporary, n8n-side-only mirror rather than the real API.
+
+### Run the batch and profile-comparison demo (presentation stack)
 
 The isolated demo uses API port `6970`, n8n port `5679`, and the dedicated
 Docker volume `digitax_n8n_phase1_data`. It does not change an existing n8n
@@ -216,7 +294,13 @@ for the exact meaning of each case. The presentation sequence is in
 - **Plain-PDF extraction uses a mock adapter**, not real OCR/LLM. It exists
   to prove the field-evidence/confidence contract a real adapter must
   satisfy (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via
-  FastAPI dependency injection.
+  FastAPI dependency injection. There is still no endpoint that accepts
+  externally-extracted canonical OCR fields (`POST /v1/invoices/process`
+  only accepts a file upload), so Flow 1b's local/cloud AI extraction
+  (`examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json`)
+  remains a temporary, n8n-side-only mirror of `ORG-001`, not a real API
+  integration -- see `examples/n8n/README.md`'s "Missing API contract"
+  section for the smallest endpoint that would close this gap.
 - **CAL-002/CAL-003 (arithmetic controls) assume a simple invoice.**
   `CAL-002`'s tax-consistency formula does not account for document-level
   charges/allowances. When a reliable non-zero charge or allowance is

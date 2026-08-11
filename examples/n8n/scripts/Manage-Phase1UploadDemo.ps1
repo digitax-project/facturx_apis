@@ -61,7 +61,7 @@ $Flow1bWorkflowId = "digitax-invoice-phase1-flow1b-pdf-ocr"
 $StructuredRegressionFile = "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json"
 $UploadFile = "digitax_invoice_phase1_flow1a_upload_v1_0_0.json"
 $BatchItemFile = "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json"
-$Flow1bFile = "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_1_0.json"
+$Flow1bFile = "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json"
 
 $EvidenceDir = [System.IO.Path]::GetFullPath((Join-Path $N8nDir "..\..\..\..\..\output\bpmn\renders\versions\digitax_flow01_n8n\upload-automation\review_evidence"))
 

@@ -1,0 +1,1167 @@
+{
+  "name": "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0",
+  "id": "digitax-invoice-phase1-flow1b-pdf-ocr",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "phase1-flow1b-pdf-upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1000001-0000-4000-8000-000000000001",
+      "name": "01.1 Receive PDF upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -3200,
+        0
+      ],
+      "webhookId": "digitax-phase1-flow1b-pdf-upload",
+      "notes": "Real binary PDF upload. The multipart file field must be named \"data\" (not \"invoiceFile\" like Flow 1a's upload demo) -- this deliberately matches the unmodified \"02.1 Encode PDF for OCR\" node's hardcoded binaryPropertyName so the reused OCR chain needs zero changes. Imported inactive per the Flow 1b task: activate only after selecting real Gemini credentials in the n8n UI."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Everything downstream needs a stable identifier that survives every\n// success and failure branch, created before any API/OCR call is made.\nconst correlationId =\n  typeof crypto !== \"undefined\" && crypto.randomUUID\n    ? crypto.randomUUID()\n    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;\n\nconst item = $input.first();\nconst body = item.json.body || {};\n// \"data\" matches the unmodified \"02.1 Encode PDF for OCR\" node's binaryPropertyName.\nconst invoiceFile = item.binary ? item.binary.data : undefined;\n\nconst demoModeRequested = body.demoMode === \"true\" || body.demoMode === true;\nconst submittedOrganizationId =\n  typeof body.organizationId === \"string\" && body.organizationId.trim() !== \"\"\n    ? body.organizationId.trim()\n    : null;\n// Never a silent fallback -- only demoMode=true selects the fictional org.\nconst organizationId =\n  submittedOrganizationId || (demoModeRequested ? \"unternehmen-x-demo\" : null);\n\n// AI-execution-profile selection (2026-08-11, dev-stack/AI-selection round):\n// the browser sends only a stable profile ID -- never a provider URL, model\n// name, or credential. An absent/blank value stays null and is handled by\n// \"01.9 Resolve AI execution profile\" as \"unknown\", never defaulted to cloud.\nconst submittedAiExecutionProfile =\n  typeof body.aiExecutionProfile === \"string\" && body.aiExecutionProfile.trim() !== \"\"\n    ? body.aiExecutionProfile.trim()\n    : null;\n\nreturn [\n  {\n    json: {\n      correlationId,\n      receivedAt: new Date().toISOString(),\n      hasFile: Boolean(invoiceFile),\n      filename: invoiceFile ? invoiceFile.fileName : null,\n      mimeType: invoiceFile ? invoiceFile.mimeType : null,\n      organizationId,\n      demoModeRequested,\n      processingPath: \"pdf_ocr\",\n      aiExecutionProfile: submittedAiExecutionProfile,\n    },\n    binary: item.binary,\n  },\n];\n"
+      },
+      "id": "b1000002-0000-4000-8000-000000000002",
+      "name": "01.2 Build run context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic 4xx-shaped input/contract checks -- no OCR call has been\n// made yet, so nothing here is a \"technical\" failure and nothing here is\n// ever retried.\nconst ctx = $input.first().json;\n\nif (!ctx.hasFile) {\n  return [{ json: { ...ctx, valid: false, errorCode: \"MISSING_INVOICE_FILE\", explanation: \"No PDF binary field named 'data' was present in the upload. Not retried: this is an input/contract error, not a service failure.\" } }];\n}\nif (!ctx.organizationId) {\n  return [{ json: { ...ctx, valid: false, errorCode: \"ORGANIZATION_CONTEXT_REQUIRED\", explanation: \"organizationId was not provided and demoMode was not set. Pass organizationId explicitly, or demoMode=true to use the fictional unternehmen-x-demo organization. Not retried: this is an input/contract error, not a service failure.\" } }];\n}\nreturn [{ json: { ...ctx, valid: true } }];\n"
+      },
+      "id": "b1000003-0000-4000-8000-000000000003",
+      "name": "01.3 Validate upload request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "upload-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000004-0000-4000-8000-000000000004",
+      "name": "01.4 Has valid upload?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.3 Validate upload request\",\n    errorCode: ctx.errorCode,\n    explanation: ctx.explanation,\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: null,\n    modelId: null,\n    modelVersion: null,\n    processingLocation: null,\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b1000005-0000-4000-8000-000000000005",
+      "name": "01.5 Handle invalid upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2540,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TEMPORARY: mirrors facturx/phase1/organization_master_data.py's buyer\n// blocks only (name/street/postalCode/city/countryCode). There is no API\n// endpoint that exposes organization master data to an external caller,\n// and the real Phase 1 API cannot consume OCR-extracted fields at all yet\n// (POST /v1/invoices/process only accepts a file upload; the shipped PDF\n// adapter is MockPdfExtractionAdapter, keyed by the SHA-256 of the bytes,\n// with no injection seam for an n8n-produced OCR result). This object MUST\n// be kept in sync with organization_master_data.py by hand until a real\n// adapter or a master-data lookup endpoint exists -- see the README's\n// \"Missing API contract\" section for the exact convergence requirement.\nconst BUYER_PROFILES = {\n  \"unternehmen-x-demo\": {\n    name: \"Unternehmen X\",\n    street: \"Musterweg 10\",\n    postalCode: \"04109\",\n    city: \"Leipzig\",\n    countryCode: \"DE\",\n  },\n  \"unternehmen-y-demo\": {\n    name: \"Unternehmen Y\",\n    street: \"Industriestrasse 20\",\n    postalCode: \"01067\",\n    city: \"Dresden\",\n    countryCode: \"DE\",\n  },\n};\n\nconst ctx = $input.first().json;\nconst profile = BUYER_PROFILES[ctx.organizationId] || null;\n\nreturn [\n  {\n    json: {\n      ...ctx,\n      organizationProfileKnown: profile !== null,\n      buyerMasterData: profile,\n    },\n    binary: $input.first().binary,\n  },\n];\n"
+      },
+      "id": "b1000006-0000-4000-8000-000000000006",
+      "name": "01.6 Resolve organization profile (concept)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "org-known",
+              "leftValue": "={{ $json.organizationProfileKnown }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000007-0000-4000-8000-000000000007",
+      "name": "01.7 Organization profile known?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.6 Resolve organization profile (concept)\",\n    errorCode: \"ORGANIZATION_CONTEXT_UNKNOWN\",\n    explanation: `organizationId ${JSON.stringify(ctx.organizationId)} is not a known fictional organization profile. No silent fallback -- pass a recognized organizationId, or demoMode=true for unternehmen-x-demo.`,\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: null,\n    modelId: null,\n    modelVersion: null,\n    processingLocation: null,\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b1000008-0000-4000-8000-000000000008",
+      "name": "01.8 Handle unknown organization",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2080,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// AI-execution-profile resolution (2026-08-11, dev-stack/AI-selection\n// round). The browser sends only a stable profile ID -- provider URLs,\n// model names, and credentials are resolved here, server-side, and never\n// travel to or from the browser. No profile ID ever defaults to cloud:\n// a missing/unknown ID is classified \"unknown\" and fails safely downstream\n// (01.11), and an unconfigured local endpoint is classified\n// \"local_unavailable\" rather than silently trying (and definitely never\n// silently falling back to cloud).\nconst PROFILE_REGISTRY = {\n  \"local-default\": {\n    aiProvider: \"local-openai-compatible\",\n    modelId: $env.LOCAL_LLM_MODEL || \"local-default-model\",\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: \"flow1b-extract-v1\",\n  },\n  \"cloud-gemini\": {\n    aiProvider: \"google-gemini\",\n    modelId: \"gemini-2.5-pro\",\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: \"flow1b-extract-v1\",\n  },\n};\n\nconst ctx = $input.first().json;\nconst requested = ctx.aiExecutionProfile;\nconst known = requested ? PROFILE_REGISTRY[requested] : null;\n\nlet profileStatus;\nif (!known) {\n  profileStatus = \"unknown\";\n} else if (requested === \"local-default\" && !($env.LOCAL_LLM_BASE_URL || \"\").trim()) {\n  // Configured-availability check only -- a genuine runtime connection\n  // failure at call time is still caught by 02.3L's own error branch.\n  profileStatus = \"local_unavailable\";\n} else if (requested === \"local-default\") {\n  profileStatus = \"local\";\n} else {\n  profileStatus = \"cloud\";\n}\n\nreturn [\n  {\n    json: {\n      ...ctx,\n      aiProfileStatus: profileStatus,\n      resolvedProfile: known,\n    },\n    binary: $input.first().binary,\n  },\n];\n"
+      },
+      "id": "b1000015-0000-4000-8000-000000000015",
+      "name": "01.9 Resolve AI execution profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1840,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "profile-local",
+                    "leftValue": "={{ $json.aiProfileStatus }}",
+                    "rightValue": "local",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "local"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "profile-cloud",
+                    "leftValue": "={{ $json.aiProfileStatus }}",
+                    "rightValue": "cloud",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "cloud"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "b1000016-0000-4000-8000-000000000016",
+      "name": "01.10 Route by AI profile",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1620,
+        0
+      ],
+      "notes": "Fallback (\"extra\") output catches both \"unknown\" (unrecognized/missing profile ID) and \"local_unavailable\" (local-default selected but LOCAL_LLM_BASE_URL is not configured) -- neither ever proceeds to a provider call, and neither ever falls through to the cloud branch."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nconst isUnavailable = ctx.aiProfileStatus === \"local_unavailable\";\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.10 Route by AI profile\",\n    errorCode: isUnavailable ? \"AI_LOCAL_PROVIDER_UNAVAILABLE\" : \"AI_PROFILE_UNKNOWN\",\n    explanation: isUnavailable\n      ? \"The local AI execution profile is not configured (LOCAL_LLM_BASE_URL is unset). No automatic fallback to cloud AI -- configure a local provider or select cloud AI explicitly.\"\n      : `aiExecutionProfile ${JSON.stringify(ctx.aiExecutionProfile)} is not a known execution profile. No default -- pass \"local-default\" or \"cloud-gemini\" explicitly.`,\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: null,\n    modelId: null,\n    modelVersion: null,\n    processingLocation: null,\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b1000017-0000-4000-8000-000000000017",
+      "name": "01.11 Handle unresolved AI profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1620,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryPropertyName = 'data';\nconst result = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);\n\n  result.push({\n    json: {\n      pdfMimeType: 'application/pdf',\n      pdfBase64: buffer.toString('base64')\n    }\n  });\n}\n\nreturn result;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1400,
+        0
+      ],
+      "id": "c3dae39f-3de6-418f-ba5f-3eae110bef89",
+      "name": "02.1 Encode PDF for OCR",
+      "notes": "REUSED VERBATIM from examples/n8n/digitax_invoice_intake.json (same node id/parameters). Do not modify the extraction logic here -- see the workflow-level note on why binaryPropertyName stays \"data\". Cloud lane only -- the local lane has its own identical copy, \"02.1L Encode PDF for local OCR\", so the two provider paths stay technically independent end to end."
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  return {\n    json: {\n      geminiRequest: {\n        contents: [\n          {\n            parts: [\n              {\n                inline_data: {\n                  mime_type: 'application/pdf',\n                  data: item.json.pdfBase64\n                }\n              },\n              {\n                text: `Extract invoice header information from this PDF and return JSON only.\n\nExtraction rules:\n1. Distinguish seller (the party issuing/sending the invoice) from buyer\n   (the party the invoice is addressed to) using only the document's own\n   labels and layout -- for example \"Rechnungssteller\"/\"Von\"/\"Lieferant\"\n   typically marks the seller, and \"Rechnungsempfaenger\"/\"An\"/\"Kunde\"/\n   \"Bill To\" typically marks the buyer. Do not assume in advance which\n   company is the buyer or seller; read it from the document only.\n2. Assign each VAT ID to whichever party it is printed next to on the\n   document -- as \"VAT-ID (Seller)\" or \"VAT-ID (Buyer)\" accordingly.\n3. If a VAT ID's owner (seller or buyer) cannot be determined with\n   confidence from the document alone, return \"not found\" for that field\n   rather than guessing.\n4. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\"\n}\n\nIf a field is missing or illegible, return \"not found\".`\n              }\n            ]\n          }\n        ]\n      }\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1180,
+        0
+      ],
+      "id": "e187af11-be7a-4453-8072-a3c7482495ef",
+      "name": "02.2 Build OCR/LLM request",
+      "notes": "CORRECTED from digitax_invoice_intake.json (2026-08-10, final-demo-ui round): the original prompt hardcoded the expected buyer company, its approved addresses, and its VAT ID -- master data the OCR step must never see, since it would let the model return the \"expected\" answer instead of what the document actually says, silently defeating the downstream ORG-001 comparison. This node now extracts using only document-visible labels/layout; master data is used exclusively downstream, in the control logic, after extraction. digitax_invoice_intake.json itself is intentionally left with its original (uncorrected) prompt, since that file remains a historical, untouched reference. tests/test_n8n_flow1b_workflow.py has a dedicated test asserting no organization name/address/VAT-ID reference value ever appears in this prompt text again."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiRequest) }}",
+        "options": {}
+      },
+      "id": "851db9a0-6882-4e19-8201-bd9e2e601d5c",
+      "name": "02.3 Run OCR/LLM extraction (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -960,
+        0
+      ],
+      "executeOnce": false,
+      "retryOnFail": true,
+      "typeVersion": 4.2,
+      "maxTries": 5,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "REUSED VERBATIM from digitax_invoice_intake.json, including its existing retryOnFail/maxTries:5/onError:continueErrorOutput. Credential is the same REPLACE_WITH_YOUR_CREDENTIAL_ID placeholder as the historical workflow -- select a real Google Gemini (PaLM) API credential in the n8n UI before activating; nothing is copied from any other n8n instance."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.3 Run OCR/LLM extraction (Gemini)\",\n    errorCode: \"OCR_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The Gemini OCR/LLM service did not respond after the bounded retry.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b1000009-0000-4000-8000-000000000009",
+      "name": "02.4 Handle OCR service failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractTextFromGeminiResponse(item) {\n  const j = item.json || {};\n\n  if (\n    Array.isArray(j.candidates) &&\n    j.candidates[0] &&\n    j.candidates[0].content &&\n    Array.isArray(j.candidates[0].content.parts) &&\n    j.candidates[0].content.parts[0] &&\n    typeof j.candidates[0].content.parts[0].text === 'string'\n  ) {\n    return j.candidates[0].content.parts[0].text;\n  }\n\n  throw new Error('Could not find Gemini text output in expected response fields.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\nreturn items.map(item => {\n  const rawText = extractTextFromGeminiResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Gemini output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)')\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      gemini_raw_text: rawText,\n      aiMeta: {\n        aiProvider: profile.aiProvider,\n        modelId: profile.modelId,\n        modelVersion: profile.modelVersion,\n        processingLocation: profile.processingLocation,\n        promptVersion: profile.promptVersion,\n        fallbackUsed: false,\n      },\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        0
+      ],
+      "id": "4a35d5e4-05a1-407d-88f6-9b73d6563ecd",
+      "name": "02.5 Parse OCR/LLM output",
+      "onError": "continueErrorOutput",
+      "notes": "jsCode extends the original digitax_invoice_intake.json parsing/normalization logic (same node id) with one addition (2026-08-11, dev-stack/AI-selection round): it now also emits `aiMeta` (provider/model/processingLocation/promptVersion/fallbackUsed) so this node's output converges on the exact same shape as the local lane's \"02.5L Parse local OCR/LLM output\" -- both feed the single shared \"02.7 Normalize invoice (concept)\" node. onError: \"continueErrorOutput\" was added in the final-demo-ui round so a malformed Gemini response routes to a proper nicht_pruefbar/technical_review payload instead of crashing the run."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.5 Parse OCR/LLM output\",\n    errorCode: \"OCR_OUTPUT_PARSE_FAILED\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"Gemini's response could not be parsed into the expected JSON shape.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b100000a-0000-4000-8000-00000000000a",
+      "name": "02.6 Handle OCR parse failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryPropertyName = 'data';\nconst result = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);\n\n  result.push({\n    json: {\n      pdfMimeType: 'application/pdf',\n      pdfBase64: buffer.toString('base64')\n    }\n  });\n}\n\nreturn result;\n"
+      },
+      "id": "b1000018-0000-4000-8000-000000000018",
+      "name": "02.1L Encode PDF for local OCR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1400,
+        460
+      ],
+      "notes": "Identical logic to \"02.1 Encode PDF for OCR\", kept as its own node so the local lane is a technically independent path from the cloud lane, per the AI-selection spec."
+    },
+    {
+      "parameters": {
+        "jsCode": "// CONCEPT: assumes a local, OpenAI-compatible multimodal endpoint that\n// accepts a document as a base64 data URL in an image_url content part\n// (the convention used by several local inference servers). No model is\n// bundled or downloaded by this workflow -- LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL\n// point at whatever locally-run endpoint the developer configures.\nconst EXTRACTION_PROMPT = `Extract invoice header information from this PDF and return JSON only.\n\nExtraction rules:\n1. Distinguish seller (the party issuing/sending the invoice) from buyer\n   (the party the invoice is addressed to) using only the document's own\n   labels and layout -- for example \"Rechnungssteller\"/\"Von\"/\"Lieferant\"\n   typically marks the seller, and \"Rechnungsempfaenger\"/\"An\"/\"Kunde\"/\n   \"Bill To\" typically marks the buyer. Do not assume in advance which\n   company is the buyer or seller; read it from the document only.\n2. Assign each VAT ID to whichever party it is printed next to on the\n   document -- as \"VAT-ID (Seller)\" or \"VAT-ID (Buyer)\" accordingly.\n3. If a VAT ID's owner (seller or buyer) cannot be determined with\n   confidence from the document alone, return \"not found\" for that field\n   rather than guessing.\n4. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\"\n}\n\nIf a field is missing or illegible, return \"not found\".`;\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\nreturn items.map(item => ({\n  json: {\n    localRequest: {\n      model: profile.modelId,\n      temperature: 0,\n      messages: [\n        {\n          role: 'user',\n          content: [\n            { type: 'text', text: EXTRACTION_PROMPT },\n            {\n              type: 'image_url',\n              image_url: { url: `data:application/pdf;base64,${item.json.pdfBase64}` },\n            },\n          ],\n        },\n      ],\n    },\n  },\n}));\n"
+      },
+      "id": "b1000019-0000-4000-8000-000000000019",
+      "name": "02.2L Build local OCR/LLM request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1180,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LOCAL_LLM_BASE_URL }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.localRequest) }}",
+        "options": {}
+      },
+      "id": "b100001a-0000-4000-8000-00000000001a",
+      "name": "02.3L Run OCR/LLM extraction (local)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -960,
+        460
+      ],
+      "executeOnce": false,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "notes": "No credential/auth by default -- targets a developer-configured local OpenAI-compatible endpoint (LOCAL_LLM_BASE_URL), which is typically unauthenticated in dev. If your local endpoint needs an API key, add an Authorization header sourced from an environment expression here; never hardcode one. Bounded retry is shorter than the cloud lane's (3 tries vs 5) since a local dev endpoint should fail fast rather than mask a real unavailability -- see \"01.9 Resolve AI execution profile\" for the pre-flight configured-availability check that avoids even attempting this call when LOCAL_LLM_BASE_URL is unset."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.3L Run OCR/LLM extraction (local)\",\n    errorCode: \"LOCAL_LLM_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The local OCR/LLM endpoint did not respond after the bounded retry. No automatic fallback to cloud AI -- select cloud AI explicitly if needed.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"local-openai-compatible\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b100001b-0000-4000-8000-00000000001b",
+      "name": "02.4L Handle local OCR service failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractTextFromLocalResponse(item) {\n  const j = item.json || {};\n  if (\n    Array.isArray(j.choices) &&\n    j.choices[0] &&\n    j.choices[0].message &&\n    typeof j.choices[0].message.content === 'string'\n  ) {\n    return j.choices[0].message.content;\n  }\n  throw new Error('Could not find local LLM text output in expected choices[0].message.content field.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\nreturn items.map(item => {\n  const rawText = extractTextFromLocalResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Local LLM output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)')\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      raw_text: rawText,\n      aiMeta: {\n        aiProvider: profile.aiProvider,\n        modelId: profile.modelId,\n        modelVersion: profile.modelVersion,\n        processingLocation: profile.processingLocation,\n        promptVersion: profile.promptVersion,\n        fallbackUsed: false,\n      },\n    }\n  };\n});\n"
+      },
+      "id": "b100001c-0000-4000-8000-00000000001c",
+      "name": "02.5L Parse local OCR/LLM output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        460
+      ],
+      "onError": "continueErrorOutput",
+      "notes": "Same parsing strategy as \"02.5 Parse OCR/LLM output\" (strip markdown fences, parse JSON, default missing fields to \"not found\"), adapted to the OpenAI-compatible choices[0].message.content response shape instead of Gemini's candidates[...] shape. Output converges on the exact same {invoice_extracted, aiMeta} contract as the cloud lane so \"02.7 Normalize invoice (concept)\" can stay a single shared node."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.5L Parse local OCR/LLM output\",\n    errorCode: \"LOCAL_LLM_OUTPUT_PARSE_FAILED\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The local LLM's response could not be parsed into the expected JSON shape.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"local-openai-compatible\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b100001d-0000-4000-8000-00000000001d",
+      "name": "02.6L Handle local OCR parse failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TEMPORARY: mirrors the dotted-path fieldEvidence shape from\n// facturx/phase1/normalize/pdf_adapter.py (method/confidence/locator/\n// rawValue/state) so this stays trivially convergeable once a real adapter\n// exists -- but the confidence values below are NOT calibrated. Neither the\n// cloud (Gemini) nor local structured-JSON output carries a native\n// per-field confidence.\n//\n// Every field the model reports as a real value gets a fixed placeholder\n// confidence (0.85, just above the 0.70 default threshold used everywhere\n// else in this project). Every field reported as \"not found\" is treated as\n// NOT_EXTRACTED (confidence 0.0, state \"not_extracted\"), NOT as a confirmed\n// absence -- there is no calibrated signal to trust an LLM's own \"not\n// found\" claim as a real business fact yet. This always forces\n// not_reliable/nicht_pruefbar for that field, never a confident\n// MISSING_FIELD failure, matching the project-wide rule that low-confidence\n// or missing OCR fields must route to human review, never an automatic pass.\n//\n// Shared by both provider lanes (2026-08-11, dev-stack/AI-selection round):\n// \"02.5 Parse OCR/LLM output\" (cloud) and \"02.5L Parse local OCR/LLM\n// output\" (local) both emit the same {invoice_extracted, aiMeta} shape, so\n// this single node produces one identical canonical contract regardless of\n// which lane ran -- per the AI-selection spec's convergence requirement.\nconst PLACEHOLDER_FOUND_CONFIDENCE = 0.85;\nconst parsed = $input.first().json;\nconst g = parsed.invoice_extracted;\n\nfunction emit(rawValue, locator) {\n  const found = typeof rawValue === \"string\" && rawValue.trim() && rawValue.trim().toLowerCase() !== \"not found\";\n  return {\n    value: found ? rawValue.trim() : null,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\n\nconst buyerName = emit(g[\"Name (Buyer)\"], \"invoice.buyer.name\");\nconst buyerStreet = emit(g[\"Address (Buyer)\"], \"invoice.buyer.address.street\");\nconst buyerPostal = emit(g[\"Zip (Buyer)\"], \"invoice.buyer.address.postalCode\");\nconst buyerCity = emit(g[\"City (Buyer)\"], \"invoice.buyer.address.city\");\nconst buyerCountry = emit(g[\"Country (Buyer)\"], \"invoice.buyer.address.countryCode\");\n\nconst fieldEvidence = {\n  \"invoice.buyer.name\": buyerName.evidence,\n  \"invoice.buyer.address.street\": buyerStreet.evidence,\n  \"invoice.buyer.address.postalCode\": buyerPostal.evidence,\n  \"invoice.buyer.address.city\": buyerCity.evidence,\n  \"invoice.buyer.address.countryCode\": buyerCountry.evidence,\n};\n\nfunction orNull(v) {\n  return v === \"not found\" ? null : v;\n}\n\nconst invoice = {\n  invoiceNumber: orNull(g[\"Invoice No\"]),\n  issueDate: orNull(g[\"Invoice Date\"]),\n  supplier: {\n    name: orNull(g[\"Name (Seller)\"]),\n    vatId: orNull(g[\"VAT-ID (Seller)\"]),\n    address: {\n      street: orNull(g[\"Address (Seller)\"]),\n      postalCode: orNull(g[\"Zip (Seller)\"]),\n      city: orNull(g[\"City (Seller)\"]),\n      countryCode: orNull(g[\"Country (Seller)\"]),\n    },\n  },\n  buyer: {\n    name: buyerName.value,\n    vatId: orNull(g[\"VAT-ID (Buyer)\"]),\n    address: {\n      street: buyerStreet.value,\n      postalCode: buyerPostal.value,\n      city: buyerCity.value,\n      countryCode: buyerCountry.value,\n    },\n  },\n};\n\nconst ctx = $('01.2 Build run context').item.json;\nconst org = $('01.6 Resolve organization profile (concept)').item.json;\n\nreturn [\n  {\n    json: {\n      correlationId: ctx.correlationId,\n      organizationId: ctx.organizationId,\n      processingPath: ctx.processingPath,\n      aiExecutionProfile: ctx.aiExecutionProfile,\n      buyerMasterData: org.buyerMasterData,\n      invoice,\n      fieldEvidence,\n      rawExtractionText: parsed.gemini_raw_text || parsed.raw_text,\n      aiMeta: parsed.aiMeta,\n    },\n  },\n];\n"
+      },
+      "id": "b100000b-0000-4000-8000-00000000000b",
+      "name": "02.7 Normalize invoice (concept)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TEMPORARY: replicates facturx/phase1/controls/executor.py::evaluate_org_001\n// and its _check/_combine/_normalize_for_match helpers exactly (same 5\n// fields, same 0.70 confidence threshold, same case/whitespace-insensitive\n// comparison, same severity/reason-code shape) so this control's output is\n// structurally interchangeable with the real one -- see the README for what\n// a real convergence would require.\nconst THRESHOLD = 0.70;\nconst CONTROL_ID = \"ORG-001\";\nconst TITLE = \"Stammdatenabgleich Rechnungsempfänger\";\nconst RULE_VERSION = \"1.0.0\";\n\nfunction normalizeForMatch(value) {\n  return (value || \"\").toString().trim().toLowerCase().replace(/\\s+/g, \" \");\n}\n\nfunction checkField(value, evidence) {\n  const confidence = evidence.confidence;\n  if (confidence < THRESHOLD) {\n    return {\n      outcome: \"not_reliable\", reasonCodes: [\"LOW_CONFIDENCE_EXTRACTION\"], evidenceRefs: [evidence.locator],\n      message: `${evidence.locator}: extraction confidence ${confidence.toFixed(2)} is below the ${THRESHOLD.toFixed(2)} reliability threshold.`,\n    };\n  }\n  if (value === null || value === undefined || (typeof value === \"string\" && !value.trim())) {\n    return { outcome: \"failed\", reasonCodes: [\"MISSING_FIELD\"], evidenceRefs: [evidence.locator], message: `${evidence.locator}: required value is missing.` };\n  }\n  return { outcome: \"passed\", reasonCodes: [], evidenceRefs: [evidence.locator], message: null };\n}\n\nfunction combine(parts) {\n  const outcomes = parts.map((p) => p.outcome);\n  const reasonCodes = [...new Set(parts.flatMap((p) => p.reasonCodes))].sort();\n  const evidenceRefs = [...new Set(parts.flatMap((p) => p.evidenceRefs))].sort();\n  const messages = parts.map((p) => p.message).filter(Boolean);\n  const combinedMessage = messages.length ? messages.join(\" \") : null;\n  if (outcomes.includes(\"not_reliable\")) return { outcome: \"not_reliable\", reasonCodes, evidenceRefs, message: combinedMessage };\n  if (outcomes.includes(\"failed\")) return { outcome: \"failed\", reasonCodes, evidenceRefs, message: combinedMessage };\n  return { outcome: \"passed\", reasonCodes: [], evidenceRefs, message: null };\n}\n\nconst ctx = $input.first().json;\nconst invoice = ctx.invoice;\nconst fieldEvidence = ctx.fieldEvidence;\nconst masterData = ctx.buyerMasterData;\n\nconst checks = [\n  checkField(invoice.buyer.name, fieldEvidence[\"invoice.buyer.name\"]),\n  checkField(invoice.buyer.address.street, fieldEvidence[\"invoice.buyer.address.street\"]),\n  checkField(invoice.buyer.address.postalCode, fieldEvidence[\"invoice.buyer.address.postalCode\"]),\n  checkField(invoice.buyer.address.city, fieldEvidence[\"invoice.buyer.address.city\"]),\n  checkField(invoice.buyer.address.countryCode, fieldEvidence[\"invoice.buyer.address.countryCode\"]),\n];\nconst combined = combine(checks);\n\nlet result;\nif (combined.outcome !== \"passed\") {\n  result = {\n    controlId: CONTROL_ID, title: TITLE, outcome: combined.outcome,\n    severity: \"blocking\", reasonCodes: combined.reasonCodes, evidenceRefs: combined.evidenceRefs,\n    ruleVersion: RULE_VERSION, message: combined.message, details: null,\n  };\n} else {\n  const fieldPairs = [\n    [\"invoice.buyer.name\", invoice.buyer.name, masterData.name],\n    [\"invoice.buyer.address.street\", invoice.buyer.address.street, masterData.street],\n    [\"invoice.buyer.address.postalCode\", invoice.buyer.address.postalCode, masterData.postalCode],\n    [\"invoice.buyer.address.city\", invoice.buyer.address.city, masterData.city],\n    [\"invoice.buyer.address.countryCode\", invoice.buyer.address.countryCode, masterData.countryCode],\n  ];\n  const mismatches = fieldPairs\n    .filter(([, actual, expected]) => normalizeForMatch(actual) !== normalizeForMatch(expected))\n    .map(([f, actual, expected]) => ({ field: f, expected, actual }));\n\n  if (mismatches.length > 0) {\n    const message = \"Buyer data does not match approved organization master data: \" +\n      mismatches.map((m) => `${m.field} expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.actual)}`).join(\"; \");\n    result = {\n      controlId: CONTROL_ID, title: TITLE, outcome: \"failed\", severity: \"blocking\",\n      reasonCodes: [\"MASTER_DATA_MISMATCH\"], evidenceRefs: combined.evidenceRefs,\n      ruleVersion: RULE_VERSION, message, details: { mismatches },\n    };\n  } else {\n    result = {\n      controlId: CONTROL_ID, title: TITLE, outcome: \"passed\", severity: \"none\",\n      reasonCodes: [], evidenceRefs: combined.evidenceRefs, ruleVersion: RULE_VERSION,\n      message: null, details: null,\n    };\n  }\n}\n\nreturn [{ json: { ...ctx, org001: result } }];\n"
+      },
+      "id": "b100000c-0000-4000-8000-00000000000c",
+      "name": "03.1 Run DigiTax controls (concept)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregation mirrors facturx/phase1/controls/aggregate.py's mapping for a\n// single control exactly: not_reliable -> nicht_pruefbar/prioritized_review,\n// failed+blocking -> klaerung_erforderlich/prioritized_review, passed ->\n// unauffaellig/standard_review. \"technical_review\" (used elsewhere in this\n// workflow) is deliberately NOT one of the real API's routing values -- it\n// only appears upstream of this node, for genuine service/input failures.\n//\n// Also carries the audit fields required by the AI-selection spec\n// (2026-08-11 round): processingPath, aiExecutionProfile, aiProvider,\n// modelId, modelVersion, processingLocation, promptVersion, fallbackUsed --\n// sourced from \"02.7 Normalize invoice (concept)\"'s aiMeta, which is\n// identical regardless of which provider lane ran. No secret or internal\n// URL is ever included here.\nconst ctx = $input.first().json;\nconst org001 = ctx.org001;\nconst aiMeta = ctx.aiMeta || {};\n\nlet status, routing;\nif (org001.outcome === \"not_reliable\") {\n  status = \"nicht_pruefbar\";\n  routing = \"prioritized_review\";\n} else if (org001.outcome === \"failed\") {\n  status = \"klaerung_erforderlich\";\n  routing = \"prioritized_review\";\n} else {\n  status = \"unauffaellig\";\n  routing = \"standard_review\";\n}\n\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status,\n    routing,\n    failedStep: null,\n    errorCode: null,\n    explanation: null,\n    invoice: ctx.invoice,\n    controls: [org001],\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: aiMeta.aiProvider || null,\n    modelId: aiMeta.modelId || null,\n    modelVersion: aiMeta.modelVersion || null,\n    processingLocation: aiMeta.processingLocation || null,\n    promptVersion: aiMeta.promptVersion || null,\n    fallbackUsed: aiMeta.fallbackUsed || false,\n  },\n}];\n"
+      },
+      "id": "b100000d-0000-4000-8000-00000000000d",
+      "name": "04.1 Build control report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Single convergence point for every success and failure branch. Renders\n// self-contained HTML -- the demo audience must never need to inspect raw\n// n8n execution JSON. A prominent notice states this is a temporary,\n// n8n-side-only implementation (see the workflow-level and README notes).\nconst r = $input.first().json;\n\nfunction esc(s) {\n  if (s === null || s === undefined) return \"\";\n  return String(s).replace(/[&<>\"']/g, (c) => ({ \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\", \"'\": \"&#39;\" }[c]));\n}\n\nconst statusColors = { unauffaellig: \"#1b7a3d\", klaerung_erforderlich: \"#a15c00\", nicht_pruefbar: \"#a11616\" };\nconst statusColor = statusColors[r.status] || \"#444\";\n\nconst aiSummary = r.aiExecutionProfile\n  ? `<p><b>AI execution:</b> ${esc(r.aiExecutionProfile)} via ${esc(r.aiProvider) || \"(none)\"} ${esc(r.modelId) || \"\"} -- processed ${esc(r.processingLocation) || \"(unknown)\"}, prompt ${esc(r.promptVersion) || \"(unknown)\"}, fallback used: ${r.fallbackUsed ? \"yes\" : \"no\"}</p>`\n  : \"\";\n\nlet body;\nif (r.controls) {\n  const inv = r.invoice;\n  const rows = r.controls.map((c) => `\n    <tr>\n      <td>${esc(c.controlId)}</td>\n      <td>${esc(c.title)}</td>\n      <td>${esc(c.outcome)}</td>\n      <td>${esc(c.severity)}</td>\n      <td>${esc((c.reasonCodes || []).join(\", \"))}</td>\n      <td>${esc(c.message)}</td>\n      <td><pre>${esc(c.details ? JSON.stringify(c.details, null, 2) : \"\")}</pre></td>\n    </tr>`).join(\"\");\n\n  body = `\n    <h2>Invoice ${esc(inv.invoiceNumber || \"(missing)\")} dated ${esc(inv.issueDate || \"(missing)\")}</h2>\n    <p><b>Supplier (as read by OCR/LLM, not verified):</b> ${esc(inv.supplier.name)}</p>\n    <p><b>Buyer (as read by OCR/LLM):</b> ${esc(inv.buyer.name)}, ${esc(inv.buyer.address.street)}, ${esc(inv.buyer.address.postalCode)} ${esc(inv.buyer.address.city)}, ${esc(inv.buyer.address.countryCode)}</p>\n    <p><b>Organization profile:</b> ${esc(r.organizationId)}</p>\n    ${aiSummary}\n    <h3>Controls</h3>\n    <table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n      <tr><th>Control</th><th>Title</th><th>Outcome</th><th>Severity</th><th>Reason codes</th><th>Message</th><th>Details</th></tr>\n      ${rows}\n    </table>`;\n} else {\n  body = `\n    <h2>Technical result -- no control was evaluated</h2>\n    <p><b>Failed step:</b> ${esc(r.failedStep)}</p>\n    <p><b>Error code:</b> ${esc(r.errorCode)}</p>\n    <p><b>Explanation:</b> ${esc(r.explanation)}</p>\n    ${aiSummary}`;\n}\n\nconst html = `<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>DigiTax Flow 1b result</title>\n<style>\n  body { font-family: sans-serif; margin: 2rem; color: #1a1a1a; }\n  .banner { padding: 1rem; border-radius: 6px; color: white; background: ${statusColor}; margin-bottom: 1rem; }\n  .temp-notice { padding: 1rem; background: #fff3cd; border: 1px solid #d6b656; border-radius: 6px; margin-bottom: 1.5rem; }\n  table { border-collapse: collapse; width: 100%; }\n  th { background: #eee; text-align: left; }\n  pre { white-space: pre-wrap; margin: 0; font-size: 0.85em; }\n  .boundary { margin-top: 2rem; padding: 1rem; background: #f5f5f5; border-left: 4px solid #888; }\n</style>\n</head>\n<body>\n  <div class=\"temp-notice\">\n    <b>Flow 1b is a temporary n8n-side implementation.</b> OCR/LLM extraction\n    (local or cloud, per the selected AI execution profile) is real; the\n    ORG-001 evaluation below is computed in n8n, not by the Phase 1 API --\n    POST /v1/invoices/process cannot yet consume OCR-extracted fields (its\n    PDF adapter is a mock with no injection seam). This result is not yet\n    interchangeable with a real API-issued control report. See\n    examples/n8n/README.md for the missing adapter/API contract.\n  </div>\n  <div class=\"banner\">\n    <b>STATUS: ${esc(r.status)}</b> (routing: ${esc(r.routing)})<br>\n    Correlation ID: ${esc(r.correlationId)}\n  </div>\n  ${body}\n  <div class=\"boundary\">\n    This is a Flow 1b finding for human review only -- it is not an\n    approval, rejection, booking, payment, or supplier communication.\n  </div>\n</body></html>`;\n\nreturn [{ json: { ...r, html } }];\n"
+      },
+      "id": "b100000e-0000-4000-8000-00000000000e",
+      "name": "04.2 Render control report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        140,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b100000f-0000-4000-8000-00000000000f",
+      "name": "04.3 Respond to browser",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        360,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "standard-review",
+                    "leftValue": "={{ $json.routing }}",
+                    "rightValue": "standard_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "standard_review"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "prioritized-review",
+                    "leftValue": "={{ $json.routing }}",
+                    "rightValue": "prioritized_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "prioritized_review"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "technical-review",
+                    "leftValue": "={{ $json.routing }}",
+                    "rightValue": "technical_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "technical_review"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "b1000010-0000-4000-8000-000000000010",
+      "name": "04.4 Route by review status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        580,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b1000011-0000-4000-8000-000000000011",
+      "name": "05.1 Human review - standard",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        820,
+        -280
+      ],
+      "notes": "Phase 1b ends here: routed for standard-priority human review. No automated approval, booking, payment, or supplier communication."
+    },
+    {
+      "parameters": {},
+      "id": "b1000012-0000-4000-8000-000000000012",
+      "name": "05.2 Human review - prioritized",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        820,
+        -100
+      ],
+      "notes": "Phase 1b ends here: routed for prioritized human review (klaerung_erforderlich, or a nicht_pruefbar not_reliable-extraction outcome from ORG-001 itself). No automated approval, booking, payment, or supplier communication."
+    },
+    {
+      "parameters": {},
+      "id": "b1000013-0000-4000-8000-000000000013",
+      "name": "05.3 Human review - technical",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        820,
+        80
+      ],
+      "notes": "Explicit technical-failure route -- does not depend on the unknown-value fallback. Reached for missing upload, unknown organization profile, unresolved AI execution profile, local/cloud OCR service failure, or OCR output parse failure. No automated approval, booking, payment, or supplier communication."
+    },
+    {
+      "parameters": {},
+      "id": "b1000014-0000-4000-8000-000000000014",
+      "name": "05.4 Human review - unknown",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        820,
+        260
+      ],
+      "notes": "Safety fallback for a routing value that matches none of the explicit routes above -- never silently ignored."
+    },
+    {
+      "parameters": {
+        "content": "## 01 Input and context",
+        "height": 100,
+        "width": 500,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3220,
+        -160
+      ],
+      "id": "note-1b-00",
+      "name": "Sticky Note 0"
+    },
+    {
+      "parameters": {
+        "content": "## 01.6-01.11 Organization + AI-profile resolution\nOrganization master-data profile lookup (concept), then AI execution\nprofile resolution: the browser sends only a stable profile ID\n(local-default / cloud-gemini). An unknown ID or an unconfigured local\nprovider fails safely to nicht_pruefbar/technical_review -- never a\nsilent default to cloud, never a silent local-to-cloud fallback.",
+        "height": 160,
+        "width": 1080,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2300,
+        -280
+      ],
+      "id": "note-1b-05",
+      "name": "Sticky Note 5"
+    },
+    {
+      "parameters": {
+        "content": "## 02 Intake and normalization -- two technically separate lanes\nCONCEPT/TEMPORARY: n8n-side OCR/LLM extraction, not yet processed by the\nreal API. Cloud lane (y=0): unchanged Gemini path. Local lane (y=460,\nbelow): configurable local OpenAI-compatible endpoint, no model bundled\nor auto-downloaded. Both lanes converge on 02.7 Normalize invoice\n(concept) with an identical canonical invoice/fieldEvidence/aiMeta shape.",
+        "height": 180,
+        "width": 900,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1400,
+        -280
+      ],
+      "id": "note-1b-01",
+      "name": "Sticky Note 1"
+    },
+    {
+      "parameters": {
+        "content": "## 02L Local AI extraction (concept)\nOpenAI-compatible endpoint via LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL.\nUnavailable/unconfigured -> nicht_pruefbar/technical_review, never a\nsilent fallback to cloud.",
+        "height": 120,
+        "width": 700,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1400,
+        560
+      ],
+      "id": "note-1b-06",
+      "name": "Sticky Note 6"
+    },
+    {
+      "parameters": {
+        "content": "## 03 DigiTax controls\nCONCEPT/TEMPORARY: n8n-side mirror of\nevaluate_org_001() -- same field list,\nthreshold, and control ID as Flow 1a,\nnot yet processed by the real API.",
+        "height": 180,
+        "width": 420,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        -260
+      ],
+      "id": "note-1b-02",
+      "name": "Sticky Note 2"
+    },
+    {
+      "parameters": {
+        "content": "## 04 Control report and routing\nAdds AI-selection audit fields: processingPath, aiExecutionProfile,\naiProvider, modelId, modelVersion, processingLocation, promptVersion,\nfallbackUsed. No secrets or internal URLs are ever included.",
+        "height": 130,
+        "width": 820,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        -160
+      ],
+      "id": "note-1b-03",
+      "name": "Sticky Note 3"
+    },
+    {
+      "parameters": {
+        "content": "## 05 Human review handoff",
+        "height": 120,
+        "width": 280,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        780,
+        -440
+      ],
+      "id": "note-1b-04",
+      "name": "Sticky Note 4"
+    },
+    {
+      "parameters": {
+        "content": "## VERSION INFO\nWorkflow: DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0\nStatus: concept (inactive, credentials pending -- NOT part of the demo)\nBoundary: plain PDF upload -> resolve AI execution profile -> local OR\ncloud OCR/LLM extraction -> n8n-side ORG-001 mirror -> human review\n(never approval, booking, payment, or supplier communication)\nAI selection (new in v0.2.0): browser sends only a stable profile ID\n(local-default / cloud-gemini); server/n8n resolves provider, model, and\nendpoint. No silent local-to-cloud fallback; unknown profile or\nunconfigured local provider fails safely to nicht_pruefbar/\ntechnical_review. Both lanes converge on one canonical invoice contract.\nControl contract MIRRORED, not executed by the real API: ORG-001 rule_version\n1.0.0, threshold 0.70 -- see facturx/phase1/controls/catalog.py and\nexecutor.py::evaluate_org_001. Real API convergence pending (see README).\nSource: digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json",
+        "height": 320,
+        "width": 620,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3220,
+        -520
+      ],
+      "id": "note-1b-version",
+      "name": "Version Info"
+    }
+  ],
+  "connections": {
+    "01.1 Receive PDF upload": {
+      "main": [
+        [
+          {
+            "node": "01.2 Build run context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.2 Build run context": {
+      "main": [
+        [
+          {
+            "node": "01.3 Validate upload request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.3 Validate upload request": {
+      "main": [
+        [
+          {
+            "node": "01.4 Has valid upload?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4 Has valid upload?": {
+      "main": [
+        [
+          {
+            "node": "01.6 Resolve organization profile (concept)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "01.5 Handle invalid upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.5 Handle invalid upload": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.6 Resolve organization profile (concept)": {
+      "main": [
+        [
+          {
+            "node": "01.7 Organization profile known?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.7 Organization profile known?": {
+      "main": [
+        [
+          {
+            "node": "01.9 Resolve AI execution profile",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "01.8 Handle unknown organization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.8 Handle unknown organization": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.9 Resolve AI execution profile": {
+      "main": [
+        [
+          {
+            "node": "01.10 Route by AI profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.10 Route by AI profile": {
+      "main": [
+        [
+          {
+            "node": "02.1L Encode PDF for local OCR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.1 Encode PDF for OCR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "01.11 Handle unresolved AI profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.11 Handle unresolved AI profile": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.1 Encode PDF for OCR": {
+      "main": [
+        [
+          {
+            "node": "02.2 Build OCR/LLM request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.2 Build OCR/LLM request": {
+      "main": [
+        [
+          {
+            "node": "02.3 Run OCR/LLM extraction (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3 Run OCR/LLM extraction (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "02.5 Parse OCR/LLM output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.4 Handle OCR service failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.4 Handle OCR service failure": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.5 Parse OCR/LLM output": {
+      "main": [
+        [
+          {
+            "node": "02.7 Normalize invoice (concept)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.6 Handle OCR parse failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.6 Handle OCR parse failure": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.1L Encode PDF for local OCR": {
+      "main": [
+        [
+          {
+            "node": "02.2L Build local OCR/LLM request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.2L Build local OCR/LLM request": {
+      "main": [
+        [
+          {
+            "node": "02.3L Run OCR/LLM extraction (local)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3L Run OCR/LLM extraction (local)": {
+      "main": [
+        [
+          {
+            "node": "02.5L Parse local OCR/LLM output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.4L Handle local OCR service failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.4L Handle local OCR service failure": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.5L Parse local OCR/LLM output": {
+      "main": [
+        [
+          {
+            "node": "02.7 Normalize invoice (concept)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.6L Handle local OCR parse failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.6L Handle local OCR parse failure": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.7 Normalize invoice (concept)": {
+      "main": [
+        [
+          {
+            "node": "03.1 Run DigiTax controls (concept)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03.1 Run DigiTax controls (concept)": {
+      "main": [
+        [
+          {
+            "node": "04.1 Build control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.1 Build control report": {
+      "main": [
+        [
+          {
+            "node": "04.2 Render control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.2 Render control report": {
+      "main": [
+        [
+          {
+            "node": "04.3 Respond to browser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.3 Respond to browser": {
+      "main": [
+        [
+          {
+            "node": "04.4 Route by review status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.4 Route by review status": {
+      "main": [
+        [
+          {
+            "node": "05.1 Human review - standard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05.2 Human review - prioritized",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05.3 Human review - technical",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05.4 Human review - unknown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {}
+}
