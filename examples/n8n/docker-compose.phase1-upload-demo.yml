@@ -21,6 +21,8 @@ services:
       # Host 6970, not 6969, so this containerized demo API never collides
       # with a manually-run `python run.py` used for other local work.
       - "6970:6969"
+    environment:
+      - FACTURX_ENABLE_DEMO_ENDPOINTS=true
     networks:
       - demo
     healthcheck:

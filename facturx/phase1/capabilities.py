@@ -5,9 +5,9 @@ deliberately does NOT support yet -- rather than implying completeness.
 Per AGENTS.md: never describe XSD/Schematron validity as proof of legal or
 tax compliance, and be explicit when a baseline is outdated.
 """
-from .controls.profiles import STARTER_PROFILE
+from .controls.profiles import OPERATING_PROFILE, STARTER_PROFILE
 
-CATALOG_VERSION = "0.2.0"
+CATALOG_VERSION = "0.3.0"
 
 CAPABILITIES = {
     "structuredFormats": {
@@ -106,12 +106,28 @@ CAPABILITIES = {
         "catalogVersion": CATALOG_VERSION,
         "controlIds": list(STARTER_PROFILE.control_ids),
     },
+    "controlProfiles": [
+        {
+            "id": STARTER_PROFILE.id,
+            "version": STARTER_PROFILE.version,
+            "controlIds": list(STARTER_PROFILE.control_ids),
+            "demoOrganizationId": "unternehmen-x-demo",
+        },
+        {
+            "id": OPERATING_PROFILE.id,
+            "version": OPERATING_PROFILE.version,
+            "controlIds": list(OPERATING_PROFILE.control_ids),
+            "demoOrganizationId": "unternehmen-y-demo",
+        },
+    ],
     "organizationMasterData": {
-        "status": "single_demo_snapshot",
+        "status": "two_demo_snapshots",
         "note": (
-            "Only one built-in fictional organization ('unternehmen-x-demo') "
-            "is supported. Callers must opt in explicitly; there is no "
-            "fallback to demo data for unrecognized organization context."
+            "Two built-in fictional organizations are supported: Unternehmen X "
+            "uses the starter profile; Unternehmen Y uses the operating profile "
+            "with approved-supplier matching (ORG-002). Callers must select one "
+            "explicitly; demoMode=true selects Unternehmen X only, and unknown "
+            "organization IDs never fall back to demo data."
         ),
     },
 }

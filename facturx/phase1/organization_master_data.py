@@ -1,29 +1,55 @@
-"""The one built-in synthetic organization master-data snapshot for this slice.
+"""Built-in synthetic organization contexts for the reproducible demo.
 
-Real multi-tenant master-data loading (a lookup by organizationId against an
-approved organization's own data) is wave-2 scope (control_catalog.md, ORG-002+).
-This slice ships exactly one fictional demo snapshot ("Unternehmen X", matching
-docs/invoice_phase1/examples/canonical_invoice.example.json) and requires callers
-to opt into it explicitly -- there is no silent fallback to demo data for an
-unrecognized or missing organization context. See ORGANIZATION_CONTEXT_REQUIRED
-in facturx/phase1/errors.py / api.py.
+These are fixtures, not a multi-tenant persistence implementation. Callers must
+select a known fictional organization explicitly; ``demoMode=true`` selects
+Unternehmen X only. There is no fallback for an unknown organization ID.
 """
 
-DEMO_ORGANIZATION_ID = "unternehmen-x-demo"
+from .controls.profiles import OPERATING_PROFILE, STARTER_PROFILE
 
-UNTERNEHMEN_X_SNAPSHOT = {
-    "name": "Unternehmen X",
-    "street": "Musterweg 10",
-    "postalCode": "04109",
-    "city": "Leipzig",
-    "countryCode": "DE",
+DEMO_ORGANIZATION_ID = "unternehmen-x-demo"
+UNTERNEHMEN_Y_ID = "unternehmen-y-demo"
+
+UNTERNEHMEN_X_CONTEXT = {
+    "organizationId": DEMO_ORGANIZATION_ID,
+    "controlProfileId": STARTER_PROFILE.id,
+    "buyer": {
+        "name": "Unternehmen X",
+        "street": "Musterweg 10",
+        "postalCode": "04109",
+        "city": "Leipzig",
+        "countryCode": "DE",
+    },
+    "approvedSuppliers": [],
+}
+
+UNTERNEHMEN_Y_CONTEXT = {
+    "organizationId": UNTERNEHMEN_Y_ID,
+    "controlProfileId": OPERATING_PROFILE.id,
+    "buyer": {
+        "name": "Unternehmen Y",
+        "street": "Industriestrasse 20",
+        "postalCode": "01067",
+        "city": "Dresden",
+        "countryCode": "DE",
+    },
+    "approvedSuppliers": [
+        {
+            "supplierId": "SUP-DE-001",
+            "name": "Beispiel Lieferant GmbH",
+            "vatId": "DE111111111",
+            "taxId": None,
+        }
+    ],
+}
+
+ORGANIZATION_CONTEXTS = {
+    DEMO_ORGANIZATION_ID: UNTERNEHMEN_X_CONTEXT,
+    UNTERNEHMEN_Y_ID: UNTERNEHMEN_Y_CONTEXT,
 }
 
 
 def resolve_master_data(organization_id: str | None, demo_mode: bool) -> dict | None:
-    """Returns the master-data snapshot for the given context, or None if the
-    caller did not explicitly opt into the one supported demo organization.
-    """
-    if demo_mode or organization_id == DEMO_ORGANIZATION_ID:
-        return UNTERNEHMEN_X_SNAPSHOT
-    return None
+    """Return a known synthetic context without silently accepting unknown IDs."""
+    resolved_id = DEMO_ORGANIZATION_ID if demo_mode and not organization_id else organization_id
+    return ORGANIZATION_CONTEXTS.get(resolved_id)

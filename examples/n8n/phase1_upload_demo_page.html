@@ -6,11 +6,11 @@
   (file://...) while the isolated stack from
   docker-compose.phase1-upload-demo.yml is running. It POSTs straight to the
   webhook and lets the browser render the HTML response the workflow
-  returns (see digitax_invoice_phase1_upload_demo.json's "Build Browser
+  returns (see digitax_invoice_phase1_flow1a_upload_v1_0_0.json's "Build Browser
   Response" node). No JavaScript, no external resources, no build step.
 
   Why a static page instead of n8n's own Form Trigger: see the notes on the
-  "Webhook: Invoice Upload" node in digitax_invoice_phase1_upload_demo.json.
+  "01.1 Receive invoice upload" node in digitax_invoice_phase1_flow1a_upload_v1_0_0.json.
 -->
 <html lang="en">
 <head>
@@ -20,7 +20,7 @@
   body { font-family: sans-serif; max-width: 40rem; margin: 3rem auto; color: #1a1a1a; }
   fieldset { border: 1px solid #ccc; border-radius: 6px; padding: 1rem 1.5rem; }
   label { display: block; margin: 0.75rem 0 0.25rem; font-weight: bold; }
-  input[type="text"], input[type="url"] { width: 100%; padding: 0.4rem; box-sizing: border-box; }
+  input[type="text"], input[type="url"], select { width: 100%; padding: 0.4rem; box-sizing: border-box; }
   button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; }
   .boundary { margin-top: 2rem; padding: 1rem; background: #f5f5f5; border-left: 4px solid #888; font-size: 0.9rem; }
 </style>
@@ -41,8 +41,12 @@
       <label for="invoiceFile">Invoice file</label>
       <input type="file" id="invoiceFile" name="invoiceFile" required>
 
-      <label for="organizationId">Organization ID (leave blank to use demo mode below)</label>
-      <input type="text" id="organizationId" name="organizationId" placeholder="e.g. unternehmen-x-demo">
+      <label for="organizationId">Organization and control profile</label>
+      <select id="organizationId" name="organizationId">
+        <option value="">Select an organization or use demo mode below</option>
+        <option value="unternehmen-x-demo">Unternehmen X - starter profile</option>
+        <option value="unternehmen-y-demo">Unternehmen Y - operating profile with supplier matching</option>
+      </select>
 
       <label><input type="checkbox" name="demoMode" value="true"> Demo mode (defaults to the fictional Unternehmen X organization if no Organization ID is given)</label>
 

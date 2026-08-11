@@ -28,12 +28,12 @@ def _scenario(scenario_id: str) -> dict:
 
 
 def test_valid_scenario_visible_text_matches_embedded_xml_and_api_result(client):
-    scenario = _scenario("valid")
+    scenario = _scenario("x_valid")
     pdf_bytes, xml_bytes, invoice = demo.build_hybrid_pdf(scenario)
 
     assert invoice["invoiceNumber"].encode() in pdf_bytes
     assert b"119,00" in pdf_bytes  # grossAmount and payableAmount, de-DE formatted
-    assert xml_bytes == (demo.FIXTURES_DIR / scenario["xmlFixture"]).read_bytes()
+    assert xml_bytes == demo._scenario_xml_bytes(scenario)
 
     inspect_response = client.post(
         "/v1/invoices/inspect", files={"file": ("invoice.pdf", pdf_bytes, "application/pdf")}
@@ -47,7 +47,7 @@ def test_valid_scenario_visible_text_matches_embedded_xml_and_api_result(client)
     process_response = client.post(
         "/v1/invoices/process",
         files={"file": ("invoice.pdf", pdf_bytes, "application/pdf")},
-        data={"organizationId": "unternehmen-x-demo"},
+        data={"organizationId": scenario["organizationId"]},
     )
     assert process_response.status_code == 200
     body = process_response.json()
@@ -71,17 +71,17 @@ def test_valid_scenario_visible_text_matches_embedded_xml_and_api_result(client)
 
 
 def test_incorrect_payable_scenario_matches_official_and_digitax_findings(client):
-    scenario = _scenario("incorrect_payable")
+    scenario = _scenario("x_incorrect_payable")
     pdf_bytes, xml_bytes, invoice = demo.build_hybrid_pdf(scenario)
 
     assert invoice["invoiceNumber"].encode() in pdf_bytes
     assert b"125,00" in pdf_bytes  # the wrong payableAmount, visible on the page
-    assert xml_bytes == (demo.FIXTURES_DIR / scenario["xmlFixture"]).read_bytes()
+    assert xml_bytes == demo._scenario_xml_bytes(scenario)
 
     process_response = client.post(
         "/v1/invoices/process",
         files={"file": ("invoice.pdf", pdf_bytes, "application/pdf")},
-        data={"organizationId": "unternehmen-x-demo"},
+        data={"organizationId": scenario["organizationId"]},
     )
     assert process_response.status_code == 200
     report = process_response.json()["phase1ControlReport"]
@@ -106,11 +106,14 @@ def test_generated_pdfs_carry_the_honest_109_label_never_1092():
         assert b"1.09.2" not in pdf_bytes
 
 
-def test_hybrid_pdfs_use_only_the_accepted_xml_fixtures():
-    """Boundary check: this generator must not hand-author or invent any
-    new XML content -- only the already-accepted, already-reviewed fixture
-    files in tests/fixtures/."""
-    accepted = {"facturx_valid_en16931.xml", "facturx_incorrect_payable.xml"}
+def test_hybrid_pdfs_derive_from_reviewed_xml_fixtures_with_declared_mutations():
+    """Every demo starts from an accepted fixture; scenario mutations remain
+    explicit and are revalidated as part of hybrid-PDF generation."""
+    accepted = {
+        "facturx_valid_en16931.xml",
+        "facturx_incorrect_payable.xml",
+        "facturx_schematron_invalid.xml",
+    }
     used = {s["xmlFixture"] for s in demo.SCENARIOS}
     assert used <= accepted
     for filename in used:
@@ -124,3 +127,39 @@ def test_hybrid_pdfs_use_only_the_accepted_xml_fixtures():
             )["fixtures"]
         }
         assert filename in manifest_files
+
+
+def test_six_case_profile_and_finding_matrix_runs_through_public_api(client):
+    expected = {
+        "x_valid": ("inbound-starter-de-v1", set()),
+        "x_missing_supplier_identifier": ("inbound-starter-de-v1", {"STR-004", "FRM-003"}),
+        "x_incorrect_payable": ("inbound-starter-de-v1", {"STR-004", "CAL-003"}),
+        "x_shared_unapproved_supplier": ("inbound-starter-de-v1", set()),
+        "y_valid": ("inbound-operating-de-v1", set()),
+        "y_unapproved_supplier": ("inbound-operating-de-v1", {"ORG-002"}),
+        "y_multiple_mismatches": (
+            "inbound-operating-de-v1",
+            {"STR-004", "FRM-003", "CAL-003", "ORG-001", "ORG-002"},
+        ),
+    }
+    assert len(demo.SCENARIOS) == 7
+
+    for scenario in demo.SCENARIOS:
+        pdf_bytes, _xml_bytes, _invoice = demo.build_hybrid_pdf(scenario)
+        response = client.post(
+            "/v1/invoices/process",
+            files={"file": (f"{scenario['id']}.pdf", pdf_bytes, "application/pdf")},
+            data={"organizationId": scenario["organizationId"]},
+        )
+        assert response.status_code == 200, (scenario["id"], response.text)
+        report = response.json()["phase1ControlReport"]
+        expected_profile, expected_nonpassing = expected[scenario["id"]]
+        assert report["controlProfileId"] == expected_profile
+        assert report["status"] == scenario["expectedStatus"]
+        assert report["routing"] == scenario["expectedRouting"]
+        actual_nonpassing = {
+            control["controlId"]
+            for control in report["controls"]
+            if control["outcome"] not in ("passed", "not_applicable", "not_run")
+        }
+        assert actual_nonpassing == expected_nonpassing

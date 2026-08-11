@@ -105,4 +105,12 @@ CATALOG: dict[str, ControlDefinition] = {
         "1.0.0",
         True,
     ),
+    "ORG-002": ControlDefinition(
+        "ORG-002",
+        "Supplier identity matches approved supplier master data",
+        "blocking",
+        "1.0.0",
+        False,
+        "Selected only by profiles with an approved supplier-data snapshot.",
+    ),
 }
