@@ -37,7 +37,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Deterministic 4xx-shaped input/contract checks -- no OCR call has been\n// made yet, so nothing here is a \"technical\" failure and nothing here is\n// ever retried.\nconst ctx = $input.first().json;\n\nif (!ctx.hasFile) {\n  return [{ json: { ...ctx, valid: false, errorCode: \"MISSING_INVOICE_FILE\", explanation: \"No PDF binary field named 'data' was present in the upload. Not retried: this is an input/contract error, not a service failure.\" } }];\n}\nif (!ctx.organizationId) {\n  return [{ json: { ...ctx, valid: false, errorCode: \"ORGANIZATION_CONTEXT_REQUIRED\", explanation: \"organizationId was not provided and demoMode was not set. Pass organizationId explicitly, or demoMode=true to use the fictional unternehmen-x-demo organization. Not retried: this is an input/contract error, not a service failure.\" } }];\n}\nreturn [{ json: { ...ctx, valid: true } }];\n"
+        "jsCode": "// Deterministic 4xx-shaped input/contract checks -- no OCR call has been\n// made yet, so nothing here is a \"technical\" failure and nothing here is\n// ever retried.\n//\n// Every branch must carry `binary` forward explicitly -- unlike an IF or\n// Switch node, a Code node's returned item is a brand-new object, and\n// omitting `binary` here silently drops the uploaded file for every node\n// downstream (found 2026-08-11 via a live n8n execution: \"02.1 Encode PDF\n// for OCR\" crashed with an opaque \"Unknown error\" because $input.first().\n// binary was empty by the time it ran -- not a credential or Gemini issue\n// at all, this node was the actual break in the chain).\nconst input = $input.first();\nconst ctx = input.json;\n\nif (!ctx.hasFile) {\n  return [{ json: { ...ctx, valid: false, errorCode: \"MISSING_INVOICE_FILE\", explanation: \"No PDF binary field named 'data' was present in the upload. Not retried: this is an input/contract error, not a service failure.\" }, binary: input.binary }];\n}\nif (!ctx.organizationId) {\n  return [{ json: { ...ctx, valid: false, errorCode: \"ORGANIZATION_CONTEXT_REQUIRED\", explanation: \"organizationId was not provided and demoMode was not set. Pass organizationId explicitly, or demoMode=true to use the fictional unternehmen-x-demo organization. Not retried: this is an input/contract error, not a service failure.\" }, binary: input.binary }];\n}\nreturn [{ json: { ...ctx, valid: true }, binary: input.binary }];\n"
       },
       "id": "b1000003-0000-4000-8000-000000000003",
       "name": "01.3 Validate upload request",
@@ -249,7 +249,8 @@
       ],
       "id": "c3dae39f-3de6-418f-ba5f-3eae110bef89",
       "name": "02.1 Encode PDF for OCR",
-      "notes": "REUSED VERBATIM from examples/n8n/digitax_invoice_intake.json (same node id/parameters). Do not modify the extraction logic here -- see the workflow-level note on why binaryPropertyName stays \"data\". Cloud lane only -- the local lane has its own identical copy, \"02.1L Encode PDF for local OCR\", so the two provider paths stay technically independent end to end."
+      "onError": "continueErrorOutput",
+      "notes": "REUSED VERBATIM from examples/n8n/digitax_invoice_intake.json (same node id/parameters -- jsCode is unchanged, so it stays covered by test_ocr_nodes_reused_verbatim_from_intake_workflow). Do not modify the extraction logic here -- see the workflow-level note on why binaryPropertyName stays \"data\". Cloud lane only -- the local lane has its own identical copy, \"02.1L Encode PDF for local OCR\", so the two provider paths stay technically independent end to end. onError: \"continueErrorOutput\" added 2026-08-11 (same pattern as \"02.5 Parse OCR/LLM output\"): getBinaryDataBuffer can throw for reasons unrelated to the OCR service itself (e.g. a missing/corrupted binary attachment), and this must never crash the run unhandled -- it now routes to \"02.4 Handle OCR service failure\" instead."
     },
     {
       "parameters": {
@@ -298,7 +299,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.3 Run OCR/LLM extraction (Gemini)\",\n    errorCode: \"OCR_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The Gemini OCR/LLM service did not respond after the bounded retry.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1-02.3 Encode/build/run OCR extraction (cloud)\",\n    errorCode: \"OCR_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The cloud OCR/LLM extraction step (PDF encode, request build, or the Gemini service call itself) did not complete successfully.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
       },
       "id": "b1000009-0000-4000-8000-000000000009",
       "name": "02.4 Handle OCR service failure",
@@ -307,7 +308,8 @@
       "position": [
         -960,
         220
-      ]
+      ],
+      "notes": "Shared failure handler for the whole cloud extraction step: reached from \"02.1 Encode PDF for OCR\"'s error output (added 2026-08-11) as well as \"02.3 Run OCR/LLM extraction (Gemini)\"'s error output (original). Both converge on the same nicht_pruefbar/technical_review/OCR_SERVICE_UNAVAILABLE payload -- a missing/invalid Gemini credential, an unreachable Gemini service, and a getBinaryDataBuffer failure all fail the same safe way, never an unhandled crash / empty response."
     },
     {
       "parameters": {
@@ -349,7 +351,8 @@
         -1400,
         460
       ],
-      "notes": "Identical logic to \"02.1 Encode PDF for OCR\", kept as its own node so the local lane is a technically independent path from the cloud lane, per the AI-selection spec."
+      "onError": "continueErrorOutput",
+      "notes": "Identical logic to \"02.1 Encode PDF for OCR\", kept as its own node so the local lane is a technically independent path from the cloud lane, per the AI-selection spec. onError: \"continueErrorOutput\" added 2026-08-11: getBinaryDataBuffer can throw for reasons unrelated to the local provider (e.g. a missing/corrupted binary attachment), and this must never crash the run unhandled -- it now routes to \"02.4L Handle local OCR service failure\" instead."
     },
     {
       "parameters": {
@@ -390,7 +393,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.3L Run OCR/LLM extraction (local)\",\n    errorCode: \"LOCAL_LLM_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The local OCR/LLM endpoint did not respond after the bounded retry. No automatic fallback to cloud AI -- select cloud AI explicitly if needed.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"local-openai-compatible\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1L-02.3L Encode/build/run OCR extraction (local)\",\n    errorCode: \"LOCAL_LLM_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The local OCR/LLM extraction step (PDF encode, request build, or the local endpoint call itself) did not complete successfully. No automatic fallback to cloud AI -- select cloud AI explicitly if needed.\",\n    invoice: null,\n    controls: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"local-openai-compatible\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
       },
       "id": "b100001b-0000-4000-8000-00000000001b",
       "name": "02.4L Handle local OCR service failure",
@@ -399,7 +402,8 @@
       "position": [
         -960,
         680
-      ]
+      ],
+      "notes": "Shared failure handler for the whole local extraction step: reached from \"02.1L Encode PDF for local OCR\"'s error output (added 2026-08-11) as well as \"02.3L Run OCR/LLM extraction (local)\"'s error output (original). Both converge on the same nicht_pruefbar/technical_review/LOCAL_LLM_SERVICE_UNAVAILABLE payload, never an unhandled crash / empty response, and never a fallback to cloud."
     },
     {
       "parameters": {
@@ -922,6 +926,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "02.4 Handle OCR service failure",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -999,6 +1010,13 @@
         [
           {
             "node": "02.2L Build local OCR/LLM request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.4L Handle local OCR service failure",
             "type": "main",
             "index": 0
           }

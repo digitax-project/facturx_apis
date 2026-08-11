@@ -14,10 +14,17 @@
 # workflow it is about to overwrite, but this fails with a permission error
 # on a workflow that is currently ACTIVE and has no owner/sharing record --
 # which is the case for every CLI-imported workflow in this headless dev
-# stack (verified empirically). Explicitly deactivating each workflow first
+# stack (verified empirically). Explicitly unpublishing each workflow first
 # avoids that error and keeps re-imports on an already-populated volume
-# idempotent; deactivation is skipped on a workflow's very first import
-# (deactivating an unknown ID is itself an error).
+# idempotent; unpublishing is skipped on a workflow's very first import
+# (unpublishing an unknown ID is itself an error).
+#
+# CLI note: uses the current, supported `publish:workflow`/
+# `unpublish:workflow` commands, not the deprecated `update:workflow
+# --active=true/false` (n8n 2.33.7 prints a deprecation warning for the
+# latter; the two pairs were verified empirically to behave identically for
+# this script's purposes -- same idempotency behavior, same "not found" error
+# on an unknown id, same "restart required if n8n is already running" note).
 set -eu
 
 WORKFLOWS_DIR="/data/workflows"
@@ -52,8 +59,8 @@ import_one() {
     exit 1
   fi
   if existing_ids | grep -qx "$id"; then
-    echo "[n8n-init] Deactivating existing workflow $id before re-import..."
-    n8n update:workflow --id="$id" --active=false >/dev/null
+    echo "[n8n-init] Unpublishing existing workflow $id before re-import..."
+    n8n unpublish:workflow --id="$id" >/dev/null
   fi
   echo "[n8n-init] Importing $file (id=$id)"
   n8n import:workflow --input="${WORKFLOWS_DIR}/${file}"
@@ -66,7 +73,7 @@ done
 
 echo "[n8n-init] Publishing: Flow 1a Upload Demo + Flow 1a Batch Item (Structured Regression and Flow 1b stay inactive)..."
 for id in $ACTIVE_IDS; do
-  n8n update:workflow --id="$id" --active=true >/dev/null
+  n8n publish:workflow --id="$id" >/dev/null
 done
 
 echo "[n8n-init] Verifying imported workflow set (expect exactly 4, no duplicates)..."

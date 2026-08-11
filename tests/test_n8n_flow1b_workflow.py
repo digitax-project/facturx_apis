@@ -732,3 +732,125 @@ def test_status_aggregation_matches_real_aggregate_py_semantics(
     result = _run_node_snippet(_aggregation_code(), invoice_input)
     assert result["status"] == expected_status
     assert result["routing"] == expected_routing
+
+
+# ---------------------------------------------------------------------------
+# Real n8n E2E: a genuinely fresh, ephemeral n8n container (own container
+# name/volume/port, torn down in a finally block), the real workflow file
+# imported and activated, and a real webhook POST -- not a structural check.
+#
+# Guards a real regression found 2026-08-11: cloud-gemini without a
+# configured credential used to return an unhandled, empty HTTP 200 (a
+# binary-passthrough bug at "01.3 Validate upload request" silently dropped
+# the uploaded file from the item, so "02.1 Encode PDF for OCR"'s
+# getBinaryDataBuffer crashed with an opaque "Unknown error" before any of
+# this workflow's own error handling ever ran). It must now converge to a
+# proper, non-empty nicht_pruefbar/technical_review/OCR_SERVICE_UNAVAILABLE
+# payload -- exactly like a real unreachable Gemini service would.
+# ---------------------------------------------------------------------------
+
+import socket
+import time
+import uuid
+
+import httpx
+
+DOCKER_AVAILABLE = shutil.which("docker") is not None
+N8N_IMAGE = "n8nio/n8n:2.33.7"
+FLOW1B_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
+
+
+def _free_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_http_ok(url: str, timeout_seconds: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(url, timeout=2.0)
+            if resp.status_code == 200:
+                return
+        except httpx.HTTPError as exc:
+            last_error = exc
+        time.sleep(1.0)
+    raise TimeoutError(f"{url} never returned 200 within {timeout_seconds}s (last error: {last_error})")
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
+def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
+    port = _free_tcp_port()
+    suffix = uuid.uuid4().hex[:8]
+    container = f"flow1b-e2e-test-{suffix}"
+    volume = f"flow1b-e2e-test-vol-{suffix}"
+
+    def _docker(*args, timeout=60):
+        return subprocess.run(
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+
+    try:
+        run = _docker(
+            "run", "-d", "--name", container,
+            "-p", f"{port}:5678",
+            "-v", f"{volume}:/home/node/.n8n",
+            "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
+            "-e", "N8N_DIAG_ENABLED=false",
+            N8N_IMAGE,
+        )
+        assert run.returncode == 0, f"docker run failed: {run.stderr}"
+
+        _wait_for_http_ok(f"http://127.0.0.1:{port}/healthz")
+
+        cp = _docker("cp", str(WORKFLOW_PATH), f"{container}:/tmp/flow1b.json")
+        assert cp.returncode == 0, f"docker cp failed: {cp.stderr}"
+
+        imp = _docker("exec", container, "n8n", "import:workflow", "--input=/tmp/flow1b.json")
+        assert imp.returncode == 0, f"n8n import:workflow failed: {imp.stderr}\n{imp.stdout}"
+
+        act = _docker("exec", container, "n8n", "update:workflow", f"--id={FLOW1B_WORKFLOW_ID}", "--active=true")
+        assert act.returncode == 0, f"n8n update:workflow --active=true failed: {act.stderr}\n{act.stdout}"
+
+        # Activation of an already-running instance requires a restart --
+        # documented n8n 2.33.7 behavior, not specific to this workflow.
+        restart = _docker("restart", container)
+        assert restart.returncode == 0, f"docker restart failed: {restart.stderr}"
+
+        _wait_for_http_ok(f"http://127.0.0.1:{port}/healthz")
+
+        # /healthz can return 200 slightly before webhook registration for
+        # newly-activated workflows finishes on startup -- retry briefly
+        # rather than treating a transient 404 as the real failure mode
+        # this test exists to catch.
+        response = None
+        for _ in range(10):
+            response = httpx.post(
+                f"http://127.0.0.1:{port}/webhook/phase1-flow1b-pdf-upload",
+                data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "cloud-gemini"},
+                files={"data": ("test-invoice.pdf", b"%PDF-1.4 not a real pdf, content is irrelevant here", "application/pdf")},
+                timeout=30.0,
+            )
+            if response.status_code != 404:
+                break
+            time.sleep(1.0)
+
+        assert response.status_code == 200
+        assert len(response.content) > 0, (
+            "cloud-gemini without a configured credential must never return an "
+            "empty response -- it must converge to a proper technical_review payload"
+        )
+        body = response.text
+        assert "nicht_pruefbar" in body
+        assert "technical_review" in body
+        assert "OCR_SERVICE_UNAVAILABLE" in body
+    finally:
+        _docker("rm", "-f", container, timeout=30)
+        _docker("volume", "rm", volume, timeout=30)
