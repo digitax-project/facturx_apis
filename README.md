@@ -274,6 +274,9 @@ See [`examples/n8n/README.md`](examples/n8n/README.md) for workflow operation
 and [`docs/invoice_phase1/demo_profile_matrix.md`](docs/invoice_phase1/demo_profile_matrix.md)
 for the exact meaning of each case. The presentation sequence is in
 [`docs/invoice_phase1/batch_demo_runbook.md`](docs/invoice_phase1/batch_demo_runbook.md).
+German documentation is available in
+[`docs/invoice_phase1/demo_ablauf.md`](docs/invoice_phase1/demo_ablauf.md) and
+[`docs/invoice_phase1/demo_deutsch.md`](docs/invoice_phase1/demo_deutsch.md).
 
 ### Upstream software and validation vendors
 
