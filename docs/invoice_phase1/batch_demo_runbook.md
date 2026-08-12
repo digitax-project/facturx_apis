@@ -2,13 +2,25 @@
 
 ## Start
 
+Start Docker Desktop, open PowerShell, and switch to the current repository
+root. The presentation stack and `compose.dev.yml` must not run simultaneously
+because both use ports `6970` and `5679`.
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File examples/n8n/scripts/Manage-Phase1UploadDemo.ps1 -Action Start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action Start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action Status
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action SmokeTest
 ```
 
 Open <http://localhost:6970/demo/batch>. The stack should remain running during
 the presentation. The dashboard sends every invoice through n8n and the Phase 1
 API; it performs no invoice controls in the browser.
+
+If `.demo-output` does not yet contain the seven X/Y invoices, generate them:
+
+```powershell
+python .\examples\demo\generate_demo_invoices.py --output-dir .\.demo-output
+```
 
 ## 1. Unternehmen X batch
 
@@ -81,3 +93,16 @@ against the deterministic control report.
 - Synthetic generation is not evidence of legal correctness.
 - Unternehmen X and Y are fictional in-memory contexts, not a production
   multi-tenant master-data implementation.
+
+## Stop
+
+After the presentation, stop only the isolated presentation stack. This keeps
+the dedicated n8n volume and imported workflows for the next start:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action Stop
+```
+
+Do not use `Reset` as a shutdown command. `Reset -Confirm` permanently removes
+the dedicated demo volume and is only intended for an explicitly requested
+clean re-import.

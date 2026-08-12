@@ -217,12 +217,33 @@ temporary, n8n-side-only mirror rather than the real API.
 
 The isolated demo uses API port `6970`, n8n port `5679`, and the dedicated
 Docker volume `digitax_n8n_phase1_data`. It does not change an existing n8n
-instance on port `5678`.
+instance on port `5678`. Run the following commands from the repository root.
+Do not run `compose.dev.yml` at the same time because both stacks use host
+ports `6970` and `5679`.
 
 ```powershell
-./examples/n8n/scripts/Manage-Phase1UploadDemo.ps1 -Action Start
-./examples/n8n/scripts/Manage-Phase1UploadDemo.ps1 -Action SmokeTest
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action Start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action Status
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action SmokeTest
 ```
+
+Generate the seven portable X/Y demo invoices when they are not already
+available under `.demo-output`:
+
+```powershell
+python .\examples\demo\generate_demo_invoices.py --output-dir .\.demo-output
+```
+
+After the presentation, stop the isolated stack without deleting its n8n
+volume:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\examples\n8n\scripts\Manage-Phase1UploadDemo.ps1" -Action Stop
+```
+
+`Stop` is the normal shutdown command and preserves the imported workflows.
+Do not use `Reset` for normal operation; it deletes the dedicated demo volume
+and requires the explicit `-Confirm` switch.
 
 Open [`examples/n8n/phase1_upload_demo_page.html`](examples/n8n/phase1_upload_demo_page.html),
 select Unternehmen X or Unternehmen Y, and upload these generated cases:
