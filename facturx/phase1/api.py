@@ -233,12 +233,52 @@ async def validate(file: UploadFile):
     return result
 
 
-@router.post("/v1/invoices/process")
+@router.post(
+    "/v1/invoices/process",
+    responses={
+        400: {
+            "description": (
+                "Missing/unrecognized organization context "
+                "(error_code ORGANIZATION_CONTEXT_REQUIRED), or an invalid "
+                "X-Correlation-ID header (error_code INVALID_CORRELATION_ID, "
+                "checked before the upload is read by the application)."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error_code": "INVALID_CORRELATION_ID",
+                            "detail": "correlationId must be 1-200 characters from [A-Za-z0-9._:-].",
+                        }
+                    }
+                }
+            },
+        },
+    },
+)
 async def process(
     file: UploadFile,
     organizationId: Optional[str] = Form(None),
     demoMode: bool = Form(False),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-ID"),
+    x_correlation_id: Optional[str] = Header(
+        None,
+        alias="X-Correlation-ID",
+        description=(
+            "Optional caller-supplied correlation identifier, echoed "
+            "verbatim into the response report's correlationId when valid. "
+            "Must be 1-200 characters from [A-Za-z0-9._:-]; an invalid "
+            "value is rejected with 400 INVALID_CORRELATION_ID before the "
+            "application reads the upload. This constraint is documented "
+            "here for API consumers -- it is enforced by application code "
+            "in the route body, not by this parameter declaration itself, "
+            "so an invalid value never produces FastAPI's automatic 422."
+        ),
+        json_schema_extra={
+            "pattern": "^[A-Za-z0-9._:-]{1,200}$",
+            "minLength": 1,
+            "maxLength": 200,
+        },
+    ),
     adapter: PdfExtractionAdapter = Depends(get_pdf_extraction_adapter),
 ):
     correlation_id = None

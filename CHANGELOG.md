@@ -3,12 +3,18 @@
 ## v1.1.0 - 2026-08-13
 
 - Added an optional `X-Correlation-ID` request header on
-  `POST /v1/invoices/process`, validated (1-200 characters,
-  `[A-Za-z0-9._:-]`) before the upload is read and echoed verbatim into the
-  report's `correlationId` when supplied; entirely absent (never `null`)
-  when the caller omits it. An invalid value is rejected with `400
-  INVALID_CORRELATION_ID` before any file processing; a valid one is also
-  echoed in the JSON error body of a later pre-report rejection.
+  `POST /v1/invoices/process`, validated before the application-level
+  bounded upload read (`_read_upload_bounded()`) and before any Phase-1
+  pipeline processing, and echoed verbatim into the report's
+  `correlationId` when supplied; entirely absent (never `null`) when the
+  caller omits it. An invalid value is rejected with `400
+  INVALID_CORRELATION_ID` before that bounded read or any pipeline
+  processing runs (FastAPI/Starlette has already parsed the incoming
+  multipart request before the route handler runs, as it must for any
+  endpoint; this header is validated at the first opportunity the
+  application code has, ahead of the application's own upload-reading
+  and processing steps); a valid one is also echoed in the JSON error
+  body of a later pre-report rejection.
 - Added a new required, server-generated `startedAt` timestamp to every
   `phase1_control_report`, captured as the first step of pipeline
   execution; existing `createdAt` is unchanged.

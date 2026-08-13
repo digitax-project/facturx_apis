@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://digitax.example/schemas/phase1-control-report-1.0.0.json",
+  "$id": "https://digitax.example/schemas/phase1-control-report-1.1.0.json",
   "title": "DigiTax Phase 1 control report",
   "type": "object",
   "additionalProperties": false,
