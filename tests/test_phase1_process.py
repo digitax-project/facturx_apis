@@ -6,20 +6,25 @@ booking/approval/payment action anywhere in the response.
 """
 import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from facturx.api import app
+from facturx.phase1 import api as api_module
 from facturx.phase1 import pipeline as pipeline_module
 from facturx.phase1.api import get_pdf_extraction_adapter
 from facturx.phase1.contracts import validate_canonical_invoice, validate_phase1_control_report
+from facturx.phase1.controls.executor import not_run_result
+from facturx.phase1.controls.profiles import get_control_profile
 from facturx.phase1.normalize.pdf_adapter import (
     FieldState,
     MockPdfExtractionAdapter,
     PdfExtractionResult,
     PdfFieldValue,
 )
+from facturx.phase1.report import build_report
 
 DISALLOWED_ACTION_KEYWORDS = ("approve", "book", "pay", "reject", "contact_supplier")
 
@@ -36,6 +41,11 @@ def _assert_contract(body: dict, source_bytes: bytes):
     assert report["catalogVersion"]
     assert report["controlProfileId"] == "inbound-starter-de-v1"
     assert report["controlProfileVersion"] == "0.2.0"
+
+    assert report["startedAt"]
+    started_at = datetime.fromisoformat(report["startedAt"])
+    created_at = datetime.fromisoformat(report["createdAt"])
+    assert started_at <= created_at
 
     dumped = str(body).lower()
     for keyword in DISALLOWED_ACTION_KEYWORDS:
@@ -740,3 +750,157 @@ def test_capabilities_distinguishes_recognized_from_processable_profiles(client)
         "minimum", "basicwl", "basic", "en16931", "extended",
     }
     assert set(factur_x["processableLevels"]).issubset(set(factur_x["recognizedLevels"]))
+
+
+# ---------------------------------------------------------------------------
+# X-Correlation-ID / startedAt (P2.1 A4 contract, schemaVersion 1.1.0).
+# ---------------------------------------------------------------------------
+
+def test_correlation_id_header_echoed_verbatim_on_happy_path(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "CORR-Test-001"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, valid_hybrid_pdf_bytes)
+    assert body["phase1ControlReport"]["correlationId"] == "CORR-Test-001"
+
+
+def test_correlation_id_header_echoed_on_doc001_blocked_path(client):
+    """DOC-001-blocked (nicht_pruefbar) path -- correlationId must still be
+    present and correct, not only on the happy path."""
+    xml_bytes = (Path(__file__).parent / "fixtures" / "facturx_minimum_profile.xml").read_bytes()
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", xml_bytes, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "CORR-Test-002"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    assert report["correlationId"] == "CORR-Test-002"
+
+
+def test_correlation_id_header_echoed_on_extraction_failed_path(client, blank_pdf_bytes):
+    """Extraction-failed path (PDF adapter itself reports status="failed")
+    -- correlationId must still be present and correct."""
+    result = PdfExtractionResult(status="failed", overall_confidence=0.0, fields={}, line_item_count=0)
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "CORR-Test-003"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    assert report["correlationId"] == "CORR-Test-003"
+
+
+def test_correlation_id_omitted_is_key_absent_not_null(client, valid_hybrid_pdf_bytes):
+    """Byte-identical-for-existing-callers per field: correlationId itself
+    is absent from the report, not present-and-null, when the caller never
+    sends X-Correlation-ID."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert "correlationId" not in report
+
+
+def test_invalid_correlation_id_is_rejected_before_any_processing(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "has a space"},
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error_code"] == "INVALID_CORRELATION_ID"
+    assert "canonicalInvoice" not in body
+    assert "phase1ControlReport" not in body
+
+
+def test_invalid_correlation_id_never_reads_the_upload(client, valid_hybrid_pdf_bytes, monkeypatch):
+    """The spy: an invalid X-Correlation-ID header must be rejected inside
+    the route's try block before _read_upload_bounded() ever runs, since
+    that call now happens after header validation, not before it."""
+    async def _fail_if_called(*args, **kwargs):
+        raise AssertionError("_read_upload_bounded must not be called for an invalid header")
+
+    monkeypatch.setattr(api_module, "_read_upload_bounded", _fail_if_called)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "has a space"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "INVALID_CORRELATION_ID"
+
+
+def test_valid_correlation_id_echoed_in_pre_report_error_body(client, valid_hybrid_pdf_bytes):
+    """A valid correlationId survives a later, pre-report rejection
+    (ORGANIZATION_CONTEXT_REQUIRED) and is echoed in the error body --
+    exactly the failure case where a caller most needs to correlate."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        headers={"X-Correlation-ID": "CORR-Test-004"},
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error_code"] == "ORGANIZATION_CONTEXT_REQUIRED"
+    assert body["detail"]["correlationId"] == "CORR-Test-004"
+
+
+def test_invalid_correlation_id_takes_precedence_over_invalid_organization_id(
+    client, valid_hybrid_pdf_bytes
+):
+    """Correlation-id validation happens first, before organization-context
+    resolution; an invalid value is never echoed back as if trustworthy."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        headers={"X-Correlation-ID": "has a space"},
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error_code"] == "INVALID_CORRELATION_ID"
+    assert "correlationId" not in body["detail"]
+
+
+def test_build_report_started_at_and_created_at_are_independently_threaded():
+    """Deterministic, non-timing-dependent proof that startedAt and
+    createdAt are separately threaded parameters, not aliases of a single
+    call: an explicit, clearly-in-the-past started_at value is threaded
+    through unchanged while createdAt is computed independently inside
+    build_report() itself."""
+    control_profile = get_control_profile("inbound-starter-de-v1")
+    controls = [not_run_result("DOC-001", "deterministic unit test")]
+    fixed_started_at = "2020-01-01T00:00:00+00:00"
+
+    report = build_report(
+        "a" * 64,
+        control_profile,
+        controls,
+        "nicht_pruefbar",
+        "prioritized_review",
+        started_at=fixed_started_at,
+    )
+
+    assert report["startedAt"] == fixed_started_at
+    assert report["createdAt"] != fixed_started_at
+    created_at = datetime.fromisoformat(report["createdAt"])
+    assert created_at.year >= 2026

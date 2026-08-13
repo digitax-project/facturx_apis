@@ -17,6 +17,31 @@ Both paths then run the same selected deterministic control profile. The
 candidate catalog is intentionally broader than the first implementation and
 can be expanded control by control. Human oversight starts after Phase 1.
 
+## Execution traceability (`phase1_control_report` schema `1.1.0`)
+
+`POST /v1/invoices/process` accepts an optional `X-Correlation-ID` request
+header (1-200 characters, `[A-Za-z0-9._:-]`), validated before the upload is
+read. When supplied and valid, it is echoed verbatim into the report's
+`correlationId` field, and into the JSON error body of any later,
+pre-report rejection (e.g. `ORGANIZATION_CONTEXT_REQUIRED`); when omitted,
+`correlationId` is entirely absent from the report (never `null`). An
+invalid value is rejected with `400 INVALID_CORRELATION_ID` before any file
+processing and is never echoed back.
+
+Every report also carries a required, server-generated `startedAt`
+timestamp (the moment pipeline execution began), alongside the existing
+`createdAt` (report construction time).
+
+Process, activity, workflow, and orchestration identifiers
+(`processId`/`processVersion`/`activityId`/`activityVersion`,
+`workflowId`/`workflowVersion`/`nodeId`) are **deliberately not part of
+this contract**. They are owned by the orchestration layer (n8n) and the
+Process Generator that defines them, not by this deterministic control
+API — adding them here would collapse the separation between "what was
+defined," "what a deterministic service executed," and "what an
+orchestrator's workflow instance did," which this API's contract is
+designed to keep distinct.
+
 ## Files
 
 - `automation_boundary.md`: what n8n automates and what remains human.

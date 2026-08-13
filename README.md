@@ -2,14 +2,18 @@
 
 API for Factur-X PDF generation, XML extraction and validation.
 
-## DigiTax Phase 1 API v1.0.1
+## DigiTax Phase 1 API v1.1.0
 
 `v1.0.0` introduced the first stable DigiTax Phase 1 invoice-preprocessing API
 and its n8n demonstration. `v1.0.1` corrects the dated official-standard
-baseline and adds the complete generated Schematron assertion inventory. The
-service release is independent of the embedded upstream `factur-x` Python
-library version `3.6` and the invoice validation baseline
-`Factur-X 1.09 EN16931`.
+baseline and adds the complete generated Schematron assertion inventory.
+`v1.1.0` adds an optional, caller-supplied `X-Correlation-ID` request header
+on `POST /v1/invoices/process` (echoed verbatim into the report's
+`correlationId` when supplied) and a new required, server-generated
+`startedAt` timestamp on every report, bumping `phase1_control_report`'s
+`schemaVersion` to `1.1.0`. The service release is independent of the
+embedded upstream `factur-x` Python library version `3.6` and the invoice
+validation baseline `Factur-X 1.09 EN16931`.
 
 ### What is new
 
