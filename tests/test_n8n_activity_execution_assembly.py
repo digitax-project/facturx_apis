@@ -122,6 +122,7 @@ def test_report_outcome_maps_to_succeeded():
             "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
             "runId": "RUN-1", "reportId": "REP-1", "sourceSha256": "abc",
             "controlProfileId": "p1", "controlProfileVersion": "v1",
+            "correlationId": "CORR-1",
         },
         "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
         "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None,
@@ -136,6 +137,70 @@ def test_report_outcome_maps_to_succeeded():
     assert ae["executionId"] == "RUN-1"
     assert ae["controlReportRef"] == "REP-1"
     assert ae["aiBindingRef"] is None
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_report_outcome_with_missing_correlation_id_fails_closed():
+    """A1 round-1 review (Medium): a report with no correlationId at all
+    must never be trusted as this run's evidence -- fail closed to FAILED
+    with a stable contract/integrity reason code, no evidence refs."""
+    envelope = {
+        **BASE_ENVELOPE,
+        "outcome": "REPORT",
+        "report": {
+            "status": "unauffaellig", "routing": "standard_review",
+            "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
+            "runId": "RUN-1", "reportId": "REP-1", "sourceSha256": "abc",
+            "controlProfileId": "p1", "controlProfileVersion": "v1",
+            # no correlationId key at all
+        },
+        "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
+        "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None,
+    }
+    out = _run_chain(envelope)
+    assert out["ok"] is True, out
+    ae = out["result"]["activityExecution"]
+    assert ae["status"] == "FAILED"
+    assert ae["resultCode"] == "ACTIVITY_EXECUTION_REPORT_CORRELATION_MISMATCH"
+    assert ae["executionId"].startswith("N8N-FAIL-")
+    assert ae["inputRefs"] == []
+    assert ae["outputRefs"] == []
+    assert ae["evidenceRefs"] == []
+    assert ae["controlReportRef"] is None, "the mismatched report must never be attached as authoritative evidence"
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_report_outcome_with_mismatched_correlation_id_fails_closed():
+    """Same fail-closed contract as the missing-correlationId case, but for
+    a report that carries a real, non-empty correlationId belonging to a
+    different run -- the exact scenario A1's finding names: a misrouted or
+    buggy API response pointing at a control report from a different run."""
+    envelope = {
+        **BASE_ENVELOPE,
+        "outcome": "REPORT",
+        "report": {
+            "status": "unauffaellig", "routing": "standard_review",
+            "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
+            "runId": "RUN-1", "reportId": "REP-1", "sourceSha256": "abc",
+            "controlProfileId": "p1", "controlProfileVersion": "v1",
+            "correlationId": "SOME-OTHER-RUNS-CORRELATION-ID",
+        },
+        "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
+        "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None,
+    }
+    out = _run_chain(envelope)
+    assert out["ok"] is True, out
+    ae = out["result"]["activityExecution"]
+    assert ae["status"] == "FAILED"
+    assert ae["resultCode"] == "ACTIVITY_EXECUTION_REPORT_CORRELATION_MISMATCH"
+    assert ae["executionId"].startswith("N8N-FAIL-")
+    assert ae["inputRefs"] == []
+    assert ae["outputRefs"] == []
+    assert ae["evidenceRefs"] == []
+    assert ae["controlReportRef"] is None, "the mismatched report must never be attached as authoritative evidence"
+    # correlationId on the ActivityExecution itself is always the envelope's
+    # own (trusted) value, never copied from the untrusted report.
+    assert ae["correlationId"] == "CORR-1"
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
@@ -226,7 +291,8 @@ def test_every_outcome_produces_a_schema_valid_object():
          "report": {"status": "unauffaellig", "routing": "standard_review",
                      "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
                      "runId": "RUN-1", "reportId": "REP-1", "sourceSha256": "abc",
-                     "controlProfileId": "p1", "controlProfileVersion": "v1"},
+                     "controlProfileId": "p1", "controlProfileVersion": "v1",
+                     "correlationId": "CORR-1"},
          "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
          "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None},
         {**BASE_ENVELOPE, "outcome": "HTTP_ERROR", "report": None,
@@ -241,6 +307,14 @@ def test_every_outcome_produces_a_schema_valid_object():
         {**BASE_ENVELOPE, "outcome": "PRE_FLIGHT_REJECTED", "report": None,
          "httpErrorCode": None, "n8nErrorCode": "MISSING_INVOICE_FILE",
          "explanation": "x", "phase1AttemptStartedAt": None, "gateDecisionAt": "2026-08-14T09:59:59.000Z"},
+        {**BASE_ENVELOPE, "outcome": "REPORT",
+         "report": {"status": "unauffaellig", "routing": "standard_review",
+                     "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
+                     "runId": "RUN-1", "reportId": "REP-1", "sourceSha256": "abc",
+                     "controlProfileId": "p1", "controlProfileVersion": "v1",
+                     "correlationId": "SOME-OTHER-RUNS-CORRELATION-ID"},
+         "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
+         "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None},
     ]
     for envelope in scenarios:
         out = _run_chain(envelope)
@@ -256,7 +330,10 @@ def test_malformed_envelope_is_rejected_by_the_generated_validator():
     envelope = {
         **BASE_ENVELOPE,
         "outcome": "REPORT",
-        "report": {"status": "unauffaellig", "routing": "standard_review"},  # missing startedAt/createdAt
+        # correlationId present and matching, so this exercises 01.4's schema
+        # check specifically -- not the 01.2 correlation-integrity fail-closed
+        # path (see test_report_outcome_with_missing_correlation_id_fails_closed).
+        "report": {"status": "unauffaellig", "routing": "standard_review", "correlationId": "CORR-1"},  # missing startedAt/createdAt
         "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
         "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None,
     }

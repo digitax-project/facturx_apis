@@ -17,10 +17,39 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python dependencies
         run: |
           pip install -r requirements-dev.txt
           pip install -e .
+
+      # P2.1 Wave 1 A5: build-time-only devDependencies (ajv, ajv-formats)
+      # for the generated ActivityExecution validator. Never installed in
+      # any n8n runtime container.
+      - name: Install Node build-time dependencies (examples/n8n)
+        run: npm ci --prefix examples/n8n
+
+      # Self-contained (A1 round-1 review, High): reads only what is
+      # already committed in this checkout, never an external research
+      # workspace or the read-only verfahren-builder repository.
+      - name: Check P2.1 schema vendoring (repository-only)
+        run: pwsh -NoProfile -File examples/n8n/scripts/Sync-P2.1Schemas.ps1 -CheckOnly
+
+      - name: Check activity binding lockfile (repository-only)
+        run: pwsh -NoProfile -File examples/n8n/scripts/Sync-ActivityBinding.ps1 -CheckOnly
+
+      # Enforces drift instead of silently skipping (A1 round-1 review,
+      # High): regenerates the ActivityExecution validator from the vendored
+      # schema and fails the job if the committed output differs by even one
+      # byte.
+      - name: Check generated ActivityExecution validator for drift
+        run: |
+          node examples/n8n/scripts/generate-evidence-validators.mjs
+          git diff --exit-code -- examples/n8n/generated/
 
       - name: Run tests
         run: python -m pytest -v

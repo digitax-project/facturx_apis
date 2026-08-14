@@ -29,7 +29,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 Workflow **ids are deterministic and never change** across a rename --
 `n8n import:workflow` upserts by id, so re-importing an updated export
 always updates the existing workflow in place, never creates a duplicate
-(verified: re-imported all four twice in a row, `n8n list:workflow` shows
+(verified: re-imported all five twice in a row, `n8n list:workflow` shows
 exactly one entry per id both times). A patch/minor content change keeps
 the same id and bumps the version in the display name; a future
 incompatible major version would get a new id.
@@ -148,6 +148,26 @@ are null/placeholder or the caller's `workflowId` has no known binding;
 `01.4 Validate against ActivityExecution shape` embeds the generated AJV
 validator (below) verbatim and throws `ACTIVITY_EXECUTION_SCHEMA_INVALID`
 before the object can reach any response or persistence node.
+
+**Report/envelope correlation-identity integrity (A1 round-1 review,
+Medium):** a `REPORT` outcome is only ever mapped to `SUCCEEDED` if
+`report.correlationId` is a non-empty string equal to the envelope's own
+`correlationId` -- n8n sends `X-Correlation-ID` and A4 echoes it verbatim in
+`phase1ControlReport.correlationId`, so this proves the returned report
+actually belongs to this run's own attempt, not one a misrouted or buggy
+API response attached from a different run. A missing or mismatched
+`report.correlationId` fails closed to exactly one `FAILED`
+`ActivityExecution` with the stable reason code
+`ACTIVITY_EXECUTION_REPORT_CORRELATION_MISMATCH`, `startedAt`/`completedAt`
+from `phase1AttemptStartedAt`/assembly time (never the untrusted report's
+own timestamps), and the mismatched report is never attached as
+authoritative evidence (`inputRefs`/`outputRefs`/`evidenceRefs`/
+`controlReportRef` all stay empty/`null`, and `executionId` falls back to
+`N8N-FAIL-<processInstanceId>` rather than the report's own `runId`) --
+`tests/test_n8n_activity_execution_assembly.py::test_report_outcome_with_missing_correlation_id_fails_closed`
+and `::test_report_outcome_with_mismatched_correlation_id_fails_closed` are
+the direct regression guards; the real E2E evidence below confirms the
+matching condition holds for a genuine API response.
 
 ### Activity binding: `examples/n8n/activity_binding.invoice_intake.json`
 
@@ -515,9 +535,10 @@ Manage it with `examples/n8n/scripts/Manage-Phase1UploadDemo.ps1`
 (Windows PowerShell 5.1-compatible):
 
 ```powershell
-# Build+start both services, wait for real health, import all four demo
+# Build+start both services, wait for real health, import all five demo
 # workflows idempotently, publish+restart so Upload/Batch Item webhooks go
-# live, verify Structured Regression and Flow 1b stay inactive:
+# live and the shared Assemble ActivityExecution subworkflow can be called,
+# verify Structured Regression and Flow 1b stay inactive:
 ./scripts/Manage-Phase1UploadDemo.ps1 -Action Start
 
 # Two real checks: CLI-execute the regression demo, and a real multipart

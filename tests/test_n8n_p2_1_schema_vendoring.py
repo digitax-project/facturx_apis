@@ -98,3 +98,43 @@ def test_sync_script_check_only_passes():
         timeout=60,
     )
     assert proc.returncode == 0, f"Sync-P2.1Schemas.ps1 -CheckOnly failed:\n{proc.stdout}\n{proc.stderr}"
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell not available")
+def test_sync_script_check_only_is_self_contained_and_ignores_an_inaccessible_research_workspace():
+    """A1 round-1 review (High): -CheckOnly previously regenerated from the
+    research workspace and failed with "Source schema not found" on any
+    checkout that lacks that external, sibling-repository path -- including
+    a genuine clean `git clone` of just this repository, which is exactly
+    what CI provides. Passing a deliberately nonexistent
+    -ResearchWorkspaceSchemasPath proves -CheckOnly no longer reads it at
+    all."""
+    proc = subprocess.run(
+        [
+            POWERSHELL, "-NoProfile", "-File", str(SYNC_SCRIPT_PATH), "-CheckOnly",
+            "-ResearchWorkspaceSchemasPath", "C:\\this\\path\\does\\not\\exist\\anywhere",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"Sync-P2.1Schemas.ps1 -CheckOnly must succeed even with an inaccessible "
+        f"research workspace path:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "Source schema not found" not in proc.stdout
+    assert "Source schema not found" not in proc.stderr
+
+
+@pytest.mark.skipif(
+    POWERSHELL is None or not RESEARCH_WORKSPACE_SCHEMAS_DIR.exists(),
+    reason="PowerShell or the research workspace not available on this machine (local/dev-only)",
+)
+def test_sync_script_verify_against_source_passes():
+    proc = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-File", str(SYNC_SCRIPT_PATH), "-VerifyAgainstSource"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, f"Sync-P2.1Schemas.ps1 -VerifyAgainstSource failed:\n{proc.stdout}\n{proc.stderr}"

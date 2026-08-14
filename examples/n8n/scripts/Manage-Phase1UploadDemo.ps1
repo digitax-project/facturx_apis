@@ -54,8 +54,11 @@ $UploadWorkflowId = "digitax-invoice-phase1-upload-demo"
 $BatchWorkflowId = "digitax-invoice-phase1-batch-item"
 $Flow1bWorkflowId = "digitax-invoice-phase1-flow1b-pdf-ocr"
 # P2.1 Wave 1 A5 Stage 1: shared subworkflow, called only via Execute
-# Workflow (never a webhook) -- imported and duplicate-checked like every
-# other workflow, but never published/active.
+# Workflow (never a webhook) -- imported, duplicate-checked, AND published
+# like Upload Demo/Batch Item (see Publish-DemoWebhooks below):
+# n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow
+# invoke an unpublished target at all, confirmed empirically, even though
+# this workflow has no webhook and is never externally reachable.
 $SharedAssembleWorkflowId = "digitax-invoice-phase1-shared-assemble-activity-execution"
 
 # Workflow ids are deterministic and unchanged by the 2026-08-10

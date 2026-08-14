@@ -151,13 +151,16 @@ docker compose -f compose.dev.yml up --build
 - Batch UI: http://localhost:6970/demo/batch
 - n8n UI: http://localhost:5679 (no login by default)
 
-On first start, a one-shot `n8n-init` container imports all four versioned
+On first start, a one-shot `n8n-init` container imports all five versioned
 DigiTax workflows into the shared `digitax_devstack_n8n_data` volume and
-publishes only `Flow 1a | Upload Demo` and `Flow 1a | Batch Item`;
-`Flow 1a | Structured Regression` and `Flow 1b | PDF OCR/LLM Concept` stay
-inactive. `n8n-init` runs to completion, successfully, before the `n8n`
-service starts -- there is no `docker exec`-then-restart step, and the whole
-`up` fails if import or publication fails.
+publishes `Flow 1a | Upload Demo`, `Flow 1a | Batch Item`, and the shared
+`Flow 1a | Shared | Assemble ActivityExecution` subworkflow (published
+because n8n requires it to be, not because it has a webhook -- it has none
+and is never externally reachable); `Flow 1a | Structured Regression` and
+`Flow 1b | PDF OCR/LLM Concept` stay inactive. `n8n-init` runs to
+completion, successfully, before the `n8n` service starts -- there is no
+`docker exec`-then-restart step, and the whole `up` fails if import or
+publication fails.
 
 Flow 1a works with zero external credentials: generate a synthetic invoice
 (`python examples/demo/generate_demo_invoices.py --output-dir .demo-output`,
