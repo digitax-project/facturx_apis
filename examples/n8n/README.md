@@ -24,6 +24,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Demo \| v1.0.0` | n/a -- browser page `facturx/phase1/static/batch_demo.html`, not an n8n workflow | n/a | demo-ready (served whenever `FACTURX_ENABLE_DEMO_ENDPOINTS=true`) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.0.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.2.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
+| `DigiTax \| Invoice Phase 1 \| Shared \| Assemble ActivityExecution \| v1.0.0` | `digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json` | `digitax-invoice-phase1-shared-assemble-activity-execution` | demo-ready (active/published -- no webhook, never externally reachable, but n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow invoke an unpublished target at all) |
 
 Workflow **ids are deterministic and never change** across a rename --
 `n8n import:workflow` upserts by id, so re-importing an updated export
@@ -56,6 +57,184 @@ None of this changes topology or control logic -- it is a presentation and
 organization pass only. Every functional detail documented below (fail-safe
 retry, the missing-API-contract gap, confidence heuristics, etc.) is
 unchanged from the prior rounds; only node/workflow names and layout moved.
+
+## P2.1 Wave 1 A5 Stage 0/1: activity binding, ActivityExecution assembly, and evidence-schema vendoring
+
+Implemented against `coordination/control-plane/runs/2026-08-12-p2-implementation-planning/A5/implementation-plan.md`
+(A1-accepted `ACCEPTED_FOR_IMPLEMENTATION_PLANNING_BASELINE`) under H1's
+Stage 0/1-only authorization
+(`coordination/control-plane/runs/2026-08-13-p2-wave1-implementation/A5/human-decision.json`).
+**Scope correction accepted for this implementation round:** only
+`ActivityExecution` is generated and embedded. `HumanReviewDecision` is
+vendored (so the P2.1 schema pair stays atomically hash-pinned) but
+deliberately not compiled or embedded anywhere -- Flow 2 / active human
+review is out of this implementation's authorized scope, unchanged from the
+plan's own Stage 2/3 gating.
+
+### Identity propagation (Flow 1a only)
+
+`01.2 Build run context` (Upload Demo, Batch Item) / `01.3 Build run
+context` (Structured Regression -- `01.2` is already the demo-fixture
+loader in that workflow) generates two independent, secure identifiers
+before any API call:
+
+```javascript
+if (typeof crypto === "undefined" || typeof crypto.randomUUID !== "function") {
+  throw new Error("SECURE_UUID_UNAVAILABLE: refusing to mint a weak identifier ...");
+}
+const correlationId = crypto.randomUUID();
+const processInstanceId = crypto.randomUUID();
+```
+
+No `Math.random()`/timestamp fallback exists anywhere in any of the three
+workflows for either identifier -- a missing `crypto.randomUUID` fails
+visibly rather than minting a low-entropy identity for evidence (the pinned
+`n8nio/n8n:2.33.7` image always exposes it; this is a defensive guarantee,
+not an expected runtime path). `correlationId` is sent to the real Phase 1
+API as `X-Correlation-ID` on the `03.1 Run DigiTax controls` request;
+`processInstanceId` is never sent to the API, only used for evidence.
+Flow 1b is **unmodified by this change** -- explicitly out of scope, exactly
+as the accepted plan requires.
+
+A new one-line Code node (`02.6 Mark phase1 attempt start` / `01.3 Mark
+phase1 attempt start` / `02.9 Mark phase1 attempt start`, named to avoid
+each workflow's own existing numbering) captures
+`phase1AttemptStartedAt = new Date().toISOString()` immediately before the
+API call, and each pre-flight-rejection node captures its own
+`gateDecisionAt` at rejection time -- both feed the `startedAt`/`completedAt`
+mapping below rather than reusing `receivedAt`.
+
+### Centralized `ActivityExecution` assembly
+
+Every branch node in all three Flow-1a workflows (invalid upload,
+capabilities-service failure, capability-gate failure, a 2xx report, a
+4xx/5xx API response, and a genuine connection failure) emits only a small,
+normalized **outcome envelope** (`outcome`, `report`, `httpErrorCode`,
+`n8nErrorCode`, `phase1AttemptStartedAt`/`gateDecisionAt`, plus
+Phase-1-business passthrough fields under `phase1Status`/`routing`/... --
+deliberately not named `status`/`resultCode`, which are reserved for
+`ActivityExecution`'s own fields). No branch node constructs a full
+`ActivityExecution` object itself (no branch `jsCode` contains the literal
+key `"executionId"`). Every path converges on a `Call Assemble
+ActivityExecution` node (`n8n-nodes-base.executeWorkflow`, calling
+`digitax-invoice-phase1-shared-assemble-activity-execution` by id), then a
+`Merge ActivityExecution into outcome` Code node that reconciles the shared
+subworkflow's minimal `{ activityExecution }` return with the branch's own
+envelope, before finally reaching each workflow's existing control-report
+builder -- which is otherwise **unedited**.
+
+`digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json`
+(`DigiTax | Invoice Phase 1 | Shared | Assemble ActivityExecution | v1.0.0`,
+`active: true` -- its only trigger is `executeWorkflowTrigger`, so it has no
+webhook and is never externally reachable; it must still be
+active/published, confirmed against the real pinned n8n 2.33.7 image, whose
+`WorkflowPublicationService` refuses to let an Execute Workflow node invoke
+an unpublished target at all: `"Workflow is not active and cannot be
+executed."`) is the one place this mapping exists:
+
+| `outcome` | `status` | `resultCode` | `startedAt` | `completedAt` |
+|---|---|---|---|---|
+| `REPORT` (schema-valid `phase1ControlReport`) | `SUCCEEDED` | `report.status` | `report.startedAt` | `report.createdAt` |
+| `HTTP_ERROR` (API responded, no report) | `FAILED` | the API's `error_code` (or `HTTP_<status>`) | `phase1AttemptStartedAt` | assembly time |
+| `TRANSPORT_FAILURE` (connection failure, not a timeout) | `FAILED` | `INVOICE_PROCESSING_SERVICE_UNAVAILABLE` | `phase1AttemptStartedAt` | assembly time |
+| `TIMEOUT` (`ETIMEDOUT`/`ECONNABORTED`, or message matches `/timeout/i`) | `TIMED_OUT` | `INVOICE_PROCESSING_SERVICE_TIMEOUT` | `phase1AttemptStartedAt` | assembly time |
+| `PRE_FLIGHT_REJECTED` (the API was never invoked) | `NOT_EXECUTED` | the pre-flight error code | `gateDecisionAt` | `gateDecisionAt` (same instant) |
+
+A 4xx/5xx without a control report is a real `FAILED` `ActivityExecution` --
+never `SUCCEEDED` merely because the API responded (`tests/test_n8n_activity_execution_assembly.py::test_http_error_outcome_maps_to_failed_never_succeeded`
+is the direct regression guard). `01.1 Assert activity binding published`
+throws `ACTIVITY_BINDING_NOT_PUBLISHED` if its embedded binding literals
+are null/placeholder or the caller's `workflowId` has no known binding;
+`01.4 Validate against ActivityExecution shape` embeds the generated AJV
+validator (below) verbatim and throws `ACTIVITY_EXECUTION_SCHEMA_INVALID`
+before the object can reach any response or persistence node.
+
+### Activity binding: `examples/n8n/activity_binding.invoice_intake.json`
+
+A generated lockfile, **never hand-edited** -- only
+`examples/n8n/scripts/Sync-ActivityBinding.ps1 -Regenerate` may write it, by
+(1) reading A6's published `invoice-intake` activity-binding export
+(`-SourcePath`/`-SourceUrl`), (2) hashing it, (3) overwriting the vendored
+snapshot `examples/n8n/vendor/a6_activity_binding_export.json` with the
+export verbatim, (4) deriving `processDefinition`/`activityDefinition`/
+`executor` from that snapshot, and (5) filling `workflowBindings[]` by
+reading each Flow-1a workflow file's own `id` and `"| vX.Y.Z"` name-suffix
+literal directly -- never inventing a value. `provenance` carries **no
+generation timestamp** (a fixed `generatorVersion` instead), so two
+consecutive `-Regenerate` runs against unchanged inputs are byte-identical,
+which is what `-CheckOnly` (regenerate into a temp path from the
+*already-committed* vendored snapshot, diff, fail on drift) depends on --
+`-CheckOnly` never reads the external A6/`verfahren-builder` source, so a
+normal CI checkout of only this repository is sufficient.
+
+**Today's real state:** Wave 1C (`C:\Agentic\verfahren-builder`,
+`agent/p2-1-wave1c-invoice-binding-publication`,
+`10849bdfaf985d27c751006089b87da8508196b4`) is H1-approved, A1-accepted, and
+A7-reconciled, so the lockfile is committed already `PUBLISHED`
+(`processId digitax.invoice-intake @ 1.1.1-draft`, `activityId
+digitax.invoice-intake.phase1.structured-control @ 1.0.0`, executor
+`digitax.invoice.phase1-controls @ 1.1.0`) -- not the accepted plan's
+originally-assumed pre-Stage-0 `PENDING_A6_PUBLICATION` placeholder. The
+fail-closed guard itself is still proven (via a synthetic "null literal"
+fixture fed directly to `01.1`'s own code, in
+`tests/test_n8n_activity_binding_manifest.py`), just not by shipping an
+actually-unpublished repository state, since Wave 1C was already real
+before this Stage 0/1 authorization -- the adaptation
+`coordination/control-plane/runs/2026-08-13-p2-wave1-implementation/A5/request.md`
+explicitly allows.
+
+### P2.1 schema vendoring and the generated `ActivityExecution` validator
+
+`examples/n8n/vendor/p2_1/` holds immutable, hash-pinned, checked-in copies
+of both canonical P2.1 execution-evidence schemas
+(`activity-execution.schema.json`, `human-review-decision.schema.json`,
+`schema_provenance.json` -- no generation timestamp, `usage` field on each
+entry). Only `examples/n8n/scripts/Sync-P2.1Schemas.ps1 -Regenerate` may
+write them, copying from the local P2.1 research-workspace package
+(`-CheckOnly` never reads that workspace -- CI has no access to it).
+
+`examples/n8n/package.json` (`ajv` + `ajv-formats`, both build-time-only
+`devDependencies`, never present in any n8n runtime container) +
+`examples/n8n/scripts/generate-evidence-validators.mjs` compile
+**only `activity-execution.schema.json`** into
+`examples/n8n/generated/validate_activity_execution.generated.js` (plus
+`validator_provenance.json`, hash-pinned to the vendored schema, no
+timestamp) via AJV's standalone code generation, with `ajv-formats`
+registered so `format: "date-time"` is actually enforced (AJV core alone
+treats `format` as a no-op without a formats plugin --
+`tests/test_n8n_generated_validators.py::test_generated_validator_enforces_date_time_format_via_ajv_formats`
+proves it is not silently skipped). The generator also inlines AJV's own
+small runtime helpers (`ucs2length`, used by `minLength`/`maxLength`) that
+AJV's standalone output would otherwise `require()` at runtime -- the
+committed generated file contains **no** `require`/`module`/`import`
+anywhere, so it is safe to embed verbatim inside a sandboxed n8n Code node
+with `NODE_FUNCTION_ALLOW_EXTERNAL` left unset. `human-review-decision.schema.json`
+is vendored (so the schema pair stays atomically hash-pinned) but **no
+validator is generated for it** -- `validator_provenance.json` marks its
+entry `"status": "DEFERRED_NOT_GENERATED_FLOW_2_OUT_OF_SCOPE"` explicitly,
+per this round's scope correction.
+
+The generated validator source is embedded **verbatim** inside the shared
+subworkflow's `01.4 Validate against ActivityExecution shape` node
+(`tests/test_n8n_generated_validators.py::test_generated_validator_source_embedded_verbatim_in_shared_subworkflow`
+catches a regeneration that was not followed by re-embedding).
+
+### Regenerating
+
+```powershell
+cd examples/n8n
+./scripts/Sync-P2.1Schemas.ps1 -Regenerate          # local, one-time-per-schema-change
+npm install && node scripts/generate-evidence-validators.mjs
+./scripts/Sync-ActivityBinding.ps1 -Regenerate -SourcePath <path-to-A6-export> -SourceRef <descriptive-ref>
+```
+
+Then re-embed the freshly generated `validate_activity_execution.generated.js`
+source verbatim into the shared subworkflow's `01.4` node, and the (rarely
+changing) binding literals into its `01.1`/`01.3` nodes if the binding
+itself changed. CI only ever runs the `-CheckOnly` variants of both sync
+scripts plus a regeneration-and-diff of the validator generator -- never
+`-Regenerate`, and never a read of either external source
+(`work/arbeitsbericht/research/...` or `verfahren-builder`).
 
 ## digitax_invoice_intake.json
 
@@ -121,10 +300,13 @@ API end to end for a structured EN16931 invoice:
 ```
 01.1 Trigger: select invoice (Manual Trigger)
   -> 01.2 Load demo fixture             -- embedded synthetic EN16931 XML
+  -> 01.3 Build run context             -- secure correlationId/processInstanceId
   -> 02.1 Read API capabilities
   -> 02.2 Check Factur-X profile        -- surfaces the legacy-baseline note
-  -> 03.1 Run DigiTax controls          -- POST /v1/invoices/process
+  -> 02.9 Mark phase1 attempt start
+  -> 03.1 Run DigiTax controls          -- POST /v1/invoices/process, sends X-Correlation-ID
   -> 04.1 Build control report
+  -> Call Assemble ActivityExecution -> Merge ActivityExecution into outcome
   -> 04.2 Route by review status        (Switch on routing)
        -> 05.1 Human review - standard        (unauffaellig)
        -> 05.2 Human review - prioritized     (klaerung_erforderlich / nicht_pruefbar
@@ -235,8 +417,8 @@ organization-neutral and forwards the selected `organizationId` dynamically.
 
 ```
 01.1 Receive invoice upload (POST multipart/form-data)
-  -> 01.2 Build run context      -- correlation ID before any API call,
-                                     filename/MIME type, organizationId
+  -> 01.2 Build run context      -- secure correlationId/processInstanceId before
+                                     any API call, filename/MIME type, organizationId
                                      (explicit, or the fictional default
                                      only under demoMode=true)
   -> 01.3 Validate upload request -- missing file / missing org context:
@@ -246,8 +428,12 @@ organization-neutral and forwards the selected `organizationId` dynamically.
   -> 02.2 Evaluate capability gate    -- EN16931 processable? Schematron implemented?
   -> 02.4 Required capability present?
        -> [absent]  02.5 Handle capability gate failure   routes safely to technical_review
-       -> [present] 03.1 Run DigiTax controls              -- POST /v1/invoices/process
-  -> 03.2 Classify controls response   -- 2xx success / 4xx-5xx "not retried" failure
+       -> [present] 02.6 Mark phase1 attempt start
+                      -> 03.1 Run DigiTax controls    -- POST /v1/invoices/process,
+                                                          sends X-Correlation-ID
+  -> 03.2 Classify controls response   -- REPORT / HTTP_ERROR (2xx-with-report vs. not)
+  -> 03.3 Handle controls-call failure -- TRANSPORT_FAILURE / TIMEOUT (connection level)
+  -> Call Assemble ActivityExecution -> Merge ActivityExecution into outcome
   -> 04.1 Build control report         -- single convergence point: renders full HTML
                                            (invoice identity, parties, totals, profile,
                                            XSD/Schematron version, control table)
@@ -261,10 +447,13 @@ organization-neutral and forwards the selected `organizationId` dynamically.
 
 Every failure and success path (`01.5 Handle invalid upload`, both
 `Handle ... failure` nodes, `02.5 Handle capability gate failure`,
-`03.2 Classify controls response`) feeds the *same* `04.1 Build control
-report` node, which feeds the *same* `04.2 Respond to browser` and
-`04.3 Route by review status` -- no duplicated response-building or
-routing logic.
+`03.2 Classify controls response`, `03.3 Handle controls-call failure`)
+emits only a normalized outcome envelope and feeds the *same* `Call
+Assemble ActivityExecution` -> `Merge ActivityExecution into outcome` pair,
+which feeds the *same* `04.1 Build control report` node, the *same*
+`04.2 Respond to browser`, and the *same* `04.3 Route by review status` --
+no duplicated response-building, routing, or `ActivityExecution`-assembly
+logic (see "P2.1 Wave 1 A5 Stage 0/1" above).
 
 ### Why a Webhook, not a Form Trigger
 
@@ -416,8 +605,13 @@ own; it's documented here under the same naming scheme purely for
 presentation consistency. Each selected file is sent through the separate
 `digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json`
 (`phase1-invoice-batch-item` webhook, node chain
-`01.1 Receive batch item -> 03.1 Run DigiTax controls -> 04.1 Build control
-report -> 04.2 Respond to batch caller`). The dashboard performs no invoice
+`01.1 Receive batch item -> 01.2 Build run context -> 01.3 Mark phase1
+attempt start -> 03.1 Run DigiTax controls (sends X-Correlation-ID) ->
+04.1 Build control report -> Call Assemble ActivityExecution -> Merge
+ActivityExecution into outcome -> 04.2 Respond to batch caller`). The
+caller-facing JSON shape (`{ok, statusCode, canonicalInvoice,
+phase1ControlReport}` / `{ok: false, statusCode, errorCode, detail}`) is
+unchanged; `activityExecution` is attached alongside it. The dashboard performs no invoice
 checks itself; it only consolidates API reports and requests an XLSX
 serialization for export -- routing/aggregation across the batch is the
 caller's responsibility, not this subworkflow's.

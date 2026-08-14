@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitax.de/schemas/execution-evidence/1.0/activity-execution.json",
+  "title": "DigiTax ActivityExecution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "executionId", "processInstanceId", "correlationId",
+    "definitionRef", "workflowRef", "startedAt", "completedAt", "status",
+    "resultCode", "executor", "inputRefs", "outputRefs", "evidenceRefs",
+    "controlReportRef", "aiBindingRef"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "executionId": { "type": "string", "minLength": 1 },
+    "processInstanceId": { "type": "string", "minLength": 1 },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "definitionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["processId", "processVersion", "activityId", "activityVersion"],
+      "properties": {
+        "processId": { "type": "string", "minLength": 1 },
+        "processVersion": { "type": "string", "minLength": 1 },
+        "activityId": { "type": "string", "minLength": 1 },
+        "activityVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workflowRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowId", "workflowVersion", "nodeId"],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1 },
+        "workflowVersion": { "type": "string", "minLength": 1 },
+        "nodeId": { "type": ["string", "null"] }
+      }
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "NOT_EXECUTED"] },
+    "resultCode": { "type": "string", "minLength": 1 },
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "logicalId", "version"],
+      "properties": {
+        "type": { "enum": ["HUMAN", "DETERMINISTIC_SERVICE", "AI_SERVICE"] },
+        "logicalId": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "inputRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "outputRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "controlReportRef": { "type": ["string", "null"] },
+    "aiBindingRef": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "executor": { "properties": { "type": { "const": "AI_SERVICE" } } } }
+      },
+      "then": { "properties": { "aiBindingRef": { "type": "string", "minLength": 1 } } },
+      "else": { "properties": { "aiBindingRef": { "type": "null" } } }
+    }
+  ]
+}

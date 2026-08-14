@@ -1,0 +1,12 @@
+{
+    "activity-execution":  {
+                               "sourceRef":  "work/arbeitsbericht/research/2026-08-12_execution_evidence_profile_p2_1/schemas/activity-execution.schema.json",
+                               "sourceSha256":  "244f8bc2dbd08b453ea9abbd38fa1095f548ef76e4c251dfddb2f7484960b7a3",
+                               "usage":  "ACTIVE_STAGE1_ACTIVITY_EXECUTION_VALIDATION"
+                           },
+    "human-review-decision":  {
+                                  "sourceRef":  "work/arbeitsbericht/research/2026-08-12_execution_evidence_profile_p2_1/schemas/human-review-decision.schema.json",
+                                  "sourceSha256":  "3d80c0e58424e014261de4e1fb09d8fdab430f24df4d08b47053c95917ae963c",
+                                  "usage":  "DEFERRED_VENDORED_FOR_ATOMIC_HASH_PIN_ONLY_NOT_GENERATED_FLOW_2_OUT_OF_SCOPE"
+                              }
+}

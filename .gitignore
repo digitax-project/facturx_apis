@@ -100,3 +100,8 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# Node.js build-time tooling (examples/n8n/package.json: ajv/ajv-formats,
+# generation-time-only -- never installed inside any n8n runtime container).
+# package-lock.json is tracked for reproducible installs; node_modules/ is not.
+node_modules/

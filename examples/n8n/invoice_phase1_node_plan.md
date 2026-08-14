@@ -7,10 +7,20 @@
 - approved organization master-data reference
 - optional `correlationId`
 
+**P2.1 Wave 1 A5 Stage 1 (implemented, Flow 1a only):** `correlationId` and
+`processInstanceId` are always *generated* by the run-context node
+(`crypto.randomUUID()`, no weak fallback) -- never accepted from the
+caller. `correlationId` is sent to the Phase 1 API as `X-Correlation-ID`;
+`processInstanceId` is evidence-only, never sent to the API.
+**Flow 1b is explicitly unaffected by this or any other Stage 0/1
+change** -- see `examples/n8n/README.md`'s "P2.1 Wave 1 A5 Stage 0/1"
+section.
+
 ## Main path
 
 1. **Trigger: invoice received** - webhook, mailbox, or manual test trigger.
-2. **Create run context** - run ID, timestamp, filename, MIME type, SHA-256.
+2. **Create run context** - run ID, timestamp, filename, MIME type, SHA-256,
+   plus (Stage 1) secure `correlationId`/`processInstanceId` generation.
 3. **Validate envelope** - file limits, allowed MIME types, encryption state.
 4. **Inspect document** - call `/v1/invoices/inspect`.
 5. **Switch by detected source**:
@@ -76,3 +86,12 @@ credential configuration, not receive a connection string from n8n at all.
 
 The workflow returns `canonicalInvoice`, `phase1ControlReport`, and
 `evidencePackageRef`. It never returns a final accounting approval.
+
+**P2.1 Wave 1 A5 Stage 1 (implemented, Flow 1a only):** exactly one
+schema-valid `ActivityExecution` object (P2.1
+`activity-execution.schema.json` v1.0.0) is assembled and validated per
+Phase-1 run, via the shared, versioned
+`digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json`
+subworkflow -- see `examples/n8n/README.md`. It is not yet persisted to any
+Evidence Store (out of this implementation's authorized scope, blocked
+until Stage 3).

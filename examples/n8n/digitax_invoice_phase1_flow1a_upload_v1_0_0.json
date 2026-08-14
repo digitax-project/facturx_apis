@@ -24,7 +24,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Everything downstream needs a stable identifier that survives every\n// success and failure branch, created before any API call is made.\nconst correlationId =\n  typeof crypto !== \"undefined\" && crypto.randomUUID\n    ? crypto.randomUUID()\n    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;\n\nconst item = $input.first();\nconst body = item.json.body || {};\nconst invoiceFile = item.binary ? item.binary.invoiceFile : undefined;\n\nconst demoModeRequested = body.demoMode === \"true\" || body.demoMode === true;\nconst submittedOrganizationId =\n  typeof body.organizationId === \"string\" && body.organizationId.trim() !== \"\"\n    ? body.organizationId.trim()\n    : null;\n// Per the demo plan: default to the fictional org only when the caller\n// explicitly opted into demo mode -- never a silent fallback.\nconst organizationId =\n  submittedOrganizationId || (demoModeRequested ? \"unternehmen-x-demo\" : null);\n\nreturn [\n  {\n    json: {\n      correlationId,\n      receivedAt: new Date().toISOString(),\n      hasFile: Boolean(invoiceFile),\n      filename: invoiceFile ? invoiceFile.fileName : null,\n      mimeType: invoiceFile ? invoiceFile.mimeType : null,\n      organizationId,\n      demoModeRequested,\n    },\n    binary: item.binary,\n  },\n];\n"
+        "jsCode": "// Everything downstream needs stable identifiers that survive every\n// success and failure branch, created before any API call is made.\n// No weak fallback: a missing crypto.randomUUID must fail visibly rather\n// than mint a low-entropy identity for evidence.\n// The n8n JS Task Runner sandbox does not expose a bare `crypto` global\n// (confirmed against the real pinned n8nio/n8n:2.33.7 image) -- the built-in\n// must be required explicitly, and require() itself is denied unless\n// allow-listed (NODE_FUNCTION_ALLOW_BUILTIN=crypto, set on the n8n\n// container -- see docker-compose.phase1-upload-demo.yml). No weak\n// fallback: an unavailable/disallowed crypto module must fail visibly\n// rather than mint a low-entropy identity for evidence.\nlet randomUUID;\ntry {\n  randomUUID = require(\"crypto\").randomUUID;\n} catch (e) {\n  randomUUID = undefined;\n}\nif (typeof randomUUID !== \"function\") {\n  throw new Error(\n    \"SECURE_UUID_UNAVAILABLE: refusing to mint a weak identifier for correlationId/processInstanceId without crypto.randomUUID() (require(\\\"crypto\\\") must be allow-listed via NODE_FUNCTION_ALLOW_BUILTIN=crypto on the n8n instance).\"\n  );\n}\nconst correlationId = randomUUID();\nconst processInstanceId = randomUUID();\n\nconst item = $input.first();\nconst body = item.json.body || {};\nconst invoiceFile = item.binary ? item.binary.invoiceFile : undefined;\n\nconst demoModeRequested = body.demoMode === \"true\" || body.demoMode === true;\nconst submittedOrganizationId =\n  typeof body.organizationId === \"string\" && body.organizationId.trim() !== \"\"\n    ? body.organizationId.trim()\n    : null;\n// Per the demo plan: default to the fictional org only when the caller\n// explicitly opted into demo mode -- never a silent fallback.\nconst organizationId =\n  submittedOrganizationId || (demoModeRequested ? \"unternehmen-x-demo\" : null);\n\nreturn [\n  {\n    json: {\n      correlationId,\n      processInstanceId,\n      receivedAt: new Date().toISOString(),\n      hasFile: Boolean(invoiceFile),\n      filename: invoiceFile ? invoiceFile.fileName : null,\n      mimeType: invoiceFile ? invoiceFile.mimeType : null,\n      organizationId,\n      demoModeRequested,\n    },\n    binary: item.binary,\n  },\n];\n"
       },
       "id": "a1000002-0000-4000-8000-000000000002",
       "name": "01.2 Build run context",
@@ -81,7 +81,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.3 Validate upload request\",\n    errorCode: ctx.errorCode,\n    explanation: ctx.explanation,\n    invoice: null,\n    report: null,\n    capabilityInfo: null,\n  },\n}];\n"
+        "jsCode": "const ctx = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: ctx.errorCode,\n    explanation: ctx.explanation,\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.3 Validate upload request\",\n    invoice: null,\n    document: null,\n    capabilityInfo: null,\n  },\n}];\n"
       },
       "id": "a1000005-0000-4000-8000-000000000005",
       "name": "01.5 Handle invalid upload",
@@ -133,7 +133,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1 Read API capabilities\",\n    errorCode: \"CAPABILITIES_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The capabilities service did not respond after the bounded retry.\",\n    invoice: null,\n    report: null,\n    capabilityInfo: null,\n  },\n}];\n"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"CAPABILITIES_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The capabilities service did not respond after the bounded retry.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1 Read API capabilities\",\n    invoice: null,\n    document: null,\n    capabilityInfo: null,\n  },\n}];\n"
       },
       "id": "a1000008-0000-4000-8000-000000000008",
       "name": "02.3 Handle capabilities failure",
@@ -177,7 +177,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.2 Evaluate capability gate\",\n    errorCode: ctx.errorCode,\n    explanation: ctx.explanation,\n    invoice: null,\n    report: null,\n    capabilityInfo: null,\n  },\n}];\n"
+        "jsCode": "const gateCtx = $input.first().json;\nconst ctx = $('01.2 Build run context').item.json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: gateCtx.errorCode,\n    explanation: gateCtx.explanation,\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.2 Evaluate capability gate\",\n    invoice: null,\n    document: null,\n    capabilityInfo: null,\n  },\n}];\n"
       },
       "id": "a100000a-0000-4000-8000-00000000000a",
       "name": "02.5 Handle capability gate failure",
@@ -215,6 +215,15 @@
               "fullResponse": true
             }
           }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $('01.2 Build run context').item.json.correlationId }}"
+            }
+          ]
         }
       },
       "id": "a100000b-0000-4000-8000-00000000000b",
@@ -232,7 +241,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Same neverError contract as 02.1 Read API capabilities: any HTTP response (2xx,\n// 4xx, 5xx) lands here as normal output. Only a connection-level failure\n// uses the node's error output and gets retried. A 4xx here is therefore\n// guaranteed to have been retried zero times.\nconst ctx = $('01.2 Build run context').item.json;\nconst resp = $input.first().json;\nconst statusCode = resp.statusCode;\nconst body = resp.body || {};\n\nif (statusCode >= 200 && statusCode < 300) {\n  const invoice = body.canonicalInvoice.invoice;\n  const document = body.canonicalInvoice.document;\n  const report = body.phase1ControlReport;\n  return [{\n    json: {\n      correlationId: ctx.correlationId,\n      status: report.status,\n      routing: report.routing,\n      failedStep: null,\n      errorCode: null,\n      explanation: null,\n      invoice,\n      document,\n      report,\n      capabilityInfo: $('02.2 Evaluate capability gate').item.json.capabilityInfo,\n    },\n  }];\n}\n\nconst apiDetail = (body.detail && typeof body.detail === \"object\") ? body.detail : {};\nconst errorCode = apiDetail.error_code || `HTTP_${statusCode}`;\nconst explanation = apiDetail.detail || `03.1 Run DigiTax controls returned HTTP ${statusCode}.`;\nconst retryNote = statusCode >= 400 && statusCode < 500\n  ? \"Not retried: this is a deterministic input/contract error.\"\n  : \"This response was received from the service (not a connection failure), so it was not subject to the connection-level retry either.\";\n\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"03.1 Run DigiTax controls\",\n    errorCode,\n    explanation: `${explanation} (HTTP ${statusCode}). ${retryNote}`,\n    invoice: null,\n    report: null,\n    capabilityInfo: $('02.2 Evaluate capability gate').item.json.capabilityInfo,\n  },\n}];\n"
+        "jsCode": "// Same neverError contract as 02.1 Read API capabilities: any HTTP response (2xx,\n// 4xx, 5xx) lands here as normal output. Only a connection-level failure\n// uses the node's error output and gets retried. A 4xx here is therefore\n// guaranteed to have been retried zero times.\nconst ctx = $('01.2 Build run context').item.json;\nconst attemptStart = $('02.6 Mark phase1 attempt start').item.json.phase1AttemptStartedAt;\nconst resp = $input.first().json;\nconst statusCode = resp.statusCode;\nconst body = resp.body || {};\n\nif (statusCode >= 200 && statusCode < 300) {\n  const invoice = body.canonicalInvoice.invoice;\n  const document = body.canonicalInvoice.document;\n  const report = body.phase1ControlReport;\n  return [{\n    json: {\n      processInstanceId: ctx.processInstanceId,\n      correlationId: ctx.correlationId,\n      workflowId: $workflow.id,\n      receivedAt: ctx.receivedAt,\n      outcome: \"REPORT\",\n      report,\n      httpErrorCode: null,\n      n8nErrorCode: null,\n      explanation: null,\n      phase1AttemptStartedAt: attemptStart,\n      gateDecisionAt: null,\n      phase1Status: report.status,\n      routing: report.routing,\n      failedStep: null,\n      invoice,\n      document,\n      capabilityInfo: $('02.2 Evaluate capability gate').item.json.capabilityInfo,\n    },\n  }];\n}\n\nconst apiDetail = (body.detail && typeof body.detail === \"object\") ? body.detail : {};\nconst httpErrorCode = apiDetail.error_code || `HTTP_${statusCode}`;\nconst retryNote = statusCode >= 400 && statusCode < 500\n  ? \"Not retried: this is a deterministic input/contract error.\"\n  : \"This response was received from the service (not a connection failure), so it was not subject to the connection-level retry either.\";\nconst explanation = `${apiDetail.detail || `03.1 Run DigiTax controls returned HTTP ${statusCode}.`} (HTTP ${statusCode}). ${retryNote}`;\n\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"HTTP_ERROR\",\n    report: null,\n    httpErrorCode,\n    n8nErrorCode: null,\n    explanation,\n    phase1AttemptStartedAt: attemptStart,\n    gateDecisionAt: null,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"03.1 Run DigiTax controls\",\n    invoice: null,\n    document: null,\n    capabilityInfo: $('02.2 Evaluate capability gate').item.json.capabilityInfo,\n  },\n}];\n"
       },
       "id": "a100000c-0000-4000-8000-00000000000c",
       "name": "03.2 Classify controls response",
@@ -245,7 +254,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst gate = $('02.2 Evaluate capability gate').item.json;\nconst ctxErr = $input.first().json;\nreturn [{\n  json: {\n    correlationId: ctx.correlationId,\n    status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"03.1 Run DigiTax controls\",\n    errorCode: \"INVOICE_PROCESSING_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The invoice processing service did not respond after the bounded retry.\",\n    invoice: null,\n    report: null,\n    capabilityInfo: gate ? gate.capabilityInfo : null,\n  },\n}];\n"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst gate = $('02.2 Evaluate capability gate').item.json;\nconst attemptStart = $('02.6 Mark phase1 attempt start').item.json.phase1AttemptStartedAt;\nconst ctxErr = $input.first().json;\nconst errObj = ctxErr.error || {};\nconst errMessage = (errObj.message || errObj || ctxErr.message || \"\").toString();\nconst errCode = (errObj.code || \"\").toString();\n// Positively classify a timeout (ETIMEDOUT/ECONNABORTED, or a message\n// mentioning \"timeout\") as TIMEOUT; every other connection-level failure is\n// TRANSPORT_FAILURE.\nconst isTimeout = /ETIMEDOUT|ECONNABORTED/i.test(errCode) || /timeout/i.test(errMessage);\nconst outcome = isTimeout ? \"TIMEOUT\" : \"TRANSPORT_FAILURE\";\nconst n8nErrorCode = isTimeout ? \"INVOICE_PROCESSING_SERVICE_TIMEOUT\" : \"INVOICE_PROCESSING_SERVICE_UNAVAILABLE\";\nconst explanation = errMessage || \"The invoice processing service did not respond after the bounded retry.\";\n\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome,\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode,\n    explanation,\n    phase1AttemptStartedAt: attemptStart,\n    gateDecisionAt: null,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"03.1 Run DigiTax controls\",\n    invoice: null,\n    document: null,\n    capabilityInfo: gate ? gate.capabilityInfo : null,\n  },\n}];\n"
       },
       "id": "a100000d-0000-4000-8000-00000000000d",
       "name": "03.3 Handle controls-call failure",
@@ -518,6 +527,50 @@
       ],
       "id": "note-1a-upl-version",
       "name": "Version Info"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nreturn [{ json: { ...item.json, phase1AttemptStartedAt: new Date().toISOString() }, binary: item.binary }];\n"
+      },
+      "id": "a1000015-0000-4000-8000-000000000015",
+      "name": "02.6 Mark phase1 attempt start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "digitax-invoice-phase1-shared-assemble-activity-execution",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "a1000016-0000-4000-8000-000000000016",
+      "name": "Call Assemble ActivityExecution",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -400,
+        110
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reconciles the shared subworkflow's minimal { activityExecution } return\n// with the branch's own normalized envelope (phase1Status/routing/report/...)\n// that 04.1 Build control report still expects under its original field\n// names -- the shared subworkflow's contract stays reusable/minimal on\n// purpose (see examples/n8n/README.md), so this node does the reconciling.\nfunction tryGetBranchEnvelope(nodeName) {\n  try {\n    const item = $(nodeName).item;\n    return item ? item.json : undefined;\n  } catch (e) {\n    return undefined;\n  }\n}\n\nconst BRANCH_NODE_NAMES = [\n  \"01.5 Handle invalid upload\",\n  \"02.3 Handle capabilities failure\",\n  \"02.5 Handle capability gate failure\",\n  \"03.2 Classify controls response\",\n  \"03.3 Handle controls-call failure\",\n];\n\nlet envelope;\nfor (const name of BRANCH_NODE_NAMES) {\n  const candidate = tryGetBranchEnvelope(name);\n  if (candidate !== undefined) {\n    envelope = candidate;\n    break;\n  }\n}\nif (!envelope) {\n  throw new Error(\"ACTIVITY_EXECUTION_MERGE_NO_BRANCH_ENVELOPE: could not locate the originating branch node's output.\");\n}\n\nconst { activityExecution } = $input.first().json;\n\nreturn [{\n  json: {\n    correlationId: envelope.correlationId,\n    processInstanceId: envelope.processInstanceId,\n    status: envelope.phase1Status,\n    routing: envelope.routing,\n    failedStep: envelope.failedStep,\n    errorCode: envelope.httpErrorCode || envelope.n8nErrorCode,\n    explanation: envelope.explanation,\n    invoice: envelope.invoice,\n    document: envelope.document,\n    report: envelope.report,\n    capabilityInfo: envelope.capabilityInfo,\n    activityExecution,\n  },\n}];\n"
+      },
+      "id": "a1000017-0000-4000-8000-000000000017",
+      "name": "Merge ActivityExecution into outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -110
+      ]
     }
   ],
   "connections": {
@@ -576,7 +629,7 @@
       "main": [
         [
           {
-            "node": "04.1 Build control report",
+            "node": "Call Assemble ActivityExecution",
             "type": "main",
             "index": 0
           }
@@ -616,7 +669,7 @@
       "main": [
         [
           {
-            "node": "04.1 Build control report",
+            "node": "Call Assemble ActivityExecution",
             "type": "main",
             "index": 0
           }
@@ -627,7 +680,7 @@
       "main": [
         [
           {
-            "node": "03.1 Run DigiTax controls",
+            "node": "02.6 Mark phase1 attempt start",
             "type": "main",
             "index": 0
           }
@@ -645,7 +698,7 @@
       "main": [
         [
           {
-            "node": "04.1 Build control report",
+            "node": "Call Assemble ActivityExecution",
             "type": "main",
             "index": 0
           }
@@ -674,7 +727,7 @@
       "main": [
         [
           {
-            "node": "04.1 Build control report",
+            "node": "Call Assemble ActivityExecution",
             "type": "main",
             "index": 0
           }
@@ -685,7 +738,7 @@
       "main": [
         [
           {
-            "node": "04.1 Build control report",
+            "node": "Call Assemble ActivityExecution",
             "type": "main",
             "index": 0
           }
@@ -740,6 +793,39 @@
         [
           {
             "node": "05.4 Human review - unknown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.6 Mark phase1 attempt start": {
+      "main": [
+        [
+          {
+            "node": "03.1 Run DigiTax controls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Assemble ActivityExecution": {
+      "main": [
+        [
+          {
+            "node": "Merge ActivityExecution into outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge ActivityExecution into outcome": {
+      "main": [
+        [
+          {
+            "node": "04.1 Build control report",
             "type": "main",
             "index": 0
           }

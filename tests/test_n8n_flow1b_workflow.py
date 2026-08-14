@@ -142,9 +142,15 @@ def test_workflow_id_and_display_name_match_spec():
 
 
 def test_workflow_id_is_unique_across_all_n8n_examples():
+    # Stage 0 (P2.1 Wave 1 A5) added non-workflow JSON directly under
+    # examples/n8n/ (the activity binding lockfile, package-lock.json) --
+    # only files that are actual n8n workflow exports (they always have a
+    # top-level "nodes" array) participate in this id-uniqueness check.
     seen_ids = {}
     for path in EXAMPLES_N8N_DIR.glob("*.json"):
         wf = json.loads(path.read_text(encoding="utf-8"))
+        if "nodes" not in wf:
+            continue
         wf_id = wf.get("id")
         assert wf_id not in seen_ids, (
             f"duplicate workflow id {wf_id!r} in {path.name} and {seen_ids.get(wf_id)}"

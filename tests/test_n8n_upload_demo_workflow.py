@@ -208,10 +208,17 @@ def test_all_four_review_terminal_nodes_exist_and_are_noops():
     assert terminal_types == {"n8n-nodes-base.noOp"}
 
 
+CALL_ASSEMBLE_NODE = "Call Assemble ActivityExecution"
+MERGE_ACTIVITY_EXECUTION_NODE = "Merge ActivityExecution into outcome"
+
+
 def test_every_failure_and_success_path_converges_on_single_response_builder():
-    """No duplicated respond-to-browser or routing logic: every payload
-    source feeds the same control-report builder node, which feeds the same
-    browser-response node, which feeds the same status-routing switch."""
+    """No duplicated respond-to-browser or routing logic, and no branch
+    constructs its own ActivityExecution: every payload source emits a
+    normalized envelope into the single shared Assemble ActivityExecution
+    call, which feeds the single Merge node, which feeds the same
+    control-report builder node, the same browser-response node, and the
+    same status-routing switch."""
     data = _load_workflow()
     payload_sources = (
         "01.5 Handle invalid upload",
@@ -222,10 +229,37 @@ def test_every_failure_and_success_path_converges_on_single_response_builder():
     )
     for source in payload_sources:
         targets = {edge["node"] for branch in data["connections"][source]["main"] for edge in branch}
-        assert targets == {BUILD_REPORT_NODE}, f"{source!r} must feed {BUILD_REPORT_NODE!r}"
+        assert targets == {CALL_ASSEMBLE_NODE}, f"{source!r} must feed {CALL_ASSEMBLE_NODE!r}"
 
+    assert data["connections"][CALL_ASSEMBLE_NODE]["main"][0][0]["node"] == MERGE_ACTIVITY_EXECUTION_NODE
+    assert data["connections"][MERGE_ACTIVITY_EXECUTION_NODE]["main"][0][0]["node"] == BUILD_REPORT_NODE
     assert data["connections"][BUILD_REPORT_NODE]["main"][0][0]["node"] == RESPOND_NODE
     assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
+
+
+def test_call_assemble_activity_execution_references_shared_subworkflow():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    call_node = nodes[CALL_ASSEMBLE_NODE]
+    assert call_node["type"] == "n8n-nodes-base.executeWorkflow"
+    assert (
+        call_node["parameters"]["workflowId"]["value"]
+        == "digitax-invoice-phase1-shared-assemble-activity-execution"
+    )
+
+
+def test_no_branch_node_constructs_a_full_activity_execution_object():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    for source in (
+        "01.5 Handle invalid upload",
+        "02.3 Handle capabilities failure",
+        "02.5 Handle capability gate failure",
+        "03.2 Classify controls response",
+        "03.3 Handle controls-call failure",
+    ):
+        code = nodes[source]["parameters"]["jsCode"]
+        assert '"executionId"' not in code, f"{source!r} must not construct a full ActivityExecution object"
 
 
 def test_browser_response_is_html_and_never_requires_raw_json_inspection():
@@ -249,3 +283,58 @@ def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
         assert not any(term in lowered for term in forbidden_terms), (
             f"node {node['name']!r} looks like it goes past the Phase 1 human-review boundary"
         )
+
+
+# ---------------------------------------------------------------------------
+# P2.1 Wave 1 A5 Stage 1: identity propagation + shared ActivityExecution
+# assembly.
+# ---------------------------------------------------------------------------
+
+MARK_ATTEMPT_START_NODE = "02.6 Mark phase1 attempt start"
+
+
+def test_run_context_generates_secure_ids_with_no_weak_fallback():
+    code = _nodes_by_name(_load_workflow())[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
+    assert 'require("crypto").randomUUID' in code
+    assert "processInstanceId" in code
+    assert "Math.random()" not in code, "no weak fallback may remain anywhere in this node"
+    assert "SECURE_UUID_UNAVAILABLE" in code
+
+
+def test_mark_attempt_start_immediately_precedes_controls_call():
+    data = _load_workflow()
+    assert MARK_ATTEMPT_START_NODE in _nodes_by_name(data)
+    assert data["connections"]["02.4 Required capability present?"]["main"][0][0]["node"] == MARK_ATTEMPT_START_NODE
+    assert data["connections"][MARK_ATTEMPT_START_NODE]["main"][0][0]["node"] == "03.1 Run DigiTax controls"
+
+
+def test_controls_call_sends_x_correlation_id_header():
+    node = _nodes_by_name(_load_workflow())["03.1 Run DigiTax controls"]
+    assert node["parameters"]["sendHeaders"] is True
+    headers = node["parameters"]["headerParameters"]["parameters"]
+    header = next(h for h in headers if h["name"] == "X-Correlation-ID")
+    assert "correlationId" in header["value"]
+
+
+def test_branch_nodes_emit_normalized_envelope_with_correct_outcome_literal():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    expected_outcomes = {
+        "01.5 Handle invalid upload": "PRE_FLIGHT_REJECTED",
+        "02.3 Handle capabilities failure": "PRE_FLIGHT_REJECTED",
+        "02.5 Handle capability gate failure": "PRE_FLIGHT_REJECTED",
+    }
+    for node_name, outcome in expected_outcomes.items():
+        code = nodes[node_name]["parameters"]["jsCode"]
+        assert f'"{outcome}"' in code
+        assert "gateDecisionAt" in code
+        assert '"executionId"' not in code
+
+    classify_code = nodes["03.2 Classify controls response"]["parameters"]["jsCode"]
+    assert '"REPORT"' in classify_code
+    assert '"HTTP_ERROR"' in classify_code
+
+    failure_code = nodes["03.3 Handle controls-call failure"]["parameters"]["jsCode"]
+    assert '"TRANSPORT_FAILURE"' in failure_code
+    assert '"TIMEOUT"' in failure_code
+    assert "ETIMEDOUT" in failure_code
