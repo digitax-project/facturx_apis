@@ -162,8 +162,17 @@ function New-LockfileFromVendoredSnapshot {
 }
 
 function Write-JsonFile {
+    # ConvertTo-Json on Windows PowerShell 5.1 embeds CRLF between every
+    # property internally (an Environment.NewLine artifact, unrelated to any
+    # git checkout filter) -- normalized to LF-only here so -Regenerate's
+    # output is byte-identical to what git actually stores (its clean filter
+    # already normalizes CRLF->LF on commit) and so a fresh -CheckOnly/
+    # -VerifyAgainstSource regeneration is byte-comparable against a checked-
+    # out file on any machine, not just the one that originally ran
+    # -Regenerate. Discovered by testing against a genuine fresh git clone,
+    # not merely re-running in the same working directory.
     param([string]$Path, $Object)
-    $json = $Object | ConvertTo-Json -Depth 10
+    $json = ($Object | ConvertTo-Json -Depth 10) -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($Path, "$json`n")
 }
 

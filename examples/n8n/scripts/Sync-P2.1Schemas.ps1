@@ -142,7 +142,13 @@ function Write-VendoredSet {
         }
     }
 
-    $provenanceJson = $provenance | ConvertTo-Json -Depth 10
+    # ConvertTo-Json on Windows PowerShell 5.1 embeds CRLF between every
+    # property internally (an Environment.NewLine artifact, unrelated to any
+    # git checkout filter) -- normalized to LF-only here so -Regenerate's
+    # output is byte-identical to what git actually stores and to a fresh
+    # regeneration on any machine, not just the one that originally ran
+    # -Regenerate. Discovered by testing against a genuine fresh git clone.
+    $provenanceJson = ($provenance | ConvertTo-Json -Depth 10) -replace "`r`n", "`n"
     $provenancePath = Join-Path $TargetDir "schema_provenance.json"
     # No trailing newline drift between -Regenerate and -CheckOnly runs.
     [System.IO.File]::WriteAllText($provenancePath, "$provenanceJson`n")
