@@ -2,14 +2,18 @@
 
 API for Factur-X PDF generation, XML extraction and validation.
 
-## DigiTax Phase 1 API v1.0.1
+## DigiTax Phase 1 API v1.1.0
 
 `v1.0.0` introduced the first stable DigiTax Phase 1 invoice-preprocessing API
 and its n8n demonstration. `v1.0.1` corrects the dated official-standard
-baseline and adds the complete generated Schematron assertion inventory. The
-service release is independent of the embedded upstream `factur-x` Python
-library version `3.6` and the invoice validation baseline
-`Factur-X 1.09 EN16931`.
+baseline and adds the complete generated Schematron assertion inventory.
+`v1.1.0` adds an optional, caller-supplied `X-Correlation-ID` request header
+on `POST /v1/invoices/process` (echoed verbatim into the report's
+`correlationId` when supplied) and a new required, server-generated
+`startedAt` timestamp on every report, bumping `phase1_control_report`'s
+`schemaVersion` to `1.1.0`. The service release is independent of the
+embedded upstream `factur-x` Python library version `3.6` and the invoice
+validation baseline `Factur-X 1.09 EN16931`.
 
 ### What is new
 
@@ -147,13 +151,16 @@ docker compose -f compose.dev.yml up --build
 - Batch UI: http://localhost:6970/demo/batch
 - n8n UI: http://localhost:5679 (no login by default)
 
-On first start, a one-shot `n8n-init` container imports all four versioned
+On first start, a one-shot `n8n-init` container imports all five versioned
 DigiTax workflows into the shared `digitax_devstack_n8n_data` volume and
-publishes only `Flow 1a | Upload Demo` and `Flow 1a | Batch Item`;
-`Flow 1a | Structured Regression` and `Flow 1b | PDF OCR/LLM Concept` stay
-inactive. `n8n-init` runs to completion, successfully, before the `n8n`
-service starts -- there is no `docker exec`-then-restart step, and the whole
-`up` fails if import or publication fails.
+publishes `Flow 1a | Upload Demo`, `Flow 1a | Batch Item`, and the shared
+`Flow 1a | Shared | Assemble ActivityExecution` subworkflow (published
+because n8n requires it to be, not because it has a webhook -- it has none
+and is never externally reachable); `Flow 1a | Structured Regression` and
+`Flow 1b | PDF OCR/LLM Concept` stay inactive. `n8n-init` runs to
+completion, successfully, before the `n8n` service starts -- there is no
+`docker exec`-then-restart step, and the whole `up` fails if import or
+publication fails.
 
 Flow 1a works with zero external credentials: generate a synthetic invoice
 (`python examples/demo/generate_demo_invoices.py --output-dir .demo-output`,

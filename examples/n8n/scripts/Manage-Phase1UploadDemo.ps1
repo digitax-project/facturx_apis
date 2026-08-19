@@ -53,6 +53,13 @@ $RegressionWorkflowId = "digitax-invoice-phase1-structured-demo"
 $UploadWorkflowId = "digitax-invoice-phase1-upload-demo"
 $BatchWorkflowId = "digitax-invoice-phase1-batch-item"
 $Flow1bWorkflowId = "digitax-invoice-phase1-flow1b-pdf-ocr"
+# P2.1 Wave 1 A5 Stage 1: shared subworkflow, called only via Execute
+# Workflow (never a webhook) -- imported, duplicate-checked, AND published
+# like Upload Demo/Batch Item (see Publish-DemoWebhooks below):
+# n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow
+# invoke an unpublished target at all, confirmed empirically, even though
+# this workflow has no webhook and is never externally reachable.
+$SharedAssembleWorkflowId = "digitax-invoice-phase1-shared-assemble-activity-execution"
 
 # Workflow ids are deterministic and unchanged by the 2026-08-10
 # final-demo-ui renaming round; only display names and export filenames
@@ -62,6 +69,7 @@ $StructuredRegressionFile = "digitax_invoice_phase1_flow1a_structured_regression
 $UploadFile = "digitax_invoice_phase1_flow1a_upload_v1_0_0.json"
 $BatchItemFile = "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json"
 $Flow1bFile = "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json"
+$SharedAssembleFile = "digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json"
 
 $EvidenceDir = [System.IO.Path]::GetFullPath((Join-Path $N8nDir "..\..\..\..\..\output\bpmn\renders\versions\digitax_flow01_n8n\upload-automation\review_evidence"))
 
@@ -104,8 +112,17 @@ function Publish-DemoWebhooks {
     # "active": true) -- so the upload demo's production webhook needs an
     # explicit publish step after every import, and a restart for that
     # activation to take effect on the already-running n8n process.
-    foreach ($id in @($UploadWorkflowId, $BatchWorkflowId)) {
-        Write-Host "Publishing $id so its webhook goes live ..."
+    #
+    # P2.1 Wave 1 A5 Stage 1: the shared Assemble ActivityExecution
+    # subworkflow must ALSO be published, even though it has no webhook and
+    # is never externally reachable -- confirmed empirically against the
+    # real pinned n8n 2.33.7 image that its WorkflowPublicationService
+    # refuses to let an Execute Workflow node invoke an unpublished target
+    # at all ("Workflow is not active and cannot be executed."). Publishing
+    # it only makes it callable via Execute Workflow; it opens no live
+    # traffic surface (its only trigger node is executeWorkflowTrigger).
+    foreach ($id in @($UploadWorkflowId, $BatchWorkflowId, $SharedAssembleWorkflowId)) {
+        Write-Host "Publishing $id so it can run ..."
         docker exec $N8nContainer n8n update:workflow --id=$id --active=true
         if ($LASTEXITCODE -ne 0) { throw "n8n update:workflow --active=true failed for $id (exit $LASTEXITCODE)" }
     }
@@ -122,7 +139,7 @@ function Assert-NoDuplicateWorkflows {
         throw "n8n list:workflow failed (exit $LASTEXITCODE):`n$listOutput"
     }
     Write-Host $listOutput
-    foreach ($id in @($RegressionWorkflowId, $UploadWorkflowId, $BatchWorkflowId, $Flow1bWorkflowId)) {
+    foreach ($id in @($RegressionWorkflowId, $UploadWorkflowId, $BatchWorkflowId, $Flow1bWorkflowId, $SharedAssembleWorkflowId)) {
         $idMatches = @($listOutput | Select-String -SimpleMatch $id)
         if ($idMatches.Count -gt 1) {
             throw "Duplicate workflow detected for id $id ($($idMatches.Count) entries) -- import is not idempotent"
@@ -131,7 +148,7 @@ function Assert-NoDuplicateWorkflows {
             throw "Expected workflow id $id not found after import"
         }
     }
-    Write-Host "No duplicate workflows: all four demo workflow ids appear exactly once."
+    Write-Host "No duplicate workflows: all five demo workflow ids appear exactly once."
 }
 
 function Assert-CorrectActiveState {
@@ -144,17 +161,17 @@ function Assert-CorrectActiveState {
     $activeOutput = docker exec $N8nContainer n8n list:workflow --active=true 2>&1
     $inactiveOutput = docker exec $N8nContainer n8n list:workflow --active=false 2>&1
 
-    foreach ($id in @($UploadWorkflowId, $BatchWorkflowId)) {
+    foreach ($id in @($UploadWorkflowId, $BatchWorkflowId, $SharedAssembleWorkflowId)) {
         if (-not ($activeOutput | Select-String -SimpleMatch $id)) {
-            throw "Expected $id to be active, but it is not -- demo webhook would not respond"
+            throw "Expected $id to be active/published, but it is not -- demo webhook (or, for the shared subworkflow, Execute Workflow itself) would not work"
         }
     }
     foreach ($id in @($RegressionWorkflowId, $Flow1bWorkflowId)) {
         if (-not ($inactiveOutput | Select-String -SimpleMatch $id)) {
-            throw "Expected $id to be inactive, but it is active -- Flow 1b and the regression helper must never receive live traffic"
+            throw "Expected $id to be inactive, but it is active -- Flow 1b and the regression helper must never receive live webhook traffic"
         }
     }
-    Write-Host "Active-state policy confirmed: Upload + Batch Item active; Structured Regression + Flow 1b inactive."
+    Write-Host "Active-state policy confirmed: Upload + Batch Item + shared Assemble ActivityExecution active/published (the shared subworkflow has no webhook and is never externally reachable -- publication is required only for Execute Workflow to invoke it); Structured Regression + Flow 1b inactive."
 }
 
 switch ($Action) {
@@ -166,6 +183,7 @@ switch ($Action) {
         Wait-ForHealth -Url $ApiHealthUrl -Label "Factur-X Phase 1 API"
         Wait-ForHealth -Url $N8nHealthUrl -Label "n8n 2.33.7"
 
+        Invoke-N8nImport -WorkflowFileName $SharedAssembleFile
         Invoke-N8nImport -WorkflowFileName $StructuredRegressionFile
         Invoke-N8nImport -WorkflowFileName $UploadFile
         Invoke-N8nImport -WorkflowFileName $BatchItemFile

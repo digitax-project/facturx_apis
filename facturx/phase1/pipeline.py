@@ -15,6 +15,7 @@ exceptions raised here):
   nicht_pruefbar/klaerung_erforderlich/hinweis/unauffaellig -- HTTP 200.
 """
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 from .. import facturx as facturx_lib
@@ -127,9 +128,15 @@ def _finalize_report(
     controls: list[ControlResult],
     status: str,
     routing: str,
+    *,
+    started_at: str,
+    correlation_id: Optional[str] = None,
 ) -> dict:
     try:
-        return build_report(source_sha256, control_profile, controls, status, routing)
+        return build_report(
+            source_sha256, control_profile, controls, status, routing,
+            started_at=started_at, correlation_id=correlation_id,
+        )
     except Exception as exc:
         raise TechnicalProcessingError(
             "CONTRACT_VALIDATION_FAILED", f"Internal control report was not schema-valid: {exc}"
@@ -233,9 +240,11 @@ def process_invoice(
     organization_id: Optional[str],
     demo_mode: bool,
     pdf_extraction_adapter: PdfExtractionAdapter,
+    correlation_id: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Returns (canonical_invoice, phase1_control_report), both already
     validated against their own contract schemas."""
+    started_at = datetime.now(timezone.utc).isoformat()
     organization_context = resolve_organization_context(organization_id, demo_mode)
     control_profile = get_control_profile(organization_context["controlProfileId"])
     inspection = inspect_document(file_bytes, filename, content_type)
@@ -252,7 +261,8 @@ def process_invoice(
     if doc_001.outcome != "passed":
         canonical_invoice, controls = _blocked_by_doc_001(inspection, doc_001, control_profile)
         report = _finalize_report(
-            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review"
+            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review",
+            started_at=started_at, correlation_id=correlation_id,
         )
         return canonical_invoice, report
 
@@ -265,7 +275,8 @@ def process_invoice(
             if cid not in ("DOC-001", "STR-003")
         ]
         report = _finalize_report(
-            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review"
+            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review",
+            started_at=started_at, correlation_id=correlation_id,
         )
         return outcome.canonical_invoice, report
 
@@ -318,7 +329,10 @@ def process_invoice(
         )
 
     status, routing = aggregate(controls)
-    report = _finalize_report(inspection.sha256, control_profile, controls, status, routing)
+    report = _finalize_report(
+        inspection.sha256, control_profile, controls, status, routing,
+        started_at=started_at, correlation_id=correlation_id,
+    )
     return outcome.canonical_invoice, report
 
 

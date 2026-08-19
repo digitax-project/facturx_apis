@@ -1,4 +1,4 @@
-# DigiTax Phase 1 developer stack: API + n8n UI + the four versioned DigiTax
+# DigiTax Phase 1 developer stack: API + n8n UI + the five versioned DigiTax
 # workflows, importable and (for Flow 1a) runnable with a single,
 # platform-independent command:
 #
@@ -55,6 +55,7 @@ services:
       - N8N_DIAG_ENABLED=false
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
       - digitax_devstack_n8n_data:/home/node/.n8n
       - ./examples/n8n:/data/workflows:ro
@@ -71,6 +72,15 @@ services:
       - FACTURX_API_BASE_URL=http://api:6969
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_DIAG_ENABLED=false
+      # P2.1 Wave 1 A5 Stage 1: Code nodes generate secure correlationId/
+      # processInstanceId identities via require("crypto").randomUUID() --
+      # the JS Task Runner sandbox does not expose a bare `crypto` global,
+      # and require() itself is denied by default -- see
+      # examples/n8n/docker-compose.phase1-upload-demo.yml for the same
+      # setting and its full rationale. Not needed on n8n-init above: that
+      # container only imports/publishes workflow JSON via CLI, it never
+      # executes a Code node.
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
       # Empty by default: the stack must start without AI credentials. Flow
       # 1b stays visible but inactive/unconfigured until you set these (see
       # .env.example) and select a real Google Gemini credential in the n8n
@@ -79,6 +89,14 @@ services:
       # model is bundled or downloaded by this compose file.
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      # Points the local lane's PDF-to-image step at a small dev-only render
+      # helper (examples/n8n/scripts/pdf_render_service.py), required
+      # because most local OpenAI-compatible vision endpoints (verified
+      # against LM Studio) reject a raw PDF passed as image_url and need an
+      # actual rendered image. Not needed for the cloud lane (Gemini
+      # accepts the PDF directly). Must already be running yourself; nothing
+      # here starts it.
+      - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
       - digitax_devstack_n8n_data:/home/node/.n8n
     networks:

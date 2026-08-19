@@ -14,7 +14,7 @@
 | Selected controls | Load a versioned organization/control profile and run its applicable controls | deterministic service, initially n8n code nodes where necessary |
 | Optional external checks | VAT-ID check when applicable and configured | n8n/API |
 | Status aggregation | Produce one Phase 1 status and routing target | deterministic rules |
-| Evidence | Persist source hash, extracted values, rule versions, findings, and timestamps | n8n/repository |
+| Evidence | Persist source hash, extracted values, rule versions, findings, and timestamps. **P2.1 Wave 1 A5 Stage 1 (Flow 1a only, implemented):** one schema-valid `ActivityExecution` object is assembled and validated per run via the shared `digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json` subworkflow, bound to the H1-approved, hash-pinned `examples/n8n/activity_binding.invoice_intake.json` lockfile -- not yet persisted to any Evidence Store (blocked until Stage 3). | n8n/repository |
 | Optional analysis | Invoke Reqeli only for configured findings | n8n + Reqeli |
 | Handover | Display report and suggestions to the responsible human | n8n/application UI |
 

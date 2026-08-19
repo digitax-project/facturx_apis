@@ -9,10 +9,11 @@ is always a normal 200 response.
 """
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from .capabilities import CAPABILITIES
@@ -80,12 +81,27 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int = MAX_UPLOAD_BYT
     return b"".join(chunks)
 
 
-def _error_response(exc: Exception) -> HTTPException:
-    if isinstance(exc, (UnsupportedInputError, TechnicalProcessingError)):
-        return HTTPException(
-            status_code=exc.status_code,
-            detail={"error_code": exc.error_code, "detail": exc.detail},
+_CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
+
+
+def _validate_correlation_id(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    if not _CORRELATION_ID_PATTERN.match(value):
+        raise UnsupportedInputError(
+            "INVALID_CORRELATION_ID",
+            "correlationId must be 1-200 characters from [A-Za-z0-9._:-].",
+            status_code=400,
         )
+    return value
+
+
+def _error_response(exc: Exception, correlation_id: Optional[str] = None) -> HTTPException:
+    if isinstance(exc, (UnsupportedInputError, TechnicalProcessingError)):
+        detail = {"error_code": exc.error_code, "detail": exc.detail}
+        if correlation_id is not None:
+            detail["correlationId"] = correlation_id
+        return HTTPException(status_code=exc.status_code, detail=detail)
     raise exc
 
 
@@ -217,24 +233,71 @@ async def validate(file: UploadFile):
     return result
 
 
-@router.post("/v1/invoices/process")
+@router.post(
+    "/v1/invoices/process",
+    responses={
+        400: {
+            "description": (
+                "Missing/unrecognized organization context "
+                "(error_code ORGANIZATION_CONTEXT_REQUIRED), or an invalid "
+                "X-Correlation-ID header (error_code INVALID_CORRELATION_ID, "
+                "checked before the upload is read by the application)."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error_code": "INVALID_CORRELATION_ID",
+                            "detail": "correlationId must be 1-200 characters from [A-Za-z0-9._:-].",
+                        }
+                    }
+                }
+            },
+        },
+    },
+)
 async def process(
     file: UploadFile,
     organizationId: Optional[str] = Form(None),
     demoMode: bool = Form(False),
+    x_correlation_id: Optional[str] = Header(
+        None,
+        alias="X-Correlation-ID",
+        description=(
+            "Optional caller-supplied correlation identifier, echoed "
+            "verbatim into the response report's correlationId when valid. "
+            "Must be 1-200 characters from [A-Za-z0-9._:-]; an invalid "
+            "value is rejected with 400 INVALID_CORRELATION_ID before the "
+            "application reads the upload. This constraint is documented "
+            "here for API consumers -- it is enforced by application code "
+            "in the route body, not by this parameter declaration itself, "
+            "so an invalid value never produces FastAPI's automatic 422."
+        ),
+        json_schema_extra={
+            "pattern": "^[A-Za-z0-9._:-]{1,200}$",
+            "minLength": 1,
+            "maxLength": 200,
+        },
+    ),
     adapter: PdfExtractionAdapter = Depends(get_pdf_extraction_adapter),
 ):
-    content = await _read_upload_bounded(file)
+    correlation_id = None
     try:
+        correlation_id = _validate_correlation_id(x_correlation_id)
+        content = await _read_upload_bounded(file)
         canonical_invoice, report = process_invoice(
             file_bytes=content,
             filename=file.filename or "upload",
             content_type=file.content_type or "",
             organization_id=organizationId,
             demo_mode=demoMode,
+            correlation_id=correlation_id,
             pdf_extraction_adapter=adapter,
         )
     except (UnsupportedInputError, TechnicalProcessingError) as exc:
-        logger.warning("Phase 1 process request rejected: %s %s", exc.error_code, exc.detail)
-        raise _error_response(exc)
+        logger.warning(
+            "Phase 1 process request rejected: %s %s correlationId=%s",
+            exc.error_code, exc.detail, correlation_id,
+        )
+        raise _error_response(exc, correlation_id=correlation_id)
     return {"canonicalInvoice": canonical_invoice, "phase1ControlReport": report}

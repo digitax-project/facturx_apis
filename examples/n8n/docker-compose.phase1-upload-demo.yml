@@ -47,6 +47,17 @@ services:
       # for the tradeoff against an n8n Variable/credential).
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_DIAG_ENABLED=false
+      # P2.1 Wave 1 A5 Stage 1: Code nodes generate secure correlationId/
+      # processInstanceId identities via require("crypto").randomUUID() --
+      # the JS Task Runner's sandbox does not expose a bare `crypto` global
+      # (confirmed by reading its own getNativeVariables() source, and by a
+      # real "SECURE_UUID_UNAVAILABLE" failure against the pinned image
+      # before this variable was added), and require() itself is denied by
+      # default (NODE_FUNCTION_ALLOW_BUILTIN is empty by default) -- so the
+      # one built-in this project's Code nodes need must be explicitly
+      # allow-listed, the same category of default-restriction relaxation
+      # N8N_BLOCK_ENV_ACCESS_IN_NODE=false already represents above.
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
     volumes:
       - digitax_n8n_phase1_data:/home/node/.n8n
       # Read-only: workflow JSON is imported by the management script via

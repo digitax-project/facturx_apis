@@ -50,6 +50,15 @@
               "fullResponse": true
             }
           }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $('01.2 Build run context').item.json.correlationId }}"
+            }
+          ]
         }
       },
       "id": "b1000002-0000-4000-8000-000000000002",
@@ -67,7 +76,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nconst statusCode = response.statusCode || 503;\nconst body = response.body || {};\nif (statusCode >= 200 && statusCode < 300 && body.phase1ControlReport) {\n  return [{ json: { ok: true, statusCode, canonicalInvoice: body.canonicalInvoice, phase1ControlReport: body.phase1ControlReport } }];\n}\nconst detail = body.detail && typeof body.detail === 'object' ? body.detail : {};\nreturn [{ json: { ok: false, statusCode, errorCode: detail.error_code || 'BATCH_ITEM_PROCESSING_FAILED', detail: detail.detail || response.message || 'Invoice processing failed.' } }];"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst attemptStart = $('01.3 Mark phase1 attempt start').item.json.phase1AttemptStartedAt;\nconst response = $input.first().json;\nconst statusCode = response.statusCode;\nconst body = response.body || {};\n\nif (statusCode !== undefined && statusCode >= 200 && statusCode < 300 && body.phase1ControlReport) {\n  return [{\n    json: {\n      processInstanceId: ctx.processInstanceId,\n      correlationId: ctx.correlationId,\n      workflowId: $workflow.id,\n      receivedAt: ctx.receivedAt,\n      outcome: \"REPORT\",\n      report: body.phase1ControlReport,\n      httpErrorCode: null,\n      n8nErrorCode: null,\n      explanation: null,\n      phase1AttemptStartedAt: attemptStart,\n      gateDecisionAt: null,\n      callerOk: true,\n      callerStatusCode: statusCode,\n      canonicalInvoice: body.canonicalInvoice,\n    },\n  }];\n}\n\nif (statusCode !== undefined) {\n  const detail = body.detail && typeof body.detail === \"object\" ? body.detail : {};\n  const httpErrorCode = detail.error_code || \"BATCH_ITEM_PROCESSING_FAILED\";\n  const callerDetail = detail.detail || response.message || \"Invoice processing failed.\";\n  return [{\n    json: {\n      processInstanceId: ctx.processInstanceId,\n      correlationId: ctx.correlationId,\n      workflowId: $workflow.id,\n      receivedAt: ctx.receivedAt,\n      outcome: \"HTTP_ERROR\",\n      report: null,\n      httpErrorCode,\n      n8nErrorCode: null,\n      explanation: callerDetail,\n      phase1AttemptStartedAt: attemptStart,\n      gateDecisionAt: null,\n      callerOk: false,\n      callerStatusCode: statusCode,\n      callerErrorCode: httpErrorCode,\n      callerDetail,\n    },\n  }];\n}\n\n// No statusCode at all: a genuine connection-level failure (03.1's error output).\nconst errObj = response.error || {};\nconst errMessage = (errObj.message || errObj || response.message || \"\").toString();\nconst errCode = (errObj.code || \"\").toString();\nconst isTimeout = /ETIMEDOUT|ECONNABORTED/i.test(errCode) || /timeout/i.test(errMessage);\nconst outcome = isTimeout ? \"TIMEOUT\" : \"TRANSPORT_FAILURE\";\nconst n8nErrorCode = isTimeout ? \"INVOICE_PROCESSING_SERVICE_TIMEOUT\" : \"INVOICE_PROCESSING_SERVICE_UNAVAILABLE\";\nconst explanation = errMessage || \"Invoice processing failed.\";\n\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome,\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode,\n    explanation,\n    phase1AttemptStartedAt: attemptStart,\n    gateDecisionAt: null,\n    callerOk: false,\n    callerStatusCode: 503,\n    callerErrorCode: n8nErrorCode,\n    callerDetail: explanation,\n  },\n}];\n"
       },
       "id": "b1000003-0000-4000-8000-000000000003",
       "name": "04.1 Build control report",
@@ -169,6 +178,63 @@
       ],
       "id": "note-1a-batch-version",
       "name": "Version Info"
+    },
+    {
+      "parameters": {
+        "jsCode": "// No weak fallback: a missing crypto.randomUUID must fail visibly rather\n// than mint a low-entropy identity for evidence.\n// The n8n JS Task Runner sandbox does not expose a bare `crypto` global\n// (confirmed against the real pinned n8nio/n8n:2.33.7 image) -- the built-in\n// must be required explicitly, and require() itself is denied unless\n// allow-listed (NODE_FUNCTION_ALLOW_BUILTIN=crypto, set on the n8n\n// container -- see docker-compose.phase1-upload-demo.yml). No weak\n// fallback: an unavailable/disallowed crypto module must fail visibly\n// rather than mint a low-entropy identity for evidence.\nlet randomUUID;\ntry {\n  randomUUID = require(\"crypto\").randomUUID;\n} catch (e) {\n  randomUUID = undefined;\n}\nif (typeof randomUUID !== \"function\") {\n  throw new Error(\n    \"SECURE_UUID_UNAVAILABLE: refusing to mint a weak identifier for correlationId/processInstanceId without crypto.randomUUID() (require(\\\"crypto\\\") must be allow-listed via NODE_FUNCTION_ALLOW_BUILTIN=crypto on the n8n instance).\"\n  );\n}\nconst correlationId = randomUUID();\nconst processInstanceId = randomUUID();\n\nconst item = $input.first();\nreturn [{\n  json: {\n    ...item.json,\n    correlationId,\n    processInstanceId,\n    receivedAt: new Date().toISOString(),\n  },\n  binary: item.binary,\n}];\n"
+      },
+      "id": "b1000005-0000-4000-8000-000000000005",
+      "name": "01.2 Build run context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nreturn [{ json: { ...item.json, phase1AttemptStartedAt: new Date().toISOString() }, binary: item.binary }];\n"
+      },
+      "id": "b1000006-0000-4000-8000-000000000006",
+      "name": "01.3 Mark phase1 attempt start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "digitax-invoice-phase1-shared-assemble-activity-execution",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "b1000007-0000-4000-8000-000000000007",
+      "name": "Call Assemble ActivityExecution",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reconciles the shared subworkflow's minimal { activityExecution } return\n// with 04.1's own envelope (04.1 is this workflow's sole, unambiguous\n// predecessor here -- no branch multiplicity to resolve) to rebuild the\n// exact caller-facing batch-item response shape the Batch Demo caller\n// already depends on.\nconst envelope = $('04.1 Build control report').item.json;\nconst { activityExecution } = $input.first().json;\n\nconst responseBody = envelope.outcome === \"REPORT\"\n  ? { ok: true, statusCode: envelope.callerStatusCode, canonicalInvoice: envelope.canonicalInvoice, phase1ControlReport: envelope.report }\n  : { ok: false, statusCode: envelope.callerStatusCode, errorCode: envelope.callerErrorCode, detail: envelope.callerDetail };\n\nreturn [{ json: { ...responseBody, activityExecution } }];\n"
+      },
+      "id": "b1000008-0000-4000-8000-000000000008",
+      "name": "Merge ActivityExecution into outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        200
+      ]
     }
   ],
   "connections": {
@@ -176,7 +242,7 @@
       "main": [
         [
           {
-            "node": "03.1 Run DigiTax controls",
+            "node": "01.2 Build run context",
             "type": "main",
             "index": 0
           }
@@ -202,6 +268,50 @@
       ]
     },
     "04.1 Build control report": {
+      "main": [
+        [
+          {
+            "node": "Call Assemble ActivityExecution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.2 Build run context": {
+      "main": [
+        [
+          {
+            "node": "01.3 Mark phase1 attempt start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.3 Mark phase1 attempt start": {
+      "main": [
+        [
+          {
+            "node": "03.1 Run DigiTax controls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Assemble ActivityExecution": {
+      "main": [
+        [
+          {
+            "node": "Merge ActivityExecution into outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge ActivityExecution into outcome": {
       "main": [
         [
           {
