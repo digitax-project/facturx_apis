@@ -2,13 +2,14 @@
   "name": "digitax-n8n-examples",
   "private": true,
   "version": "1.0.0",
-  "description": "Build-time-only tooling for the DigiTax n8n Phase 1 examples: AJV-standalone P2.1 evidence-validator generation. ajv/ajv-formats are devDependencies only -- never installed inside any n8n runtime container.",
+  "description": "Build-time-only tooling for the DigiTax n8n Phase 1 examples: AJV-standalone P2.1 evidence-validator generation, and local execution-trace lookup. ajv/ajv-formats/flatted are devDependencies only -- never installed inside any n8n runtime container.",
   "type": "module",
   "scripts": {
     "generate:validators": "node scripts/generate-evidence-validators.mjs"
   },
   "devDependencies": {
     "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "flatted": "^3.4.2"
   }
 }

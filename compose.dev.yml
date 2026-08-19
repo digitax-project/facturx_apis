@@ -55,6 +55,7 @@ services:
       - N8N_DIAG_ENABLED=false
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
       - digitax_devstack_n8n_data:/home/node/.n8n
       - ./examples/n8n:/data/workflows:ro
@@ -88,6 +89,14 @@ services:
       # model is bundled or downloaded by this compose file.
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      # Points the local lane's PDF-to-image step at a small dev-only render
+      # helper (examples/n8n/scripts/pdf_render_service.py), required
+      # because most local OpenAI-compatible vision endpoints (verified
+      # against LM Studio) reject a raw PDF passed as image_url and need an
+      # actual rendered image. Not needed for the cloud lane (Gemini
+      # accepts the PDF directly). Must already be running yourself; nothing
+      # here starts it.
+      - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
       - digitax_devstack_n8n_data:/home/node/.n8n
     networks:
