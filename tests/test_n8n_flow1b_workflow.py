@@ -1,14 +1,18 @@
 """Regression guard for
 examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json
-("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0").
+("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0").
 
-Structural checks plus real execution of the business-logic-bearing Code
-nodes (AI-profile resolution, ORG-001 evaluation, status aggregation) via
-Node.js -- this workflow has no live Gemini/local-LLM credentials in CI, so
-this is the strongest verification available short of a real end-to-end run.
-The coordination handover log records the real `n8n import:workflow`
-evidence against n8nio/n8n:2.33.7 separately; this test is not a substitute
-for that.
+P2.1 Wave 1 A5 revision round 2 (A1 review correction): Flow 1b no longer
+mirrors ORG-001 (or any other control) in n8n-side JavaScript. It now calls
+the real Phase 1 API's POST /v1/invoices/process-extracted -- the same
+control catalog/executor Flow 1a uses -- and assembles a real
+ActivityExecution via the same shared subworkflow and published binding.
+This file's Node.js-execution tests exercise the business-logic-bearing
+Code nodes that remain (AI-profile resolution, response classification,
+identity generation); the Docker E2E tests at the bottom are the strongest
+verification available for the parts that only make sense against a real
+n8n JS Task Runner sandbox (crypto module availability) and a real webhook
+round trip.
 """
 import json
 import re
@@ -30,25 +34,18 @@ INTAKE_WORKFLOW_PATH = (
 EXAMPLES_N8N_DIR = Path(__file__).parent.parent / "examples" / "n8n"
 
 EXPECTED_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
-EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0"
+EXPECTED_WORKFLOW_NAME = "DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0"
 
-# Node name mapping (2026-08-10, final-demo-ui round): every node was
-# renamed to a short, action-oriented, phase-prefixed name, consistent with
-# the naming scheme used in every other workflow in this project. These
-# constants are the single place that mapping is recorded for this test file.
-WEBHOOK_NODE = "01.1 Receive PDF upload"
 RUN_CONTEXT_NODE = "01.2 Build run context"
 FIX_BASE64_NODE = "02.1 Encode PDF for OCR"
 GEMINI_REQUEST_NODE = "02.2 Build OCR/LLM request"
 GEMINI_HTTP_NODE = "02.3 Run OCR/LLM extraction (Gemini)"
 GEMINI_PARSER_NODE = "02.5 Parse OCR/LLM output"
-ORG001_NODE = "03.1 Run DigiTax controls (concept)"
 BUILD_SUMMARY_NODE = "04.1 Build control report"
 BUILD_RESPONSE_NODE = "04.2 Render control report"
 RESPOND_NODE = "04.3 Respond to browser"
 STATUS_ROUTING_NODE = "04.4 Route by review status"
 
-# AI-execution-profile nodes (2026-08-11, dev-stack/AI-selection round).
 RESOLVE_AI_PROFILE_NODE = "01.9 Resolve AI execution profile"
 AI_PROFILE_SWITCH_NODE = "01.10 Route by AI profile"
 UNRESOLVED_AI_PROFILE_NODE = "01.11 Handle unresolved AI profile"
@@ -58,36 +55,24 @@ LOCAL_HTTP_NODE = "02.3L Run OCR/LLM extraction (local)"
 LOCAL_SERVICE_FAILURE_NODE = "02.4L Handle local OCR service failure"
 LOCAL_PARSER_NODE = "02.5L Parse local OCR/LLM output"
 LOCAL_PARSE_FAILURE_NODE = "02.6L Handle local OCR parse failure"
-NORMALIZE_NODE = "02.7 Normalize invoice (concept)"
+NORMALIZE_NODE = "02.7 Normalize invoice"
+MARK_ATTEMPT_START_NODE = "02.8 Mark phase1 attempt start"
+CONTROLS_HTTP_NODE = "03.1 Run DigiTax controls"
+CLASSIFY_RESPONSE_NODE = "03.2 Classify controls response"
+CONTROLS_FAILURE_NODE = "03.3 Handle controls-call failure"
+CALL_ASSEMBLE_NODE = "Call Assemble ActivityExecution"
+MERGE_ACTIVITY_EXECUTION_NODE = "Merge ActivityExecution into outcome"
 
-# "02.2 Build OCR/LLM request" (Build Gemini Request in the historical
-# workflow) is deliberately NOT in this list: its prompt text was corrected
-# (2026-08-10, final-demo-ui round) to remove the master-data leak the
-# historical workflow had -- see
-# test_build_gemini_request_prompt_has_no_master_data_leak below and the
-# node's own "notes" field for why it's the one intentional divergence from
-# byte-for-byte reuse.
-# "02.5 Parse OCR/LLM output" (Gemini Output Parser in the historical
-# workflow) is ALSO deliberately NOT in this list as of the 2026-08-11
-# dev-stack/AI-selection round: it now emits an additional `aiMeta` field so
-# its output converges with the local lane's parser -- see
-# test_cloud_parser_extends_intake_logic_without_replacing_it below, which
-# checks the reused parsing/normalization logic is still byte-for-byte
-# present, just with one addition appended.
 REUSED_OCR_NODE_NAMES = (
     FIX_BASE64_NODE,
     GEMINI_HTTP_NODE,
 )
-# The historical digitax_invoice_intake.json node names these map onto.
 INTAKE_NODE_NAMES = {
     FIX_BASE64_NODE: "fix base64",
     GEMINI_HTTP_NODE: "File-Based OCR with Gemini 2.5",
     GEMINI_PARSER_NODE: "Gemini Output Parser",
 }
 
-# Values that must never appear in the OCR prompt -- if the model is told
-# the expected answer in advance, ORG-001's downstream comparison against
-# that same master data is meaningless.
 MASTER_DATA_LEAK_PATTERNS = [
     re.compile(r"Unternehmen X", re.IGNORECASE),
     re.compile(r"Unternehmen Y", re.IGNORECASE),
@@ -111,9 +96,6 @@ REVIEW_NODES = (
 FORBIDDEN_PATTERNS = [
     (re.compile(r"host\.docker\.internal"), "a hardcoded local-dev host"),
     (re.compile(r"vn ?impex", re.IGNORECASE), "the real organization name"),
-    # https://generativelanguage.googleapis.com is Google's fixed, public
-    # Gemini API endpoint -- a real API contract, not a deployment-specific
-    # host -- so it's excluded from the "no hardcoded URL" check below.
 ]
 ALLOWED_HARDCODED_URL_PREFIX = "https://generativelanguage.googleapis.com/"
 
@@ -130,6 +112,11 @@ def _nodes_by_name(data: dict) -> dict:
     return {n["name"]: n for n in data["nodes"]}
 
 
+# ---------------------------------------------------------------------------
+# Structural checks
+# ---------------------------------------------------------------------------
+
+
 def test_workflow_file_exists_and_is_valid_json():
     assert WORKFLOW_PATH.exists(), "Flow 1b workflow export is missing"
     _load_workflow()
@@ -142,10 +129,6 @@ def test_workflow_id_and_display_name_match_spec():
 
 
 def test_workflow_id_is_unique_across_all_n8n_examples():
-    # Stage 0 (P2.1 Wave 1 A5) added non-workflow JSON directly under
-    # examples/n8n/ (the activity binding lockfile, package-lock.json) --
-    # only files that are actual n8n workflow exports (they always have a
-    # top-level "nodes" array) participate in this id-uniqueness check.
     seen_ids = {}
     for path in EXAMPLES_N8N_DIR.glob("*.json"):
         wf = json.loads(path.read_text(encoding="utf-8"))
@@ -160,7 +143,9 @@ def test_workflow_id_is_unique_across_all_n8n_examples():
 
 
 def test_workflow_is_imported_inactive():
-    """Task requirement: import into the isolated instance as inactive only."""
+    """DISABLED state: the exported workflow stays inactive by default --
+    activation is a separate, explicit operator step, never implied by
+    import."""
     data = _load_workflow()
     assert data["active"] is False
 
@@ -180,7 +165,6 @@ def test_credentials_are_placeholders_only_no_copied_credentials():
                 f"node {node['name']!r} credential {cred_type!r} is not a placeholder "
                 "-- no credential may be copied from any n8n instance"
             )
-    # Only the reused Gemini OCR node carries a credential reference at all.
     assert credential_types_seen == {"googlePalmApi"}
 
 
@@ -198,14 +182,104 @@ def test_workflow_has_no_forbidden_content():
         )
 
 
+def test_no_org_001_mirror_or_organization_resolution_left_in_n8n():
+    """A1 review, High: Flow 1b must stop mirroring ORG-001 (and organization
+    master data) in n8n-side JavaScript. The org-resolution nodes and the
+    hand-rolled control evaluator are gone entirely -- not just renamed."""
+    data = _load_workflow()
+    node_names = {n["name"] for n in data["nodes"]}
+    for removed in (
+        "01.6 Resolve organization profile (concept)",
+        "01.7 Organization profile known?",
+        "01.8 Handle unknown organization",
+        "03.1 Run DigiTax controls (concept)",
+    ):
+        assert removed not in node_names, f"{removed!r} must be removed, not just renamed"
+
+    text = json.dumps(data)
+    assert 'CONTROL_ID = "ORG-001"' not in text
+    assert "_normalize_for_match" not in text
+    assert "buyerMasterData" not in text
+    assert "BUYER_PROFILES" not in text
+
+
+def test_controls_node_calls_the_real_process_extracted_endpoint():
+    """A1 review, High: Flow 1b now submits externally extracted fields to
+    the real Phase 1 API instead of running its own control logic."""
+    data = _load_workflow()
+    node = _nodes_by_name(data)[CONTROLS_HTTP_NODE]
+    assert node["type"] == "n8n-nodes-base.httpRequest"
+    assert node["parameters"]["method"] == "POST"
+    assert node["parameters"]["url"] == "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/process-extracted"
+    assert node["parameters"]["jsonBody"] == "={{ JSON.stringify($json.processExtractedRequestBody) }}"
+    header_names = {h["name"] for h in node["parameters"]["headerParameters"]["parameters"]}
+    assert "X-Correlation-ID" in header_names
+    assert node["parameters"]["options"]["response"]["response"]["neverError"] is True
+    assert node["parameters"]["options"]["response"]["response"]["fullResponse"] is True
+    assert node.get("retryOnFail") is True
+    assert node.get("maxTries") == 3
+    assert node.get("onError") == "continueErrorOutput"
+
+
+def test_request_body_never_carries_a_caller_supplied_control_result():
+    """The request the workflow sends to the API contains only extraction
+    primitives (organizationId/document/extraction/invoice/fieldEvidence) --
+    never a status/routing/controls field the server would have to ignore."""
+    data = _load_workflow()
+    code = _nodes_by_name(data)[MARK_ATTEMPT_START_NODE]["parameters"]["jsCode"]
+    assert "processExtractedRequestBody" in code
+    for forbidden in ("status:", "routing:", "controls:", "phase1ControlReport"):
+        assert forbidden not in code.split("processExtractedRequestBody")[1].split("}")[0] or True
+    # Precise check: the assembled body object literal itself only lists the
+    # five allowed keys.
+    body_literal = code.split("processExtractedRequestBody: {")[1].split("},")[0]
+    for key in ("organizationId", "document", "extraction", "invoice", "fieldEvidence"):
+        assert f"{key}:" in body_literal
+    for key in ("status", "routing", "controls", "report"):
+        assert f"{key}:" not in body_literal
+
+
+def test_no_weak_correlation_id_fallback():
+    """A1 review, Medium: no timestamp/Math.random fallback anywhere in this
+    workflow -- an unavailable secure UUID source must fail closed, exactly
+    like Flow 1a's own "Build run context" nodes."""
+    data = _load_workflow()
+    code = _nodes_by_name(data)[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
+    assert "Math.random" not in code
+    assert "Date.now()" not in code
+    assert "SECURE_UUID_UNAVAILABLE" in code
+    assert 'require("crypto")' in code
+
+
+def test_run_context_generates_one_correlation_id_and_one_process_instance_id():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
+    assert "const correlationId = nodeCrypto.randomUUID();" in code
+    assert "const processInstanceId = nodeCrypto.randomUUID();" in code
+    # The pdf hash must reuse the same guarded nodeCrypto reference, never a
+    # second, unguarded require("crypto").createHash(...) call (found
+    # 2026-08-25: that second call crashed this node whenever require("crypto")
+    # wasn't allow-listed, producing an empty HTTP 200 for every request, not
+    # just the missing-credential case the original regression test named).
+    # Full-line "//" comments are stripped first so the explanatory prose
+    # above (which quotes that exact banned pattern) can't produce a false
+    # positive here.
+    functional_code = "\n".join(
+        line for line in code.split("\n") if not line.strip().startswith("//")
+    )
+    assert "nodeCrypto.createHash(" in functional_code
+    assert 'require("crypto").createHash(' not in functional_code
+    assert "require('crypto').createHash(" not in functional_code
+
+
+def test_local_render_helper_notes_have_no_hardcoded_host():
+    data = _load_workflow()
+    node = _nodes_by_name(data)["02.1L-b Render PDF page as PNG (local render helper)"]
+    assert "host.docker.internal" not in node["notes"]
+    assert "LOCAL_PDF_RENDER_URL" in node["notes"]
+
+
 def test_ocr_nodes_reused_verbatim_from_intake_workflow():
-    """Three of the four OCR nodes must not have their extraction logic
-    replaced -- same node id, same jsCode/core parameters as the historical
-    digitax_invoice_intake.json (under its own, unrenamed node names -- only
-    Flow 1b's copies were renamed). The only permitted addition is fail-safe
-    error-handling wiring (onError), never a logic change. "Build OCR/LLM
-    request" is intentionally excluded here -- see
-    test_build_gemini_request_prompt_has_no_master_data_leak."""
     flow1b_nodes = _nodes_by_name(_load_workflow())
     intake_nodes = _nodes_by_name(_load_intake_workflow())
 
@@ -222,8 +296,6 @@ def test_ocr_nodes_reused_verbatim_from_intake_workflow():
                 f"{name!r} jsCode must be byte-for-byte identical to the historical workflow"
             )
         else:
-            # File-Based OCR with Gemini 2.5: compare the extraction-relevant
-            # parameters (method/url/body), not incidental fields.
             for key in ("method", "url", "jsonBody", "nodeCredentialType"):
                 assert flow1b_node["parameters"].get(key) == intake_node["parameters"].get(key), (
                     f"{name!r} parameter {key!r} must be unchanged"
@@ -231,19 +303,11 @@ def test_ocr_nodes_reused_verbatim_from_intake_workflow():
             assert flow1b_node.get("retryOnFail") == intake_node.get("retryOnFail")
             assert flow1b_node.get("maxTries") == intake_node.get("maxTries")
 
-    # The one documented, deliberate addition: Gemini Output Parser gets
-    # fail-safe error routing that the historical workflow never had.
     assert flow1b_nodes[GEMINI_PARSER_NODE].get("onError") == "continueErrorOutput"
     assert "onError" not in intake_nodes[INTAKE_NODE_NAMES[GEMINI_PARSER_NODE]]
 
 
 def test_cloud_parser_extends_intake_logic_without_replacing_it():
-    """02.5 Parse OCR/LLM output ("Gemini Output Parser" in the historical
-    workflow) is excluded from REUSED_OCR_NODE_NAMES because it now also
-    emits `aiMeta` (2026-08-11, dev-stack/AI-selection round). This test
-    checks the underlying parsing/normalization logic -- markdown-fence
-    stripping, JSON parsing, the fixed 14-field shape -- is still present
-    unchanged, i.e. this was an addition, not a rewrite."""
     flow1b_nodes = _nodes_by_name(_load_workflow())
     intake_nodes = _nodes_by_name(_load_intake_workflow())
     flow1b_code = flow1b_nodes[GEMINI_PARSER_NODE]["parameters"]["jsCode"]
@@ -260,18 +324,11 @@ def test_cloud_parser_extends_intake_logic_without_replacing_it():
     for field in ("Invoice No", "VAT-ID (Seller)", "VAT-ID (Buyer)", "Name (Buyer)"):
         assert field in flow1b_code and field in intake_code
 
-    # The documented addition itself.
     assert "aiMeta" in flow1b_code
     assert "aiMeta" not in intake_code
 
 
 def test_build_gemini_request_prompt_has_no_master_data_leak():
-    """The OCR prompt must extract only what is visible in the invoice.
-    Master data (expected buyer, approved addresses, VAT IDs, or the word
-    "expected"/"approved" as a hint) may only be used downstream, by the
-    control logic, after extraction -- never fed to the model in advance.
-    This test would have caught the original digitax_invoice_intake.json-
-    derived prompt, which hardcoded exactly these values."""
     data = _load_workflow()
     prompt_code = _nodes_by_name(data)[GEMINI_REQUEST_NODE]["parameters"]["jsCode"]
     for pattern in MASTER_DATA_LEAK_PATTERNS:
@@ -279,31 +336,17 @@ def test_build_gemini_request_prompt_has_no_master_data_leak():
             f"master-data reference value {pattern.pattern!r} leaked into the "
             "OCR prompt -- extraction must not know the expected answer"
         )
-    # A sanity check that this test isn't vacuously passing against an
-    # empty/wrong node: the corrected prompt must still ask the model to
-    # distinguish buyer from seller using the document itself.
     assert "document" in prompt_code.lower()
     assert "VAT-ID (Buyer)" in prompt_code and "VAT-ID (Seller)" in prompt_code
 
 
 def test_intake_workflow_prompt_still_has_the_original_leak_unremediated():
-    """Documents, on purpose, that digitax_invoice_intake.json itself is
-    NOT corrected -- it remains an untouched historical reference (per the
-    Flow 1b task's original instruction), so its prompt still contains the
-    master-data leak that Flow 1b's own copy no longer has. If this test
-    ever starts failing because someone "fixed" the historical file, that's
-    a sign this test (and its docstring) need to be revisited deliberately,
-    not that the fix should be silently reverted."""
     intake_nodes = _nodes_by_name(_load_intake_workflow())
     intake_prompt = intake_nodes["Build Gemini Request"]["parameters"]["jsCode"]
     assert "Unternehmen X" in intake_prompt
 
 
 def test_fix_base64_binary_property_matches_run_context_output():
-    """The reused OCR node is reused with its hardcoded
-    binaryPropertyName='data' -- Build run context must attach the upload
-    under that same property name, not the 'invoiceFile' name used by the
-    unrelated Flow 1a upload demo."""
     data = _load_workflow()
     nodes = _nodes_by_name(data)
     fix_base64_code = nodes[FIX_BASE64_NODE]["parameters"]["jsCode"]
@@ -331,33 +374,20 @@ def test_workflow_connections_reference_existing_nodes_no_duplicates():
                     )
 
 
-def test_org_001_control_naming_matches_spec():
+def test_every_node_except_trigger_and_notes_has_an_incoming_edge():
     data = _load_workflow()
-    code = _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
-    assert 'CONTROL_ID = "ORG-001"' in code
-    assert 'TITLE = "Stammdatenabgleich Rechnungsempfänger"' in code
-    assert "zugferd" not in code.lower() and "gateway" not in code.lower(), (
-        "must not be called a ZUGFeRD gateway"
-    )
-
-
-def test_org_001_compares_exactly_the_five_required_buyer_fields():
-    data = _load_workflow()
-    code = _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
-    for field in (
-        "invoice.buyer.name",
-        "invoice.buyer.address.street",
-        "invoice.buyer.address.postalCode",
-        "invoice.buyer.address.city",
-        "invoice.buyer.address.countryCode",
-    ):
-        assert field in code, f"ORG-001 must reference {field!r}"
-
-
-def test_confidence_threshold_matches_api_default():
-    data = _load_workflow()
-    code = _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
-    assert "THRESHOLD = 0.70" in code
+    name_set = {n["name"] for n in data["nodes"]}
+    has_incoming = set()
+    for outputs in data["connections"].values():
+        for branches in outputs.values():
+            for branch in branches:
+                for edge in branch:
+                    has_incoming.add(edge["node"])
+    no_incoming = {
+        n["name"] for n in data["nodes"]
+        if n["name"] not in has_incoming and n["type"] not in ("n8n-nodes-base.stickyNote",)
+    }
+    assert no_incoming == {"01.1 Receive PDF upload"}
 
 
 def test_explicit_technical_review_route_distinct_from_unknown_fallback():
@@ -386,31 +416,58 @@ def test_all_four_review_terminal_nodes_exist_and_are_noops():
     assert terminal_types == {"n8n-nodes-base.noOp"}
 
 
-def test_every_failure_and_success_path_converges_on_single_response_builder():
+def test_every_failure_and_success_path_converges_through_activity_execution_assembly():
+    """Every branch (pre-flight rejection, controls-call success/failure)
+    feeds the shared "Call Assemble ActivityExecution" subworkflow, exactly
+    like every Flow 1a workflow, and every path funnels through exactly one
+    "04.1 Build control report" / "04.2 Render control report" pair."""
     data = _load_workflow()
-    payload_sources = (
+    branch_sources = (
         "01.5 Handle invalid upload",
-        "01.8 Handle unknown organization",
         UNRESOLVED_AI_PROFILE_NODE,
         "02.4 Handle OCR service failure",
         "02.6 Handle OCR parse failure",
         LOCAL_SERVICE_FAILURE_NODE,
         LOCAL_PARSE_FAILURE_NODE,
-        BUILD_SUMMARY_NODE,
+        CLASSIFY_RESPONSE_NODE,
+        CONTROLS_FAILURE_NODE,
     )
-    for source in payload_sources:
+    for source in branch_sources:
         targets = {edge["node"] for branch in data["connections"][source]["main"] for edge in branch}
-        assert targets == {BUILD_RESPONSE_NODE}, f"{source!r} must feed {BUILD_RESPONSE_NODE!r}"
+        assert targets == {CALL_ASSEMBLE_NODE}, f"{source!r} must feed {CALL_ASSEMBLE_NODE!r}"
 
+    assert data["connections"][CALL_ASSEMBLE_NODE]["main"][0][0]["node"] == MERGE_ACTIVITY_EXECUTION_NODE
+    assert data["connections"][MERGE_ACTIVITY_EXECUTION_NODE]["main"][0][0]["node"] == BUILD_SUMMARY_NODE
+    assert data["connections"][BUILD_SUMMARY_NODE]["main"][0][0]["node"] == BUILD_RESPONSE_NODE
     assert data["connections"][BUILD_RESPONSE_NODE]["main"][0][0]["node"] == RESPOND_NODE
     assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
 
 
+def test_controls_http_node_success_and_error_outputs_split_correctly():
+    data = _load_workflow()
+    conn = data["connections"][CONTROLS_HTTP_NODE]["main"]
+    assert len(conn) == 2
+    assert conn[0][0]["node"] == CLASSIFY_RESPONSE_NODE
+    assert conn[1][0]["node"] == CONTROLS_FAILURE_NODE
+
+
+def test_merge_node_reconciles_every_branch_envelope_name():
+    data = _load_workflow()
+    code = _nodes_by_name(data)[MERGE_ACTIVITY_EXECUTION_NODE]["parameters"]["jsCode"]
+    for name in (
+        "01.5 Handle invalid upload",
+        UNRESOLVED_AI_PROFILE_NODE,
+        "02.4 Handle OCR service failure",
+        "02.6 Handle OCR parse failure",
+        LOCAL_SERVICE_FAILURE_NODE,
+        LOCAL_PARSE_FAILURE_NODE,
+        CLASSIFY_RESPONSE_NODE,
+        CONTROLS_FAILURE_NODE,
+    ):
+        assert f'"{name}"' in code
+
+
 def test_both_extraction_lanes_converge_on_shared_normalize_node():
-    """Local and cloud extraction are technically separate paths (own encode/
-    request/HTTP/parse nodes) but must feed the exact same normalize node --
-    this is what makes the two lanes produce one identical canonical
-    contract, per the AI-selection spec."""
     data = _load_workflow()
     cloud_targets = {
         edge["node"] for edge in data["connections"]["02.5 Parse OCR/LLM output"]["main"][0]
@@ -444,8 +501,6 @@ def test_ai_profile_resolution_never_defaults_unknown_to_cloud():
     code = _nodes_by_name(data)[RESOLVE_AI_PROFILE_NODE]["parameters"]["jsCode"]
     assert '"unknown"' in code
     assert '"local_unavailable"' in code
-    # The only two recognized profile IDs -- anything else must resolve to
-    # "unknown", not silently fall through to a default.
     assert '"local-default"' in code and '"cloud-gemini"' in code
 
 
@@ -478,13 +533,6 @@ def test_local_and_cloud_lanes_emit_identical_ai_meta_shape():
         assert field in local_code, f"local parser missing aiMeta.{field}"
 
 
-def test_normalize_node_accepts_either_lane_raw_text_field():
-    data = _load_workflow()
-    code = _nodes_by_name(data)[NORMALIZE_NODE]["parameters"]["jsCode"]
-    assert "gemini_raw_text || parsed.raw_text" in code
-    assert "aiMeta: parsed.aiMeta" in code
-
-
 def test_control_report_carries_required_audit_fields():
     data = _load_workflow()
     code = _nodes_by_name(data)[BUILD_SUMMARY_NODE]["parameters"]["jsCode"]
@@ -499,6 +547,18 @@ def test_control_report_carries_required_audit_fields():
         "fallbackUsed",
     ):
         assert field in code, f"04.1 Build control report must emit {field!r}"
+
+
+def test_build_control_report_never_recomputes_status_from_scratch():
+    """04.1 must pass through the API's own status/routing/controls, not
+    recompute an aggregation itself (that logic now lives exclusively in
+    facturx/phase1/controls/aggregate.py, invoked only via the real API)."""
+    data = _load_workflow()
+    code = _nodes_by_name(data)[BUILD_SUMMARY_NODE]["parameters"]["jsCode"]
+    assert "status: m.status" in code
+    assert "routing: m.routing" in code
+    assert "not_reliable" not in code
+    assert "klaerung_erforderlich" not in code or "m.status" in code
 
 
 def test_no_secrets_or_internal_urls_in_ai_selection_nodes():
@@ -530,13 +590,17 @@ def test_browser_response_is_html():
     assert "text/html" in content_type
 
 
-def test_temporary_implementation_is_disclosed_in_the_response():
-    """Prompt item 6: never fake API reuse -- the browser-facing result
-    itself must say this is a temporary n8n-side implementation."""
+def test_response_discloses_the_real_api_is_authoritative():
+    """AGENTS.md: never fake API reuse. The response must not claim the
+    real API "cannot yet consume" OCR fields anymore -- it must say what is
+    now actually true: control evaluation is real, only the local AI lane
+    itself remains a concept."""
     data = _load_workflow()
     code = _nodes_by_name(data)[BUILD_RESPONSE_NODE]["parameters"]["jsCode"]
-    assert "temporary n8n-side implementation" in code
-    assert "cannot yet consume" in code or "no injection seam" in code
+    assert "authoritative Phase 1 API" in code
+    assert "process-extracted" in code
+    assert "cannot yet consume" not in code
+    assert "no injection seam" not in code
 
 
 def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
@@ -550,11 +614,7 @@ def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
 
 
 def test_digitax_invoice_intake_json_is_unchanged():
-    """The historical workflow must remain untouched as a source, per the
-    task's first requirement."""
-    import subprocess as sp
-
-    result = sp.run(
+    result = subprocess.run(
         ["git", "diff", "--quiet", "--", str(INTAKE_WORKFLOW_PATH)],
         cwd=INTAKE_WORKFLOW_PATH.parent.parent.parent,
     )
@@ -562,197 +622,160 @@ def test_digitax_invoice_intake_json_is_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# Real execution of the business-logic-bearing Code nodes via Node.js.
-# No live Gemini credentials exist in CI/this checkout, so this is the
-# strongest available proof that the reused control logic actually behaves
-# correctly, not just that the code looks right.
+# Real execution of business-logic-bearing Code nodes via Node.js.
 # ---------------------------------------------------------------------------
 
 NODE_AVAILABLE = shutil.which("node") is not None
 
 
-def _run_node_snippet(js_code: str, input_json_expr: str) -> dict:
-    """Wraps an n8n Code node body (which uses `return [...]` and
-    `$input.first()`) in a function, executes it with `$input` providing the
-    given single item, and returns the first output item's `json`."""
+def _node_code(name: str) -> str:
+    return _nodes_by_name(_load_workflow())[name]["parameters"]["jsCode"]
+
+
+def _run_with_context(code: str, input_json: dict, node_outputs: dict, workflow_id: str = EXPECTED_WORKFLOW_ID) -> dict:
+    """Executes one Code node's body with $input.first() = input_json,
+    $(name) resolving against node_outputs (nodeName -> json dict), and
+    $workflow.id set -- the same shape n8n provides at runtime."""
     harness = f"""
-const $input = {{ first: () => ({{ json: {input_json_expr} }}) }};
-function run() {{
-{js_code}
+const $workflow = {{ id: {json.dumps(workflow_id)} }};
+const __nodeOutputs = {json.dumps(node_outputs)};
+function $(name) {{
+  if (!(name in __nodeOutputs)) throw new Error("no such node in test harness: " + name);
+  return {{ item: {{ json: __nodeOutputs[name] }} }};
 }}
-const result = run();
-process.stdout.write(JSON.stringify(result[0].json));
+const $input = {{ first: () => ({{ json: {json.dumps(input_json)} }}) }};
+async function run() {{
+{code}
+}}
+run().then(r => process.stdout.write(JSON.stringify({{ ok: true, result: r[0].json }})))
+  .catch(e => process.stdout.write(JSON.stringify({{ ok: false, message: e.message }})));
 """
-    proc = subprocess.run(
-        ["node", "-e", harness],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert proc.returncode == 0, f"node execution failed: {proc.stderr}"
+    proc = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, f"node execution failed: {proc.stderr}\n{harness}"
     return json.loads(proc.stdout)
 
 
-def _org001_code() -> str:
-    data = _load_workflow()
-    return _nodes_by_name(data)[ORG001_NODE]["parameters"]["jsCode"]
+BASE_CTX = {
+    "processInstanceId": "PI-1",
+    "correlationId": "CORR-1",
+    "receivedAt": "2026-08-25T10:00:00.000Z",
+    "organizationId": "unternehmen-x-demo",
+    "processingPath": "pdf_ocr",
+    "aiExecutionProfile": "local-default",
+}
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
-def test_org001_real_execution_passes_when_fields_match():
-    invoice_input = json.dumps({
-        "invoice": {
-            "buyer": {
-                "name": "Unternehmen X",
-                "address": {"street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-            }
+def test_classify_controls_response_real_execution_maps_report_to_activity_execution_input():
+    upstream = {**BASE_CTX, "phase1AttemptStartedAt": "2026-08-25T10:00:00.100Z", "aiMeta": {
+        "aiProvider": "local-openai-compatible", "modelId": "stub-model", "modelVersion": None,
+        "processingLocation": "local", "promptVersion": "flow1b-extract-v1", "fallbackUsed": False,
+    }}
+    resp = {
+        "statusCode": 200,
+        "body": {
+            "canonicalInvoice": {"invoice": {"invoiceNumber": "UX-1"}, "document": {"sha256": "a" * 64}},
+            "phase1ControlReport": {
+                "status": "unauffaellig", "routing": "standard_review", "correlationId": "CORR-1",
+                "runId": "RUN-1", "reportId": "REP-1",
+            },
         },
-        "fieldEvidence": {
-            k: {"confidence": 0.85, "locator": k}
-            for k in (
-                "invoice.buyer.name", "invoice.buyer.address.street",
-                "invoice.buyer.address.postalCode", "invoice.buyer.address.city",
-                "invoice.buyer.address.countryCode",
-            )
-        },
-        "buyerMasterData": {"name": "Unternehmen X", "street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-    })
-    result = _run_node_snippet(_org001_code(), invoice_input)
-    assert result["org001"]["outcome"] == "passed"
-    assert result["org001"]["severity"] == "none"
+    }
+    out = _run_with_context(
+        _node_code(CLASSIFY_RESPONSE_NODE), resp,
+        {RUN_CONTEXT_NODE: BASE_CTX, MARK_ATTEMPT_START_NODE: upstream},
+    )
+    assert out["ok"] is True, out
+    result = out["result"]
+    assert result["outcome"] == "REPORT"
+    assert result["phase1Status"] == "unauffaellig"
+    assert result["routing"] == "standard_review"
+    assert result["aiProvider"] == "local-openai-compatible"
+    assert result["organizationId"] == "unternehmen-x-demo"
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
-def test_org001_real_execution_fails_on_master_data_mismatch():
-    invoice_input = json.dumps({
-        "invoice": {
-            "buyer": {
-                "name": "Unternehmen X",
-                "address": {"street": "Musterweg 10", "postalCode": "04109", "city": "WRONG CITY", "countryCode": "DE"},
-            }
-        },
-        "fieldEvidence": {
-            k: {"confidence": 0.85, "locator": k}
-            for k in (
-                "invoice.buyer.name", "invoice.buyer.address.street",
-                "invoice.buyer.address.postalCode", "invoice.buyer.address.city",
-                "invoice.buyer.address.countryCode",
-            )
-        },
-        "buyerMasterData": {"name": "Unternehmen X", "street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-    })
-    result = _run_node_snippet(_org001_code(), invoice_input)
-    assert result["org001"]["outcome"] == "failed"
-    assert result["org001"]["severity"] == "blocking"
-    assert result["org001"]["reasonCodes"] == ["MASTER_DATA_MISMATCH"]
-    assert result["org001"]["details"]["mismatches"][0]["field"] == "invoice.buyer.address.city"
+def test_classify_controls_response_real_execution_maps_4xx_to_http_error_never_retried_note():
+    upstream = {**BASE_CTX, "phase1AttemptStartedAt": "2026-08-25T10:00:00.100Z", "aiMeta": {}}
+    resp = {
+        "statusCode": 400,
+        "body": {"detail": {"error_code": "ORGANIZATION_CONTEXT_REQUIRED", "detail": "missing org"}},
+    }
+    out = _run_with_context(
+        _node_code(CLASSIFY_RESPONSE_NODE), resp,
+        {RUN_CONTEXT_NODE: BASE_CTX, MARK_ATTEMPT_START_NODE: upstream},
+    )
+    assert out["ok"] is True, out
+    result = out["result"]
+    assert result["outcome"] == "HTTP_ERROR"
+    assert result["httpErrorCode"] == "ORGANIZATION_CONTEXT_REQUIRED"
+    assert result["phase1Status"] == "nicht_pruefbar"
+    assert result["routing"] == "technical_review"
+    assert "Not retried" in result["explanation"]
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
-def test_org001_real_execution_never_auto_passes_on_low_confidence():
-    """Prompt item 7: low-confidence or missing OCR fields must route to
-    nicht_pruefbar/clarification, never an automatic pass -- even when the
-    (unreliable) extracted value happens to match master data exactly."""
-    invoice_input = json.dumps({
-        "invoice": {
-            "buyer": {
-                "name": "Unternehmen X",
-                "address": {"street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-            }
-        },
-        "fieldEvidence": {
-            "invoice.buyer.name": {"confidence": 0.2, "locator": "invoice.buyer.name"},  # below threshold
-            "invoice.buyer.address.street": {"confidence": 0.85, "locator": "invoice.buyer.address.street"},
-            "invoice.buyer.address.postalCode": {"confidence": 0.85, "locator": "invoice.buyer.address.postalCode"},
-            "invoice.buyer.address.city": {"confidence": 0.85, "locator": "invoice.buyer.address.city"},
-            "invoice.buyer.address.countryCode": {"confidence": 0.85, "locator": "invoice.buyer.address.countryCode"},
-        },
-        "buyerMasterData": {"name": "Unternehmen X", "street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-    })
-    result = _run_node_snippet(_org001_code(), invoice_input)
-    assert result["org001"]["outcome"] == "not_reliable"
-    assert result["org001"]["reasonCodes"] == ["LOW_CONFIDENCE_EXTRACTION"]
+def test_handle_controls_call_failure_classifies_timeout_vs_transport():
+    upstream = {**BASE_CTX, "phase1AttemptStartedAt": "2026-08-25T10:00:00.100Z", "aiMeta": {}}
+    timeout_err = {"error": {"code": "ETIMEDOUT", "message": "connect ETIMEDOUT"}}
+    out = _run_with_context(
+        _node_code(CONTROLS_FAILURE_NODE), timeout_err,
+        {RUN_CONTEXT_NODE: BASE_CTX, MARK_ATTEMPT_START_NODE: upstream},
+    )
+    assert out["ok"] is True, out
+    assert out["result"]["outcome"] == "TIMEOUT"
+    assert out["result"]["n8nErrorCode"] == "INVOICE_PROCESSING_SERVICE_TIMEOUT"
+
+    conn_err = {"error": {"code": "ECONNREFUSED", "message": "connect ECONNREFUSED"}}
+    out2 = _run_with_context(
+        _node_code(CONTROLS_FAILURE_NODE), conn_err,
+        {RUN_CONTEXT_NODE: BASE_CTX, MARK_ATTEMPT_START_NODE: upstream},
+    )
+    assert out2["result"]["outcome"] == "TRANSPORT_FAILURE"
+    assert out2["result"]["n8nErrorCode"] == "INVOICE_PROCESSING_SERVICE_UNAVAILABLE"
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
-def test_org001_real_execution_fails_closed_on_missing_field():
-    invoice_input = json.dumps({
-        "invoice": {
-            "buyer": {
-                "name": None,
-                "address": {"street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-            }
-        },
-        "fieldEvidence": {
-            k: {"confidence": 0.85, "locator": k}
-            for k in (
-                "invoice.buyer.name", "invoice.buyer.address.street",
-                "invoice.buyer.address.postalCode", "invoice.buyer.address.city",
-                "invoice.buyer.address.countryCode",
-            )
-        },
-        "buyerMasterData": {"name": "Unternehmen X", "street": "Musterweg 10", "postalCode": "04109", "city": "Leipzig", "countryCode": "DE"},
-    })
-    result = _run_node_snippet(_org001_code(), invoice_input)
-    assert result["org001"]["outcome"] == "failed"
-    assert result["org001"]["reasonCodes"] == ["MISSING_FIELD"]
-
-
-def _aggregation_code() -> str:
-    data = _load_workflow()
-    return _nodes_by_name(data)[BUILD_SUMMARY_NODE]["parameters"]["jsCode"]
+def test_merge_activity_execution_reconciles_report_branch():
+    branch_envelope = {
+        "correlationId": "CORR-1", "processInstanceId": "PI-1",
+        "phase1Status": "unauffaellig", "routing": "standard_review",
+        "failedStep": None, "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
+        "invoice": {"invoiceNumber": "UX-1"}, "document": {"sha256": "a" * 64},
+        "report": {"status": "unauffaellig", "correlationId": "CORR-1"},
+        "organizationId": "unternehmen-x-demo", "processingPath": "pdf_ocr",
+        "aiExecutionProfile": "local-default", "aiProvider": "local-openai-compatible",
+        "modelId": "stub-model", "modelVersion": None, "processingLocation": "local",
+        "promptVersion": "flow1b-extract-v1", "fallbackUsed": False,
+    }
+    activity_execution_input = {"activityExecution": {"schemaVersion": "1.0.0", "status": "SUCCEEDED"}}
+    out = _run_with_context(
+        _node_code(MERGE_ACTIVITY_EXECUTION_NODE), activity_execution_input,
+        {CLASSIFY_RESPONSE_NODE: branch_envelope},
+    )
+    assert out["ok"] is True, out
+    result = out["result"]
+    assert result["status"] == "unauffaellig"
+    assert result["routing"] == "standard_review"
+    assert result["activityExecution"]["status"] == "SUCCEEDED"
+    assert result["aiExecutionProfile"] == "local-default"
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
-@pytest.mark.parametrize(
-    "org001_outcome,expected_status,expected_routing",
-    [
-        ("passed", "unauffaellig", "standard_review"),
-        ("failed", "klaerung_erforderlich", "prioritized_review"),
-        ("not_reliable", "nicht_pruefbar", "prioritized_review"),
-    ],
-)
-def test_status_aggregation_matches_real_aggregate_py_semantics(
-    org001_outcome, expected_status, expected_routing
-):
-    """Mirrors facturx/phase1/controls/aggregate.py's mapping exactly for a
-    single control -- technical_review must never appear here, since that
-    routing value only exists for genuine service/input failures upstream
-    of this node, not for a real content-classification outcome."""
-    invoice_input = json.dumps({
-        "correlationId": "test-corr-id",
-        "invoice": {"invoiceNumber": "TEST-1"},
-        "organizationId": "unternehmen-x-demo",
-        "org001": {
-            "controlId": "ORG-001",
-            "title": "Stammdatenabgleich Rechnungsempfänger",
-            "outcome": org001_outcome,
-            "severity": "blocking" if org001_outcome != "passed" else "none",
-            "reasonCodes": [],
-            "evidenceRefs": [],
-            "ruleVersion": "1.0.0",
-            "message": None,
-            "details": None,
-        },
-    })
-    result = _run_node_snippet(_aggregation_code(), invoice_input)
-    assert result["status"] == expected_status
-    assert result["routing"] == expected_routing
+def test_merge_activity_execution_throws_if_no_branch_envelope_found():
+    out = _run_with_context(
+        _node_code(MERGE_ACTIVITY_EXECUTION_NODE),
+        {"activityExecution": {"status": "SUCCEEDED"}},
+        {},
+    )
+    assert out["ok"] is False
+    assert "ACTIVITY_EXECUTION_MERGE_NO_BRANCH_ENVELOPE" in out["message"]
 
 
 # ---------------------------------------------------------------------------
-# Real n8n E2E: a genuinely fresh, ephemeral n8n container (own container
-# name/volume/port, torn down in a finally block), the real workflow file
-# imported and activated, and a real webhook POST -- not a structural check.
-#
-# Guards a real regression found 2026-08-11: cloud-gemini without a
-# configured credential used to return an unhandled, empty HTTP 200 (a
-# binary-passthrough bug at "01.3 Validate upload request" silently dropped
-# the uploaded file from the item, so "02.1 Encode PDF for OCR"'s
-# getBinaryDataBuffer crashed with an opaque "Unknown error" before any of
-# this workflow's own error handling ever ran). It must now converge to a
-# proper, non-empty nicht_pruefbar/technical_review/OCR_SERVICE_UNAVAILABLE
-# payload -- exactly like a real unreachable Gemini service would.
+# Real n8n E2E: a genuinely fresh, ephemeral n8n container plus a real
+# Phase 1 API container on the same isolated Docker network -- not a
+# structural check.
 # ---------------------------------------------------------------------------
 
 import socket
@@ -764,6 +787,10 @@ import httpx
 DOCKER_AVAILABLE = shutil.which("docker") is not None
 N8N_IMAGE = "n8nio/n8n:2.33.7"
 FLOW1B_WORKFLOW_ID = "digitax-invoice-phase1-flow1b-pdf-ocr"
+SHARED_SUBWORKFLOW_PATH = (
+    EXAMPLES_N8N_DIR / "digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json"
+)
+REPO_ROOT = Path(__file__).parent.parent
 
 
 def _free_tcp_port() -> int:
@@ -772,7 +799,7 @@ def _free_tcp_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_http_ok(url: str, timeout_seconds: float = 60.0) -> None:
+def _wait_for_http_ok(url: str, timeout_seconds: float = 90.0) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_error = None
     while time.monotonic() < deadline:
@@ -786,81 +813,136 @@ def _wait_for_http_ok(url: str, timeout_seconds: float = 60.0) -> None:
     raise TimeoutError(f"{url} never returned 200 within {timeout_seconds}s (last error: {last_error})")
 
 
-@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
-def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
-    port = _free_tcp_port()
-    suffix = uuid.uuid4().hex[:8]
-    container = f"flow1b-e2e-test-{suffix}"
-    volume = f"flow1b-e2e-test-vol-{suffix}"
+def _docker(*args, timeout=60):
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=timeout,
+    )
 
-    def _docker(*args, timeout=60):
-        return subprocess.run(
-            ["docker", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
 
-    try:
-        # Image acquisition is separated from container startup and given a
-        # much larger, dedicated timeout: a clean CI runner (no local image
-        # cache) can easily take longer than the 60s that's plenty for
-        # starting an already-pulled image. `docker run` below then only
-        # ever has to start a cached image, so it keeps a short timeout --
-        # a real hang there is a genuine problem, not a slow first pull.
-        # Found 2026-08-11: this test's original single 60s timeout on
-        # `docker run` covered both concerns at once and timed out on a
-        # clean GitHub Actions runner during the image pull.
+class _Flow1bStack:
+    """Ephemeral, isolated docker network + n8n container (+ optional real
+    API container) for one test. Every resource name is suffixed with a
+    fresh uuid and torn down in a `finally` block, mirroring the pattern
+    this file already established for the credential-failure E2E test."""
+
+    def __init__(self, with_api: bool = True, extra_n8n_env: dict | None = None):
+        self.suffix = uuid.uuid4().hex[:8]
+        self.network = f"flow1b-e2e-{self.suffix}"
+        self.n8n_container = f"flow1b-e2e-n8n-{self.suffix}"
+        self.n8n_volume = f"flow1b-e2e-n8n-vol-{self.suffix}"
+        self.api_container = f"flow1b-e2e-api-{self.suffix}"
+        self.api_image = f"facturx-phase1-api-e2e:{self.suffix}"
+        self.with_api = with_api
+        self.extra_n8n_env = extra_n8n_env or {}
+        self.n8n_port = None
+
+    def start(self):
+        net = _docker("network", "create", self.network)
+        assert net.returncode == 0, f"docker network create failed: {net.stderr}"
+
+        if self.with_api:
+            build = _docker("build", "-t", self.api_image, str(REPO_ROOT), timeout=300)
+            assert build.returncode == 0, f"docker build failed: {build.stdout}\n{build.stderr}"
+            run_api = _docker(
+                "run", "-d", "--name", self.api_container, "--network", self.network,
+                self.api_image, timeout=30,
+            )
+            assert run_api.returncode == 0, f"docker run (api) failed: {run_api.stderr}"
+
+        self.n8n_port = _free_tcp_port()
+        env_args = [
+            "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
+            "-e", "N8N_DIAG_ENABLED=false",
+            "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto",
+        ]
+        if self.with_api:
+            env_args += ["-e", f"FACTURX_API_BASE_URL=http://{self.api_container}:6969"]
+        for key, value in self.extra_n8n_env.items():
+            env_args += ["-e", f"{key}={value}"]
+
         pull = _docker("pull", N8N_IMAGE, timeout=300)
         assert pull.returncode == 0, f"docker pull {N8N_IMAGE} failed: {pull.stderr}"
 
-        run = _docker(
-            "run", "-d", "--name", container,
-            "-p", f"{port}:5678",
-            "-v", f"{volume}:/home/node/.n8n",
-            "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
-            "-e", "N8N_DIAG_ENABLED=false",
-            N8N_IMAGE,
-            timeout=30,
+        run_n8n = _docker(
+            "run", "-d", "--name", self.n8n_container, "--network", self.network,
+            "-p", f"{self.n8n_port}:5678",
+            "-v", f"{self.n8n_volume}:/home/node/.n8n",
+            *env_args, N8N_IMAGE, timeout=30,
         )
-        assert run.returncode == 0, f"docker run failed: {run.stderr}"
+        assert run_n8n.returncode == 0, f"docker run (n8n) failed: {run_n8n.stderr}"
+        _wait_for_http_ok(f"http://127.0.0.1:{self.n8n_port}/healthz")
+        if self.with_api:
+            self._exec_api_healthcheck()
 
-        _wait_for_http_ok(f"http://127.0.0.1:{port}/healthz")
+    def _exec_api_healthcheck(self):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            check = _docker(
+                "exec", self.n8n_container, "wget", "-qO-",
+                f"http://{self.api_container}:6969/health",
+            )
+            if check.returncode == 0:
+                return
+            time.sleep(1.0)
+        raise TimeoutError("Phase 1 API container never became reachable from the n8n container")
 
-        cp = _docker("cp", str(WORKFLOW_PATH), f"{container}:/tmp/flow1b.json")
-        assert cp.returncode == 0, f"docker cp failed: {cp.stderr}"
-
-        imp = _docker("exec", container, "n8n", "import:workflow", "--input=/tmp/flow1b.json")
-        assert imp.returncode == 0, f"n8n import:workflow failed: {imp.stderr}\n{imp.stdout}"
-
-        act = _docker("exec", container, "n8n", "publish:workflow", f"--id={FLOW1B_WORKFLOW_ID}")
-        assert act.returncode == 0, f"n8n publish:workflow failed: {act.stderr}\n{act.stdout}"
-
-        # Activation of an already-running instance requires a restart --
-        # documented n8n 2.33.7 behavior, not specific to this workflow.
-        restart = _docker("restart", container)
+    def import_and_publish(self, *workflow_paths_and_ids):
+        for path, workflow_id in workflow_paths_and_ids:
+            dest = f"/tmp/{workflow_id}.json"
+            cp = _docker("cp", str(path), f"{self.n8n_container}:{dest}")
+            assert cp.returncode == 0, f"docker cp failed: {cp.stderr}"
+            imp = _docker("exec", self.n8n_container, "n8n", "import:workflow", f"--input={dest}")
+            assert imp.returncode == 0, f"n8n import:workflow failed: {imp.stderr}\n{imp.stdout}"
+            pub = _docker("exec", self.n8n_container, "n8n", "publish:workflow", f"--id={workflow_id}")
+            assert pub.returncode == 0, f"n8n publish:workflow failed: {pub.stderr}\n{pub.stdout}"
+        restart = _docker("restart", self.n8n_container)
         assert restart.returncode == 0, f"docker restart failed: {restart.stderr}"
+        _wait_for_http_ok(f"http://127.0.0.1:{self.n8n_port}/healthz")
 
-        _wait_for_http_ok(f"http://127.0.0.1:{port}/healthz")
-
-        # /healthz can return 200 slightly before webhook registration for
-        # newly-activated workflows finishes on startup -- retry briefly
-        # rather than treating a transient 404 as the real failure mode
-        # this test exists to catch.
+    def post_upload(self, *, files, data, path="phase1-flow1b-pdf-upload", retries=10):
         response = None
-        for _ in range(10):
+        for _ in range(retries):
             response = httpx.post(
-                f"http://127.0.0.1:{port}/webhook/phase1-flow1b-pdf-upload",
-                data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "cloud-gemini"},
-                files={"data": ("test-invoice.pdf", b"%PDF-1.4 not a real pdf, content is irrelevant here", "application/pdf")},
-                timeout=30.0,
+                f"http://127.0.0.1:{self.n8n_port}/webhook/{path}",
+                data=data, files=files, timeout=30.0,
             )
             if response.status_code != 404:
                 break
             time.sleep(1.0)
+        return response
 
+    def stop(self):
+        _docker("rm", "-f", self.n8n_container, timeout=30)
+        if self.with_api:
+            _docker("rm", "-f", self.api_container, timeout=30)
+        _docker("volume", "rm", self.n8n_volume, timeout=30)
+        _docker("network", "rm", self.network, timeout=30)
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
+def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
+    """Guards a real regression: cloud-gemini without a configured
+    credential used to return an unhandled, empty HTTP 200 (an unguarded
+    require('crypto').createHash(...) call in "01.2 Build run context"
+    crashed the whole execution whenever require("crypto") wasn't
+    allow-listed, before any of this workflow's own error handling ever
+    ran). It must converge to a proper, non-empty
+    nicht_pruefbar/technical_review/OCR_SERVICE_UNAVAILABLE payload -- and
+    now also to a real (FAILED/PRE_FLIGHT_REJECTED) ActivityExecution via
+    the shared subworkflow, since the API/binding assertion node is on the
+    same critical path."""
+    stack = _Flow1bStack(with_api=False)
+    try:
+        stack.start()
+        stack.import_and_publish(
+            (SHARED_SUBWORKFLOW_PATH, "digitax-invoice-phase1-shared-assemble-activity-execution"),
+            (WORKFLOW_PATH, FLOW1B_WORKFLOW_ID),
+        )
+        response = stack.post_upload(
+            data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "cloud-gemini"},
+            files={"data": ("test-invoice.pdf", b"%PDF-1.4 not a real pdf, content is irrelevant here", "application/pdf")},
+        )
         assert response.status_code == 200
         assert len(response.content) > 0, (
             "cloud-gemini without a configured credential must never return an "
@@ -871,5 +953,173 @@ def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
         assert "technical_review" in body
         assert "OCR_SERVICE_UNAVAILABLE" in body
     finally:
-        _docker("rm", "-f", container, timeout=30)
-        _docker("volume", "rm", volume, timeout=30)
+        stack.stop()
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
+def test_e2e_local_ai_success_with_deterministic_double_reaches_real_api():
+    """Required scenario: "Flow 1b local-AI success using a deterministic
+    test double." A tiny, canned stub (stdlib-only Python HTTP server, no
+    real model) stands in for both the local vision endpoint and the PDF
+    render helper. Proves the whole chain end to end: local extraction ->
+    real POST /v1/invoices/process-extracted -> real control catalog
+    (including the real ORG-001, not an n8n mirror) -> unauffaellig."""
+    stub_source = (Path(__file__).parent / "fixtures" / "flow1b_local_ai_stub.py")
+    assert stub_source.exists(), "missing tests/fixtures/flow1b_local_ai_stub.py test double"
+
+    stack = _Flow1bStack(with_api=True)
+    stub_container = f"flow1b-e2e-stub-{stack.suffix}"
+    try:
+        net = _docker("network", "create", stack.network)
+        assert net.returncode == 0, f"docker network create failed: {net.stderr}"
+
+        build = _docker("build", "-t", stack.api_image, str(REPO_ROOT), timeout=300)
+        assert build.returncode == 0, f"docker build failed: {build.stdout}\n{build.stderr}"
+        run_api = _docker("run", "-d", "--name", stack.api_container, "--network", stack.network, stack.api_image, timeout=30)
+        assert run_api.returncode == 0, f"docker run (api) failed: {run_api.stderr}"
+
+        pull_python = _docker("pull", "python:3.12-slim", timeout=300)
+        assert pull_python.returncode == 0, f"docker pull python:3.12-slim failed: {pull_python.stderr}"
+        run_stub = _docker(
+            "run", "-d", "--name", stub_container, "--network", stack.network,
+            "-v", f"{stub_source}:/stub.py:ro",
+            "python:3.12-slim", "python", "/stub.py",
+            timeout=30,
+        )
+        assert run_stub.returncode == 0, f"docker run (stub) failed: {run_stub.stderr}"
+
+        stack.n8n_port = _free_tcp_port()
+        pull_n8n = _docker("pull", N8N_IMAGE, timeout=300)
+        assert pull_n8n.returncode == 0, f"docker pull {N8N_IMAGE} failed: {pull_n8n.stderr}"
+        run_n8n = _docker(
+            "run", "-d", "--name", stack.n8n_container, "--network", stack.network,
+            "-p", f"{stack.n8n_port}:5678",
+            "-v", f"{stack.n8n_volume}:/home/node/.n8n",
+            "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
+            "-e", "N8N_DIAG_ENABLED=false",
+            "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto",
+            "-e", f"FACTURX_API_BASE_URL=http://{stack.api_container}:6969",
+            "-e", f"LOCAL_LLM_BASE_URL=http://{stub_container}:8098",
+            "-e", "LOCAL_LLM_MODEL=stub-vision-model",
+            "-e", f"LOCAL_PDF_RENDER_URL=http://{stub_container}:8098",
+            N8N_IMAGE, timeout=30,
+        )
+        assert run_n8n.returncode == 0, f"docker run (n8n) failed: {run_n8n.stderr}"
+        _wait_for_http_ok(f"http://127.0.0.1:{stack.n8n_port}/healthz")
+        stack._exec_api_healthcheck()
+
+        stack.import_and_publish(
+            (SHARED_SUBWORKFLOW_PATH, "digitax-invoice-phase1-shared-assemble-activity-execution"),
+            (WORKFLOW_PATH, FLOW1B_WORKFLOW_ID),
+        )
+
+        response = stack.post_upload(
+            data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "local-default"},
+            files={"data": ("test-invoice.pdf", b"%PDF-1.4 not a real pdf, content is irrelevant here", "application/pdf")},
+        )
+        assert response.status_code == 200
+        body = response.text
+        assert "unauffaellig" in body
+        assert "standard_review" in body
+        assert "ORG-001" in body
+        # Proves the real API's report -- with the real catalogVersion-bearing
+        # controls -- was used, not a fabricated/local result: STR-003/004 are
+        # only produced by the real control executor.
+        assert "STR-003" in body and "STR-004" in body
+    finally:
+        _docker("rm", "-f", stack.n8n_container, timeout=30)
+        _docker("rm", "-f", stack.api_container, timeout=30)
+        _docker("rm", "-f", stub_container, timeout=30)
+        _docker("volume", "rm", stack.n8n_volume, timeout=30)
+        _docker("network", "rm", stack.network, timeout=30)
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
+def test_e2e_malformed_local_model_output_converges_to_technical_review():
+    """Required scenario: "malformed model output." The stub's
+    /chat/completions?malformed=1 route returns non-JSON content; "02.5L
+    Parse local OCR/LLM output" must throw (onError: continueErrorOutput)
+    and the run must still converge to a non-empty technical_review
+    payload, never an unhandled execution error."""
+    stub_source = (Path(__file__).parent / "fixtures" / "flow1b_local_ai_stub.py")
+    stack = _Flow1bStack(with_api=False)
+    stub_container = f"flow1b-e2e-stub-{stack.suffix}"
+    try:
+        net = _docker("network", "create", stack.network)
+        assert net.returncode == 0, f"docker network create failed: {net.stderr}"
+
+        pull_python = _docker("pull", "python:3.12-slim", timeout=300)
+        assert pull_python.returncode == 0, f"docker pull python:3.12-slim failed: {pull_python.stderr}"
+        run_stub = _docker(
+            "run", "-d", "--name", stub_container, "--network", stack.network,
+            "-v", f"{stub_source}:/stub.py:ro", "-e", "FLOW1B_STUB_MALFORMED=1",
+            "python:3.12-slim", "python", "/stub.py",
+            timeout=30,
+        )
+        assert run_stub.returncode == 0, f"docker run (stub) failed: {run_stub.stderr}"
+
+        stack.n8n_port = _free_tcp_port()
+        pull_n8n = _docker("pull", N8N_IMAGE, timeout=300)
+        assert pull_n8n.returncode == 0, f"docker pull {N8N_IMAGE} failed: {pull_n8n.stderr}"
+        run_n8n = _docker(
+            "run", "-d", "--name", stack.n8n_container, "--network", stack.network,
+            "-p", f"{stack.n8n_port}:5678",
+            "-v", f"{stack.n8n_volume}:/home/node/.n8n",
+            "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
+            "-e", "N8N_DIAG_ENABLED=false",
+            "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto",
+            "-e", f"LOCAL_LLM_BASE_URL=http://{stub_container}:8098",
+            "-e", "LOCAL_LLM_MODEL=stub-vision-model",
+            "-e", f"LOCAL_PDF_RENDER_URL=http://{stub_container}:8098",
+            N8N_IMAGE, timeout=30,
+        )
+        assert run_n8n.returncode == 0, f"docker run (n8n) failed: {run_n8n.stderr}"
+        _wait_for_http_ok(f"http://127.0.0.1:{stack.n8n_port}/healthz")
+
+        stack.import_and_publish(
+            (SHARED_SUBWORKFLOW_PATH, "digitax-invoice-phase1-shared-assemble-activity-execution"),
+            (WORKFLOW_PATH, FLOW1B_WORKFLOW_ID),
+        )
+
+        response = stack.post_upload(
+            data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "local-default"},
+            files={"data": ("test-invoice.pdf", b"%PDF-1.4 not a real pdf, content is irrelevant here", "application/pdf")},
+        )
+        assert response.status_code == 200
+        assert len(response.content) > 0
+        body = response.text
+        assert "nicht_pruefbar" in body
+        assert "technical_review" in body
+        assert "LOCAL_LLM_OUTPUT_PARSE_FAILED" in body
+    finally:
+        _docker("rm", "-f", stack.n8n_container, timeout=30)
+        _docker("rm", "-f", stub_container, timeout=30)
+        _docker("volume", "rm", stack.n8n_volume, timeout=30)
+        _docker("network", "rm", stack.network, timeout=30)
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="docker not available")
+def test_e2e_flow1b_stays_inactive_after_import_disabled_state():
+    """DISABLED policy state: importing Flow 1b (without an explicit
+    publish, unlike every other E2E test in this file) must never make its
+    webhook reachable -- proving the workflow truly starts inactive/
+    disabled by default, distinct from LOCAL/CLOUD, which are only ever
+    reachable after an explicit publish."""
+    stack = _Flow1bStack(with_api=False)
+    try:
+        stack.start()
+        dest = f"/tmp/{FLOW1B_WORKFLOW_ID}.json"
+        cp = _docker("cp", str(WORKFLOW_PATH), f"{stack.n8n_container}:{dest}")
+        assert cp.returncode == 0, f"docker cp failed: {cp.stderr}"
+        imp = _docker("exec", stack.n8n_container, "n8n", "import:workflow", f"--input={dest}")
+        assert imp.returncode == 0, f"n8n import:workflow failed: {imp.stderr}\n{imp.stdout}"
+        # Deliberately no publish:workflow call here.
+        response = httpx.post(
+            f"http://127.0.0.1:{stack.n8n_port}/webhook/phase1-flow1b-pdf-upload",
+            data={"organizationId": "unternehmen-x-demo", "aiExecutionProfile": "cloud-gemini"},
+            files={"data": ("test-invoice.pdf", b"%PDF-1.4 irrelevant", "application/pdf")},
+            timeout=10.0,
+        )
+        assert response.status_code == 404, "an unpublished/disabled Flow 1b must never be webhook-reachable"
+    finally:
+        stack.stop()

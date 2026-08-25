@@ -30,6 +30,7 @@ WORKFLOW_FILE_NAMES = (
     "digitax_invoice_phase1_flow1a_upload_v1_0_0.json",
     "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json",
     "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json",
+    "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json",
 )
 REQUIRED_NODE_ID = "03.1 Run DigiTax controls"
 
@@ -105,7 +106,7 @@ def test_lockfile_is_published_with_no_placeholder_or_illustrative_literals():
     ]
     assert all(v not in (None, "") for v in required_non_null)
 
-    assert len(lockfile["workflowBindings"]) == 3
+    assert len(lockfile["workflowBindings"]) == 4
     for binding in lockfile["workflowBindings"]:
         assert binding["workflowVersion"] not in (None, "")
         assert binding["nodeId"] == REQUIRED_NODE_ID
@@ -130,6 +131,7 @@ def test_lockfile_workflow_bindings_reference_real_workflow_files():
         "digitax-invoice-phase1-upload-demo",
         "digitax-invoice-phase1-batch-item",
         "digitax-invoice-phase1-structured-demo",
+        "digitax-invoice-phase1-flow1b-pdf-ocr",
     }
 
     for file_name in WORKFLOW_FILE_NAMES:

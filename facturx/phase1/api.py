@@ -21,7 +21,12 @@ from .document_intake import MAX_UPLOAD_BYTES, inspect_document
 from .demo_support import build_results_xlsx
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import MockPdfExtractionAdapter, PdfExtractionAdapter
-from .pipeline import normalize_invoice, process_invoice, validate_invoice
+from .pipeline import (
+    normalize_invoice,
+    process_extracted_invoice,
+    process_invoice,
+    validate_invoice,
+)
 
 logger = logging.getLogger("facturx-phase1-api")
 
@@ -297,6 +302,155 @@ async def process(
     except (UnsupportedInputError, TechnicalProcessingError) as exc:
         logger.warning(
             "Phase 1 process request rejected: %s %s correlationId=%s",
+            exc.error_code, exc.detail, correlation_id,
+        )
+        raise _error_response(exc, correlation_id=correlation_id)
+    return {"canonicalInvoice": canonical_invoice, "phase1ControlReport": report}
+
+
+_ALLOWED_EXTRACTION_STATUSES = ("completed", "partial", "failed")
+_SHA256_HEX_PATTERN = re.compile(r"^[A-Fa-f0-9]{64}$")
+
+
+def _require_object_field(payload: dict, field_name: str) -> dict:
+    value = payload.get(field_name)
+    if not isinstance(value, dict):
+        raise UnsupportedInputError(
+            "INVALID_REQUEST_BODY", f"{field_name!r} is required and must be an object.", status_code=422,
+        )
+    return value
+
+
+def _require_nonempty_string_field(source: dict, field_name: str, path: str) -> str:
+    value = source.get(field_name)
+    if not isinstance(value, str) or not value:
+        raise UnsupportedInputError(
+            "INVALID_REQUEST_BODY", f"{path!r} is required and must be a non-empty string.", status_code=422,
+        )
+    return value
+
+
+@router.post(
+    "/v1/invoices/process-extracted",
+    responses={
+        400: {"description": "Missing/unrecognized organization context, or an invalid X-Correlation-ID header."},
+        422: {"description": "The request body did not match the external-extraction contract."},
+    },
+)
+async def process_extracted(
+    payload: dict = Body(...),
+    x_correlation_id: Optional[str] = Header(
+        None,
+        alias="X-Correlation-ID",
+        description=(
+            "Optional caller-supplied correlation identifier, echoed verbatim into "
+            "phase1ControlReport.correlationId when valid. Must be 1-200 characters "
+            "from [A-Za-z0-9._:-]."
+        ),
+        json_schema_extra={
+            "pattern": "^[A-Za-z0-9._:-]{1,200}$",
+            "minLength": 1,
+            "maxLength": 200,
+        },
+    ),
+):
+    """Accepts externally extracted canonical invoice fields plus field
+    evidence (Flow 1b's local/cloud OCR-LLM extraction) and runs them
+    through the exact same control catalog/executor as a structured or
+    plain-PDF /v1/invoices/process request. The caller supplies extraction
+    primitives only (document identity/hash, extraction status/confidence,
+    invoice fields, field evidence) -- never a status, routing, or controls
+    list; those are always computed here, never trusted from the request.
+    """
+    correlation_id = None
+    try:
+        correlation_id = _validate_correlation_id(x_correlation_id)
+
+        organization_id = payload.get("organizationId")
+        if organization_id is not None and not isinstance(organization_id, str):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY", "organizationId must be a string when present.", status_code=422,
+            )
+        demo_mode = payload.get("demoMode", False)
+        if not isinstance(demo_mode, bool):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY", "demoMode must be a boolean when present.", status_code=422,
+            )
+
+        document_in = _require_object_field(payload, "document")
+        extraction_in = _require_object_field(payload, "extraction")
+        invoice = _require_object_field(payload, "invoice")
+        field_evidence = _require_object_field(payload, "fieldEvidence")
+
+        filename = _require_nonempty_string_field(document_in, "filename", "document.filename")
+        mime_type = _require_nonempty_string_field(document_in, "mimeType", "document.mimeType")
+        sha256 = _require_nonempty_string_field(document_in, "sha256", "document.sha256")
+        if not _SHA256_HEX_PATTERN.match(sha256):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY", "document.sha256 must be a 64-character hex SHA-256 digest.",
+                status_code=422,
+            )
+
+        extraction_status = extraction_in.get("status")
+        if extraction_status not in _ALLOWED_EXTRACTION_STATUSES:
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY",
+                f"extraction.status must be one of {_ALLOWED_EXTRACTION_STATUSES}.",
+                status_code=422,
+            )
+        overall_confidence = extraction_in.get("overallConfidence")
+        if isinstance(overall_confidence, bool) or not isinstance(overall_confidence, (int, float)) or not (
+            0.0 <= float(overall_confidence) <= 1.0
+        ):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY", "extraction.overallConfidence must be a number between 0 and 1.",
+                status_code=422,
+            )
+        adapter_version = extraction_in.get("adapterVersion")
+        if adapter_version is not None and not isinstance(adapter_version, str):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY", "extraction.adapterVersion must be a string or null.", status_code=422,
+            )
+        warnings = extraction_in.get("warnings", [])
+        if not isinstance(warnings, list) or not all(isinstance(w, str) for w in warnings):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY", "extraction.warnings must be an array of strings.", status_code=422,
+            )
+
+        # sourceType/detectedFormat/method are never taken from the caller --
+        # this endpoint exists for exactly one case (a plain PDF extracted
+        # externally), so they are hardcoded here rather than trusted from
+        # the request. That closes off a caller claiming e.g. a structured/
+        # embedded-XML source to route around STR-003/STR-004.
+        document = {
+            "sourceType": "plain_pdf",
+            "filename": filename,
+            "mimeType": mime_type,
+            "sha256": sha256.lower(),
+            "detectedFormat": "pdf",
+            "formatVersion": None,
+            "profile": None,
+        }
+        extraction = {
+            "method": "ocr_llm",
+            "status": extraction_status,
+            "overallConfidence": float(overall_confidence),
+            "adapterVersion": adapter_version,
+            "warnings": list(warnings),
+        }
+
+        canonical_invoice, report = process_extracted_invoice(
+            document=document,
+            extraction=extraction,
+            invoice=invoice,
+            field_evidence=field_evidence,
+            organization_id=organization_id,
+            demo_mode=demo_mode,
+            correlation_id=correlation_id,
+        )
+    except (UnsupportedInputError, TechnicalProcessingError) as exc:
+        logger.warning(
+            "Phase 1 process-extracted request rejected: %s %s correlationId=%s",
             exc.error_code, exc.detail, correlation_id,
         )
         raise _error_response(exc, correlation_id=correlation_id)

@@ -142,6 +142,43 @@ def test_fx04_xsd_invalid_xml_is_klaerung_erforderlich(client, invalid_xsd_xml_b
     assert "BLOCKED_BY_XSD_INVALID" in str_004["reasonCodes"]
 
 
+def test_damaged_xml_is_never_turned_green_by_secondary_pdf_evidence(
+    client, invalid_xsd_hybrid_pdf_bytes
+):
+    """Pilot routing rule 3 (contracts/README.md): invalid existing XML is
+    never replaced by OCR, and an optional PDF extraction may only ever be
+    secondary evidence -- it must never turn the result green. Seeds the PDF
+    extraction adapter with a flawless, would-be-unauffaellig OCR result for
+    this exact PDF's bytes; if the pipeline ever consulted it for a
+    hybrid_pdf document, the report would come back unauffaellig. It must
+    stay klaerung_erforderlich instead, proving the seeded PDF result was
+    never consulted at all -- the embedded (invalid) XML is the only
+    evidence source for a hybrid_pdf document, matching STR-003/004's own
+    non-mixing design."""
+    _seed_pdf_adapter(
+        invalid_xsd_hybrid_pdf_bytes,
+        PdfExtractionResult(
+            status="completed", overall_confidence=0.99, fields=_happy_path_fields(), line_item_count=1
+        ),
+    )
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", invalid_xsd_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, invalid_xsd_hybrid_pdf_bytes)
+
+    report = body["phase1ControlReport"]
+    assert report["status"] == "klaerung_erforderlich"
+    assert report["routing"] == "prioritized_review"
+    assert body["canonicalInvoice"]["extraction"]["method"] == "embedded_xml"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "failed"
+    assert "XSD_INVALID" in str_003["reasonCodes"]
+
+
 def test_pdf01_readable_pdf_all_fields_is_unauffaellig(client, blank_pdf_bytes):
     result = PdfExtractionResult(
         status="completed", overall_confidence=0.9, fields=_happy_path_fields(), line_item_count=1

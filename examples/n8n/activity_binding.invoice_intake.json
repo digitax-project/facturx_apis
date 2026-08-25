@@ -35,6 +35,11 @@
                                  "workflowId":  "digitax-invoice-phase1-structured-demo",
                                  "workflowVersion":  "1.0.0",
                                  "nodeId":  "03.1 Run DigiTax controls"
+                             },
+                             {
+                                 "workflowId":  "digitax-invoice-phase1-flow1b-pdf-ocr",
+                                 "workflowVersion":  "0.3.0",
+                                 "nodeId":  "03.1 Run DigiTax controls"
                              }
                          ]
 }

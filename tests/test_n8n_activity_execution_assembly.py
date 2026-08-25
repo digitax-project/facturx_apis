@@ -113,6 +113,40 @@ def test_workflow_id_and_active_state():
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_flow1b_workflow_id_has_a_published_binding():
+    """P2.1 Wave 1 A5 revision round 2: Flow 1b now calls the real Phase 1
+    API (POST /v1/invoices/process-extracted) and must assemble exactly one
+    validated ActivityExecution for the same activity Flow 1a uses, via the
+    same published binding -- proven here the same way every Flow 1a
+    workflowId already is, by running the real chain with Flow 1b's own
+    workflowId and node name."""
+    envelope = {
+        **BASE_ENVELOPE,
+        "workflowId": "digitax-invoice-phase1-flow1b-pdf-ocr",
+        "outcome": "REPORT",
+        "report": {
+            "status": "unauffaellig", "routing": "standard_review",
+            "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
+            "runId": "RUN-1B", "reportId": "REP-1B", "sourceSha256": "abc",
+            "controlProfileId": "p1", "controlProfileVersion": "v1",
+            "correlationId": "CORR-1",
+        },
+        "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
+        "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None,
+    }
+    out = _run_chain(envelope)
+    assert out["ok"] is True, out
+    ae = out["result"]["activityExecution"]
+    assert ae["status"] == "SUCCEEDED"
+    assert ae["executionId"] == "RUN-1B"
+    assert ae["workflowRef"]["workflowId"] == "digitax-invoice-phase1-flow1b-pdf-ocr"
+    assert ae["workflowRef"]["nodeId"] == "03.1 Run DigiTax controls"
+    # Same activity identity as every Flow 1a workflow -- Flow 1b is a new
+    # caller of the same published binding, not a second activity.
+    assert ae["definitionRef"]["activityId"] == "digitax.invoice-intake.phase1.structured-control"
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
 def test_report_outcome_maps_to_succeeded():
     envelope = {
         **BASE_ENVELOPE,

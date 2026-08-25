@@ -336,6 +336,98 @@ def process_invoice(
     return outcome.canonical_invoice, report
 
 
+def process_extracted_invoice(
+    document: dict,
+    extraction: dict,
+    invoice: dict,
+    field_evidence: dict,
+    organization_id: Optional[str],
+    demo_mode: bool,
+    correlation_id: Optional[str] = None,
+) -> tuple[dict, dict]:
+    """Runs the same catalog/executor as process_invoice() against canonical
+    invoice fields and field evidence an external caller (Flow 1b's n8n
+    OCR/LLM extraction) already produced, instead of extracting them from
+    raw bytes itself. This is the seam examples/n8n/README.md's "Missing API
+    contract" section asked for: a narrower endpoint accepting pre-extracted
+    fields plus their evidence, so Flow 1b can stop mirroring ORG-001 (and
+    every other control) in n8n-side JavaScript.
+
+    `document`/`extraction` are already-normalized dicts (sourceType/method
+    hardcoded by the caller, e.g. facturx/phase1/api.py -- never taken from
+    the external request body) so a caller cannot claim e.g. sourceType=xml
+    to route around the structured-document controls. `invoice`/
+    `field_evidence` are exactly the caller-supplied, untrusted extraction
+    result; this function never accepts a pre-computed status/routing/
+    controls list from the caller -- every control outcome is (re)computed
+    here, from the same functions process_invoice() uses, so the caller
+    cannot inject a fabricated control result.
+    """
+    started_at = datetime.now(timezone.utc).isoformat()
+    organization_context = resolve_organization_context(organization_id, demo_mode)
+    control_profile = get_control_profile(organization_context["controlProfileId"])
+
+    canonical_invoice = {
+        "schemaVersion": "1.0.0",
+        "document": document,
+        "extraction": extraction,
+        "invoice": invoice,
+        "fieldEvidence": field_evidence,
+    }
+    try:
+        validate_canonical_invoice(canonical_invoice)
+    except Exception as exc:
+        raise UnsupportedInputError(
+            "CANONICAL_INVOICE_INVALID",
+            f"The submitted document/extraction/invoice/fieldEvidence did not match the "
+            f"canonical invoice contract: {exc}",
+            status_code=422,
+        ) from exc
+
+    # The document was already read and extracted by the external caller --
+    # there is nothing left for DOC-001 to classify (readable/encrypted/
+    # format-supported all trivially hold for an externally-supplied plain
+    # PDF extraction), so it always evaluates to "passed" here. It still
+    # runs through the real evaluate_doc_001() function, not a hand-built
+    # ControlResult, so this stays the exact same executor Flow 1a uses.
+    doc_001 = evaluate_doc_001(
+        readable=True, encrypted=False, format_supported=True,
+        detected_format=document["detectedFormat"], profile_supported=True, profile=None,
+    )
+
+    if extraction["status"] == "failed":
+        controls = [doc_001, evaluate_str_003(None)] + [
+            not_run_result(cid, "Blocked because extraction failed.")
+            for cid in control_profile.control_ids
+            if cid not in ("DOC-001", "STR-003")
+        ]
+        report = _finalize_report(
+            document["sha256"], control_profile, controls, "nicht_pruefbar", "prioritized_review",
+            started_at=started_at, correlation_id=correlation_id,
+        )
+        return canonical_invoice, report
+
+    controls = [
+        doc_001,
+        evaluate_str_003(None),
+        evaluate_str_004(None, xsd_valid=True),
+        evaluate_extraction_confidence(extraction["overallConfidence"]),
+    ]
+    controls += evaluate_content_controls(invoice, field_evidence)
+    controls.append(evaluate_org_001(invoice, field_evidence, organization_context["buyer"]))
+    if "ORG-002" in control_profile.control_ids:
+        controls.append(
+            evaluate_org_002(invoice, field_evidence, organization_context["approvedSuppliers"])
+        )
+
+    status, routing = aggregate(controls)
+    report = _finalize_report(
+        document["sha256"], control_profile, controls, status, routing,
+        started_at=started_at, correlation_id=correlation_id,
+    )
+    return canonical_invoice, report
+
+
 def normalize_invoice(
     file_bytes: bytes,
     filename: str,
