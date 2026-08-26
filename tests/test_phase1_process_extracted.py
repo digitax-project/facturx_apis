@@ -205,6 +205,10 @@ def test_demo_mode_selects_fictional_organization(client):
         (lambda b: b["extraction"].__setitem__("overallConfidence", 1.5), "extraction.overallConfidence"),
         (lambda b: b.pop("invoice"), "invoice"),
         (lambda b: b.pop("fieldEvidence"), "fieldEvidence"),
+        (lambda b: b["document"].__setitem__("mimeType", "application/xml"), "document.mimeType"),
+        (lambda b: b["document"].__setitem__("mimeType", "image/png"), "document.mimeType"),
+        (lambda b: b["document"].__setitem__("mimeType", ""), "document.mimeType"),
+        (lambda b: b["document"].pop("mimeType"), "document.mimeType"),
     ],
 )
 def test_malformed_request_body_is_422_not_500(client, mutate, expected_message_fragment):
@@ -214,6 +218,24 @@ def test_malformed_request_body_is_422_not_500(client, mutate, expected_message_
     assert response.status_code == 422
     assert response.json()["detail"]["error_code"] in ("INVALID_REQUEST_BODY", "CANONICAL_INVOICE_INVALID")
     assert expected_message_fragment in response.json()["detail"]["detail"]
+
+
+def test_pdf_mime_type_is_accepted(client):
+    body = _request_body()
+    assert body["document"]["mimeType"] == "application/pdf"
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("bad_mime_type", ["application/xml", "image/png", "text/plain", "application/PDF"])
+def test_non_pdf_mime_type_is_rejected_before_canonical_document_is_built(client, bad_mime_type):
+    body = _request_body()
+    body["document"]["mimeType"] = bad_mime_type
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "INVALID_REQUEST_BODY"
+    assert "document.mimeType" in detail["detail"]
 
 
 def test_caller_supplied_control_results_are_never_trusted():

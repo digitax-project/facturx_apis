@@ -310,6 +310,7 @@ async def process(
 
 _ALLOWED_EXTRACTION_STATUSES = ("completed", "partial", "failed")
 _SHA256_HEX_PATTERN = re.compile(r"^[A-Fa-f0-9]{64}$")
+_SUPPORTED_EXTRACTED_MIME_TYPE = "application/pdf"
 
 
 def _require_object_field(payload: dict, field_name: str) -> dict:
@@ -384,6 +385,13 @@ async def process_extracted(
 
         filename = _require_nonempty_string_field(document_in, "filename", "document.filename")
         mime_type = _require_nonempty_string_field(document_in, "mimeType", "document.mimeType")
+        if mime_type != _SUPPORTED_EXTRACTED_MIME_TYPE:
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY",
+                f"document.mimeType must be {_SUPPORTED_EXTRACTED_MIME_TYPE!r}; "
+                "this endpoint only accepts externally extracted plain-PDF fields.",
+                status_code=422,
+            )
         sha256 = _require_nonempty_string_field(document_in, "sha256", "document.sha256")
         if not _SHA256_HEX_PATTERN.match(sha256):
             raise UnsupportedInputError(

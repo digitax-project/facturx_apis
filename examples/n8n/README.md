@@ -23,7 +23,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Upload Demo \| v1.0.0` | `digitax_invoice_phase1_flow1a_upload_v1_0_0.json` | `digitax-invoice-phase1-upload-demo` | demo-ready (active) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Demo \| v1.0.0` | n/a -- browser page `facturx/phase1/static/batch_demo.html`, not an n8n workflow | n/a | demo-ready (served whenever `FACTURX_ENABLE_DEMO_ENDPOINTS=true`) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.0.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo) |
-| `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.2.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
+| `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.3.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
 | `DigiTax \| Invoice Phase 1 \| Shared \| Assemble ActivityExecution \| v1.0.0` | `digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json` | `digitax-invoice-phase1-shared-assemble-activity-execution` | demo-ready (active/published -- no webhook, never externally reachable, but n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow invoke an unpublished target at all) |
 
 Workflow **ids are deterministic and never change** across a rename --
@@ -643,18 +643,23 @@ Full detail in `coordination/claude-codex/handover-log.md` and
 are the CI structural guards; they are not a substitute for the real
 evidence above.
 
-## digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json
+## digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json
 
-`DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0` --
+`DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0` --
 processes a plain PDF invoice (no embedded structured XML) via OCR/LLM
 extraction instead of XML parsing. `v0.2.0` (2026-08-11, dev-stack/
-AI-selection round) adds an explicit local-vs-cloud AI execution choice in
+AI-selection round) added an explicit local-vs-cloud AI execution choice in
 front of the extraction step; `v0.1.0`'s single Gemini-only path is now the
 *cloud* lane of two technically separate lanes that converge on one
-canonical output. Three of the original four OCR nodes remain reused from
-`digitax_invoice_intake.json` **unmodified** (the prompt-builder was
-deliberately corrected in the prior round; the parser gained one addition
-in this round -- see below):
+canonical output. `v0.3.0` (A1 correction round) deletes the n8n-side
+ORG-001 mirror and organization-profile lookup entirely: extraction stays
+in n8n, but every control (ORG-001 and every other control) is now
+evaluated by the real, authoritative Phase 1 API via
+`POST /v1/invoices/process-extracted` -- see "Control evaluation: the real
+Phase 1 API, not a mirror" below. Three of the original four OCR nodes
+remain reused from `digitax_invoice_intake.json` **unmodified** (the
+prompt-builder was deliberately corrected in the dev-stack/AI-selection
+round; the parser gained one addition in that round -- see below):
 
 ```
 01.1 Receive PDF upload (POST multipart/form-data, file field "data")
@@ -665,10 +670,7 @@ in this round -- see below):
   -> 01.3 Validate upload request
   -> 01.4 Has valid upload?
        -> [invalid] 01.5 Handle invalid upload    never retried, no call made
-       -> [valid]   01.6 Resolve organization profile (concept)
-  -> 01.7 Organization profile known?
-       -> [unknown] 01.8 Handle unknown organization
-       -> [known]   01.9 Resolve AI execution profile
+       -> [valid]   01.9 Resolve AI execution profile
   -> 01.10 Route by AI profile (Switch: local / cloud / unresolved)
        -> [unresolved]  01.11 Handle unresolved AI profile   unknown profile ID, or
                                                                local-default without a
@@ -680,13 +682,17 @@ in this round -- see below):
        -> [cloud]  02.1 Encode PDF for OCR -> 02.2 Build OCR/LLM request
                       -> 02.3 Run OCR/LLM extraction (Gemini) (bounded retry, maxTries: 5)
                       -> 02.5 Parse OCR/LLM output
-  -> 02.7 Normalize invoice (concept)      -- single shared node for both lanes
-  -> 03.1 Run DigiTax controls (concept)     -- ORG-001 evaluation
+  -> 02.7 Normalize invoice      -- single shared node for both lanes, assembles
+                                     the canonical invoice/fieldEvidence contract
+  -> 02.8 Mark phase1 attempt start  -- assembles the process-extracted request body
+  -> 03.1 Run DigiTax controls     -- calls the real, authoritative Phase 1 API
+                                       (POST /v1/invoices/process-extracted);
+                                       ORG-001 and every other control are
+                                       evaluated there, not in n8n
   -> 04.1 Build control report      -- adds processingPath/aiExecutionProfile/
                                         aiProvider/modelId/modelVersion/
                                         processingLocation/promptVersion/fallbackUsed
-  -> 04.2 Render control report      -- single convergence point, HTML, with an
-                                         explicit "temporary implementation" notice
+  -> 04.2 Render control report      -- single convergence point, HTML
   -> 04.3 Respond to browser (HTML)
   -> 04.4 Route by review status (Switch, 4 explicit outputs)
        -> 05.1 / 05.2 / 05.3 / 05.4 Human review - standard / prioritized / technical / unknown
@@ -808,43 +814,45 @@ is bundled, downloaded, or run by this repository or by `compose.dev.yml`
 -- see the root README's "Optional: local AI for Flow 1b" section. The
 cloud lane is unchanged from `v0.1.0`'s Gemini path.
 
-### Missing API contract -- this is a temporary implementation, not a shortcut
+### Control evaluation: the real Phase 1 API, not a mirror
 
-`POST /v1/invoices/process` only accepts a file upload, and the shipped
-`MockPdfExtractionAdapter` (`facturx/phase1/normalize/pdf_adapter.py`) is
-keyed by the SHA-256 of the uploaded bytes with **no seam for an external
-caller to inject a real OCR/LLM extraction result**. There is also no API
-endpoint exposing organization master data
-(`facturx/phase1/organization_master_data.py`) to an external caller. So
-Flow 1b **cannot** call the real API to evaluate ORG-001 against genuinely
-OCR-extracted fields today -- and it does not pretend to. Instead:
+`v0.3.0` (A1 correction round) closed the gap the earlier `v0.2.0` round
+documented here: n8n no longer hand-mirrors ORG-001 or any other control,
+and no longer hand-mirrors organization master data. `01.6 Resolve
+organization profile (concept)`, `01.7 Organization profile known?`,
+`01.8 Handle unknown organization`, and the old `03.1 Run DigiTax controls
+(concept)` JavaScript evaluator are gone entirely -- not renamed, removed
+(verified by `tests/test_n8n_flow1b_workflow.py::
+test_no_org_001_mirror_or_organization_resolution_left_in_n8n`). Instead:
 
-- `01.6 Resolve organization profile (concept)` hand-mirrors only the
-  `buyer` block of `organization_master_data.py`'s two fictional org
-  contexts. This **must be kept in sync by hand** until a real endpoint or
-  adapter seam exists -- a genuine, acknowledged maintenance burden, not a
-  one-time cost.
-- `03.1 Run DigiTax controls (concept)` replicates
-  `evaluate_org_001()` and its `_check`/`_combine`/`_normalize_for_match`
-  helpers from `facturx/phase1/controls/executor.py` line-for-line in
-  JavaScript: same 5 buyer fields, same `0.70` confidence threshold, same
-  case/whitespace-insensitive comparison, same severity/reason-code shape,
-  same control id/title (`ORG-001` / `Stammdatenabgleich Rechnungsempfänger`
-  -- never called a "ZUGFeRD gateway"). Verified with real execution
-  (Node.js, not just read-through) in `tests/test_n8n_flow1b_workflow.py`.
-- The rendered HTML result (`04.2 Render control report`) carries an
-  explicit, prominent banner stating this is a temporary n8n-side
-  implementation, so no viewer mistakes it for a real API-issued control
-  report.
+- `02.8 Mark phase1 attempt start` assembles the request body sent to the
+  real API: only extraction primitives (`organizationId`, `document`,
+  `extraction`, `invoice`, `fieldEvidence`) -- never a status, routing, or
+  controls result the server would have to (and must never) trust from the
+  caller.
+- `03.1 Run DigiTax controls` is an HTTP Request node that calls
+  `POST {{ $env.FACTURX_API_BASE_URL }}/v1/invoices/process-extracted` --
+  the exact same control catalog/executor
+  (`facturx/phase1/controls/executor.py`, `evaluate_org_001()` included)
+  that `/v1/invoices/process` uses for Flow 1a. That endpoint rejects any
+  `document.mimeType` other than `application/pdf` with 422
+  `INVALID_REQUEST_BODY` before constructing a canonical document, since it
+  exists for externally OCR/LLM-extracted plain PDFs only.
+- `03.2 Classify controls response` / `03.3 Handle controls-call failure`
+  map the API's HTTP response (success, a 4xx rejection, a timeout, or a
+  transport failure) onto this workflow's own routing outcomes -- they
+  never recompute a status themselves; `04.1 Build control report` passes
+  the API's own `status`/`routing`/`controls` straight through
+  (`tests/test_n8n_flow1b_workflow.py::
+  test_build_control_report_never_recomputes_status_from_scratch`).
+- The rendered HTML result (`04.2 Render control report`) states plainly
+  that control evaluation came from the authoritative Phase 1 API, not an
+  n8n-side implementation.
 
-**What real convergence with Flow 1a would require** (open decision, not
-implemented): either (a) a real `PdfExtractionAdapter` the API's existing
-dependency-injection seam can select, fed by this workflow's OCR chain, so
-`/v1/invoices/process` can be called normally with the original PDF -- or
-(b) a narrower endpoint/contract accepting pre-extracted canonical fields
-plus their evidence directly. Recorded here and in
-`output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md` for Codex/the user to
-decide, not silently chosen.
+**What remains a concept, after this round**: only the OCR/LLM extraction
+step itself (`01.9`-`02.7`), and only for the local lane -- see "Optional:
+local AI for Flow 1b" in the root README and "The local lane ... is a
+CONCEPT" above. Control evaluation is real for both lanes.
 
 ### Confidence: Gemini has no native per-field signal
 
@@ -874,7 +882,7 @@ historical workflow -- nothing was copied from any other n8n instance.
 Before a real end-to-end run:
 
 1. Open the n8n UI (`http://localhost:5679` for either stack).
-2. Select **DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0**.
+2. Select **DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0**.
 3. For cloud AI: on the `02.3 Run OCR/LLM extraction (Gemini)` node, select
    or create a real **Google Gemini (PaLM) API** credential (Google AI
    Studio API key). For local AI: set `LOCAL_LLM_BASE_URL`/`LOCAL_LLM_MODEL`
@@ -883,18 +891,20 @@ Before a real end-to-end run:
 4. Activate the workflow only after that -- it is deliberately left
    inactive on import.
 
-Status is **imported, inactive, visually structured, credentials/API
-convergence pending** -- not "working." No E2E claim is made without a
-credential or a real local endpoint actually present.
+Status is **imported, inactive, visually structured, credentials
+pending** -- not "working." Control evaluation already calls the real
+Phase 1 API (see above); the remaining gap is purely credentials
+(Gemini API key or a reachable local endpoint). No E2E claim is made
+without a credential or a real local endpoint actually present.
 
 ### Verification
 
-- `pytest`: full suite green (162 tests across all n8n workflow test
-  files as of the dev-stack/AI-selection round), including
-  `tests/test_n8n_flow1b_workflow.py` (structural checks plus real Node.js
-  execution of the ORG-001 evaluator and status aggregator against
-  synthetic inputs -- the actual reused JS logic, not a re-implementation
-  assumption).
+- `pytest`: full suite green, including `tests/test_n8n_flow1b_workflow.py`
+  (structural checks; real Node.js execution of the business-logic-bearing
+  Code nodes that remain -- AI-profile resolution, controls-response
+  classification, ActivityExecution merge -- against synthetic inputs) and
+  `tests/test_phase1_process_extracted.py` (the real API endpoint Flow 1b
+  now calls, including the `application/pdf`-only MIME boundary).
 - Real `n8n import:workflow`/`update:workflow` against pinned
   `n8nio/n8n:2.33.7`, both in the presentation stack's persistent container
   and in a from-scratch `compose.dev.yml up --build` run (fresh volume,

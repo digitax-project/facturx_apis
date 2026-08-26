@@ -1,5 +1,5 @@
 """Regression guard for
-examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json
+examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json
 ("DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0").
 
 P2.1 Wave 1 A5 revision round 2 (A1 review correction): Flow 1b no longer
@@ -26,7 +26,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json"
+    / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json"
 )
 INTAKE_WORKFLOW_PATH = (
     Path(__file__).parent.parent / "examples" / "n8n" / "digitax_invoice_intake.json"

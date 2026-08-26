@@ -112,6 +112,17 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
   -F "organizationId=unternehmen-x-demo"
 ```
 
+- `POST /v1/invoices/process-extracted` - runs the same control catalog/
+  executor as `/v1/invoices/process`, but for canonical invoice fields plus
+  field evidence an external caller already extracted (e.g. `examples/n8n`'s
+  Flow 1b OCR/LLM extraction), instead of a file upload. `document.mimeType`
+  must be exactly `application/pdf`; any other or missing value is rejected
+  with 422 `INVALID_REQUEST_BODY` before a canonical document is
+  constructed. The caller supplies extraction primitives only (document
+  identity/hash, extraction status/confidence, invoice fields, field
+  evidence) -- a status, routing, or controls list in the request body is
+  never trusted; those are always computed here.
+
 ### Embedded starter controls
 
 The API currently selects either `inbound-starter-de-v1` version `0.2.0` or
@@ -322,16 +333,18 @@ German documentation is available in
   it reports `not_applicable`/`UNSUPPORTED_PROFILE` rather than running
   unreviewed. A Saxon/resource failure, timeout, or unparseable output
   reports `not_reliable` (forcing `nicht_pruefbar`), never `passed`.
-- **Plain-PDF extraction uses a mock adapter**, not real OCR/LLM. It exists
-  to prove the field-evidence/confidence contract a real adapter must
-  satisfy (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via
-  FastAPI dependency injection. There is still no endpoint that accepts
-  externally-extracted canonical OCR fields (`POST /v1/invoices/process`
-  only accepts a file upload), so Flow 1b's local/cloud AI extraction
-  (`examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json`)
-  remains a temporary, n8n-side-only mirror of `ORG-001`, not a real API
-  integration -- see `examples/n8n/README.md`'s "Missing API contract"
-  section for the smallest endpoint that would close this gap.
+- **Plain-PDF extraction via `POST /v1/invoices/process` uses a mock
+  adapter**, not real OCR/LLM. It exists to prove the field-evidence/
+  confidence contract a real adapter must satisfy
+  (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via FastAPI
+  dependency injection. A real, external OCR/LLM extraction is instead
+  submitted via `POST /v1/invoices/process-extracted` (see above), which
+  Flow 1b's local/cloud AI extraction
+  (`examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json`)
+  calls -- the authoritative Phase 1 API evaluates all controls there, not
+  an n8n-side mirror. Only the OCR/LLM extraction step itself (not control
+  evaluation) remains n8n-side and, for the local lane, a concept -- see
+  `examples/n8n/README.md`.
 - **CAL-002/CAL-003 (arithmetic controls) assume a simple invoice.**
   `CAL-002`'s tax-consistency formula does not account for document-level
   charges/allowances. When a reliable non-zero charge or allowance is

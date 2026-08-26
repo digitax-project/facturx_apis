@@ -103,6 +103,7 @@ CAPABILITIES = {
     "externalExtraction": {
         "status": "implemented",
         "endpoint": "POST /v1/invoices/process-extracted",
+        "supportedDocumentMimeTypes": ["application/pdf"],
         "note": (
             "Accepts canonical invoice fields plus field evidence an external "
             "caller already extracted (e.g. examples/n8n's Flow 1b OCR/LLM "
@@ -110,7 +111,12 @@ CAPABILITIES = {
             "executor as /v1/invoices/process. The caller supplies extraction "
             "primitives only (document identity/hash, extraction status/"
             "confidence, invoice fields, field evidence) -- never a status, "
-            "routing, or controls list; those are always computed here."
+            "routing, or controls list; those are always computed here. "
+            "document.mimeType must be exactly 'application/pdf'; any other "
+            "or missing MIME type is rejected with 422 INVALID_REQUEST_BODY "
+            "before a canonical document is constructed -- this endpoint "
+            "exists for externally OCR/LLM-extracted plain PDFs only, never "
+            "structured/embedded-XML sources."
         ),
     },
     "controlProfile": {

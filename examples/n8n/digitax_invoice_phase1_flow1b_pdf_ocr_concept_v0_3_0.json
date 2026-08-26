@@ -603,7 +603,7 @@
     },
     {
       "parameters": {
-        "content": "## 02 Intake and normalization -- two technically separate lanes\nCONCEPT/TEMPORARY: n8n-side OCR/LLM extraction, not yet processed by the\nreal API. Cloud lane (y=0): unchanged Gemini path. Local lane (y=460,\nbelow): configurable local OpenAI-compatible endpoint, no model bundled\nor auto-downloaded. Both lanes converge on 02.7 Normalize invoice\n(concept) with an identical canonical invoice/fieldEvidence/aiMeta shape.",
+        "content": "## 02 Intake and normalization -- two technically separate lanes\nn8n performs the selected OCR/LLM extraction only. Cloud lane (y=0):\nunchanged Gemini path. Local lane (y=460, below): configurable local\nOpenAI-compatible endpoint, no model bundled or auto-downloaded. Both\nlanes converge on 02.7 Normalize invoice with an identical canonical\ninvoice/fieldEvidence/aiMeta shape, then submitted to the authoritative\nPhase 1 API for control evaluation (see 03 DigiTax controls).",
         "height": 180,
         "width": 900,
         "color": 4
@@ -635,7 +635,7 @@
     },
     {
       "parameters": {
-        "content": "## 03 DigiTax controls\nCONCEPT/TEMPORARY: n8n-side mirror of\nevaluate_org_001() -- same field list,\nthreshold, and control ID as Flow 1a,\nnot yet processed by the real API.",
+        "content": "## 03 DigiTax controls\nThe authoritative Phase 1 API evaluates all controls\n(ORG-001 and every other control) via\nPOST /v1/invoices/process-extracted -- the same\ncatalog/executor Flow 1a uses. n8n performs no\ncontrol logic of its own.",
         "height": 180,
         "width": 420,
         "color": 4
@@ -683,7 +683,7 @@
     },
     {
       "parameters": {
-        "content": "## VERSION INFO\nWorkflow: DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.2.0\nStatus: concept (inactive, credentials pending -- NOT part of the demo)\nBoundary: plain PDF upload -> resolve AI execution profile -> local OR\ncloud OCR/LLM extraction -> n8n-side ORG-001 mirror -> human review\n(never approval, booking, payment, or supplier communication)\nAI selection (new in v0.2.0): browser sends only a stable profile ID\n(local-default / cloud-gemini); server/n8n resolves provider, model, and\nendpoint. No silent local-to-cloud fallback; unknown profile or\nunconfigured local provider fails safely to nicht_pruefbar/\ntechnical_review. Both lanes converge on one canonical invoice contract.\nControl contract MIRRORED, not executed by the real API: ORG-001 rule_version\n1.0.0, threshold 0.70 -- see facturx/phase1/controls/catalog.py and\nexecutor.py::evaluate_org_001. Real API convergence pending (see README).\nSource: digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json",
+        "content": "## VERSION INFO\nWorkflow: DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0\nStatus: concept (inactive, credentials pending -- NOT part of the demo).\nWorkflow remains inactive/concept-level and ends before human decision.\nBoundary: plain PDF upload -> resolve AI execution profile -> local OR\ncloud OCR/LLM extraction (n8n) -> control evaluation (authoritative\nPhase 1 API) -> human review handoff (never approval, booking, payment,\nor supplier communication)\nAI selection (since v0.2.0): browser sends only a stable profile ID\n(local-default / cloud-gemini); server/n8n resolves provider, model, and\nendpoint. No silent local-to-cloud fallback; unknown profile or\nunconfigured local provider fails safely to nicht_pruefbar/\ntechnical_review. Both lanes converge on one canonical invoice contract.\nControl contract (since v0.3.0): n8n performs the selected OCR/LLM\nextraction only; the authoritative Phase 1 API evaluates all controls\n(ORG-001 rule_version 1.0.0, threshold 0.70, and every other control) via\nPOST /v1/invoices/process-extracted -- see\nfacturx/phase1/controls/catalog.py and executor.py::evaluate_org_001.\nSource: digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json",
         "height": 320,
         "width": 620,
         "color": 2

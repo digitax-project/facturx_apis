@@ -68,7 +68,7 @@ $SharedAssembleWorkflowId = "digitax-invoice-phase1-shared-assemble-activity-exe
 $StructuredRegressionFile = "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json"
 $UploadFile = "digitax_invoice_phase1_flow1a_upload_v1_0_0.json"
 $BatchItemFile = "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json"
-$Flow1bFile = "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json"
+$Flow1bFile = "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json"
 $SharedAssembleFile = "digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json"
 
 $EvidenceDir = [System.IO.Path]::GetFullPath((Join-Path $N8nDir "..\..\..\..\..\output\bpmn\renders\versions\digitax_flow01_n8n\upload-automation\review_evidence"))
@@ -156,8 +156,7 @@ function Assert-CorrectActiveState {
     # Batch (+ its Batch Item subworkflow) are active. Structured
     # Regression stays inactive (CI/regression helper only, triggered via
     # `n8n execute`, never a live webhook). Flow 1b stays inactive --
-    # concept-only, credentials/API convergence pending, must never
-    # receive live traffic.
+    # concept-only, credentials pending, must never receive live traffic.
     $activeOutput = docker exec $N8nContainer n8n list:workflow --active=true 2>&1
     $inactiveOutput = docker exec $N8nContainer n8n list:workflow --active=false 2>&1
 
