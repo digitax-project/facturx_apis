@@ -587,7 +587,7 @@
     },
     {
       "parameters": {
-        "content": "## 01.6-01.11 Organization + AI-profile resolution\nOrganization master-data profile lookup (concept), then AI execution\nprofile resolution: the browser sends only a stable profile ID\n(local-default / cloud-gemini). An unknown ID or an unconfigured local\nprovider fails safely to nicht_pruefbar/technical_review -- never a\nsilent default to cloud, never a silent local-to-cloud fallback.",
+        "content": "## 01.9-01.11 AI execution profile resolution\nThe browser sends only a stable profile ID (local-default / cloud-gemini).\n01.9 resolves it server-side and 01.10 routes by profile. An unknown ID or\nan unconfigured local provider fails closed via 01.11 to\nnicht_pruefbar/technical_review -- never a silent default to cloud, never a\nsilent local-to-cloud fallback.",
         "height": 160,
         "width": 1080,
         "color": 4

@@ -228,8 +228,9 @@ credential inside the n8n UI (the "02.3 Run OCR/LLM extraction (Gemini)"
 node) and activate the workflow. This is never configured via an
 environment variable or the browser -- the credential lives only in n8n's
 own credential store. See [`examples/n8n/README.md`](examples/n8n/README.md)
-for the exact steps, and for why Flow 1b's ORG-001 evaluation is a
-temporary, n8n-side-only mirror rather than the real API.
+for the exact steps. n8n performs only OCR/LLM extraction; the
+authoritative Phase-1 API evaluates every control (ORG-001 included) via
+`POST /v1/invoices/process-extracted`.
 
 ### Run the batch and profile-comparison demo (presentation stack)
 

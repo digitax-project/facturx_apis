@@ -41,22 +41,23 @@ connections, no long diagonal edges):
 
 1. `01 Input and context`
 2. `02 Intake and normalization`
-3. `03 DigiTax controls` (the real Phase-1 API boundary, or -- Flow 1b only
-   -- the temporary concept mirror, explicitly labeled as such)
+3. `03 DigiTax controls` (the real Phase-1 API boundary that every
+   workflow, including Flow 1b, calls via
+   `POST /v1/invoices/process-extracted`)
 4. `04 Control report and routing`
 5. `05 Human review handoff`
 
 Each workflow also carries a **`## VERSION INFO`** sticky note near its
 start with: display name + semantic version, status (`demo-ready` /
 `helper` / `concept`), input/output boundary, the API/control-contract
-version it targets (`catalogVersion`, control profile id/version, or --
-Flow 1b -- which control it mirrors and its rule version), last-verified
-date, and its own source export filename.
+version it targets (`catalogVersion` and control profile id/version --
+Flow 1b targets the same catalog via `/v1/invoices/process-extracted`),
+last-verified date, and its own source export filename.
 
 None of this changes topology or control logic -- it is a presentation and
 organization pass only. Every functional detail documented below (fail-safe
-retry, the missing-API-contract gap, confidence heuristics, etc.) is
-unchanged from the prior rounds; only node/workflow names and layout moved.
+retry, confidence heuristics, etc.) is unchanged from the prior rounds; only
+node/workflow names and layout moved.
 
 ## P2.1 Wave 1 A5 Stage 0/1: activity binding, ActivityExecution assembly, and evidence-schema vendoring
 
@@ -908,8 +909,10 @@ without a credential or a real local endpoint actually present.
 - Real `n8n import:workflow`/`update:workflow` against pinned
   `n8nio/n8n:2.33.7`, both in the presentation stack's persistent container
   and in a from-scratch `compose.dev.yml up --build` run (fresh volume,
-  then a second startup without reset) -- 4 workflows, no duplicates,
-  correct active state, both times.
+  then a second startup without reset) -- 5 workflows (Flow 1a Structured
+  Regression, Flow 1a Upload Demo, Flow 1a Batch Item, Flow 1b PDF OCR/LLM
+  Concept, and the shared `Assemble ActivityExecution` subworkflow they all
+  call), no duplicates, correct active state, both times.
 - Live webhook evidence against the running dev stack: all 7 Unternehmen
   X/Y profile-matrix invoices through `phase1-invoice-upload` and one
   through `phase1-invoice-batch-item`, a faulty (missing-file) upload
