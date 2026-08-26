@@ -8,11 +8,14 @@
   Wraps docker-compose.phase1-upload-demo.yml so start/stop/smoke-test
   happen in the right order: bring the stack up, wait for both real health
   endpoints (never assume "container started" means "ready"), import all
-  four workflows idempotently (n8n's CLI import upserts by the workflow
+  five workflows idempotently, including the shared Assemble
+  ActivityExecution subworkflow (n8n's CLI import upserts by the workflow
   JSON's own "id" field -- reimporting never creates a duplicate), publish
-  only Upload and Batch Item so their webhooks go live, verify Structured
-  Regression and Flow 1b (concept, credentials pending) stay inactive, then
-  optionally run a smoke test and save sanitized evidence.
+  Upload, Batch Item, and the shared Assemble ActivityExecution subworkflow
+  (published because n8n requires it to invoke it via Execute Workflow, not
+  because it has a webhook) so Upload/Batch Item webhooks go live, verify
+  Structured Regression and Flow 1b (concept, credentials pending) stay
+  inactive, then optionally run a smoke test and save sanitized evidence.
 
   Reset is a separate, explicitly confirmed action. It never runs as part
   of Start/Stop, and it re-verifies the exact volume name before removing

@@ -192,8 +192,9 @@ workflows, any credentials you add) lives in the named Docker volume
 plain `down` never touches it.
 
 > **Warning:** this permanently deletes every workflow edit and credential
-> in the dev n8n instance. The next `up` re-imports the four versioned
-> workflows from a clean state.
+> in the dev n8n instance. The next `up` re-imports the five versioned
+> workflows (including the shared `Assemble ActivityExecution` subworkflow)
+> from a clean state.
 
 ```bash
 docker compose -f compose.dev.yml down -v   # removes the shared dev volume

@@ -18,6 +18,11 @@ FLOW1B_WORKFLOW_PATH = (
     / "n8n"
     / "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json"
 )
+DEMO_MANAGER_SCRIPT = (
+    REPO_ROOT / "examples" / "n8n" / "scripts" / "Manage-Phase1UploadDemo.ps1"
+)
+
+STALE_WORKFLOW_COUNT_RE = re.compile(r"\b4\s+workflows?\b|\bfour\s+workflows?\b", re.IGNORECASE)
 
 STALE_ACTIVE_PHRASES = (
     "temporary, n8n-side-only mirror",
@@ -72,6 +77,23 @@ def test_n8n_readme_verification_inventory_reports_five_workflows():
     assert "Assemble ActivityExecution" in text.split("### Verification")[-1].split(
         "## General rule"
     )[0]
+
+
+def test_active_docs_and_manager_script_reject_stale_four_workflow_counts():
+    """A1 review round 3
+    (coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A1/
+    a3-invoice-review-round3.md): the active inventory is five workflows,
+    including the shared Assemble ActivityExecution subworkflow. Numeric
+    ("4 workflows") and spelled-out ("four workflows") stale counts must not
+    silently return in the root README, the n8n README, or the demo manager
+    script."""
+    for path in (ROOT_README, N8N_README, DEMO_MANAGER_SCRIPT):
+        text = path.read_text(encoding="utf-8")
+        matches = STALE_WORKFLOW_COUNT_RE.findall(text)
+        assert not matches, (
+            f"{path.relative_to(REPO_ROOT)} still contains a stale four-workflow "
+            f"count: {matches!r}"
+        )
 
 
 def test_flow1b_sticky_note_5_describes_only_ai_profile_resolution():

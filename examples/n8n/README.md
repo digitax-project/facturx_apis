@@ -590,7 +590,7 @@ Structured Regression workflow, never committed separately):
 | Unrecognized file content | `nicht_pruefbar` / `technical_review` | real API `415`, `UNSUPPORTED_CONTENT_TYPE`, ~0.091s, not retried |
 | No file uploaded | `nicht_pruefbar` / `technical_review` | `MISSING_INVOICE_FILE` |
 | API unreachable | `nicht_pruefbar` / `technical_review` | `CAPABILITIES_SERVICE_UNAVAILABLE`, ~14.8s (bounded retry), recovered immediately on API restart |
-| Double import (all four workflows, twice) | no duplicates | `n8n list:workflow` shows exactly one entry per workflow id after re-importing all files twice |
+| Double import (all five workflows, twice) | no duplicates | `n8n list:workflow` shows exactly one entry per workflow id after re-importing all files twice |
 
 ### Batch and profile-comparison demo
 
