@@ -91,7 +91,7 @@ $LockfilePath = Join-Path $N8nDir "activity_binding.invoice_intake.json"
 
 $WorkflowFileNames = @(
     "digitax_invoice_phase1_flow1a_upload_v1_0_0.json",
-    "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json",
+    "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json",
     "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json",
     "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json"
 )

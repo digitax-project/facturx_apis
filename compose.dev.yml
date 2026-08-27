@@ -70,6 +70,12 @@ services:
       - "5679:5678"
     environment:
       - FACTURX_API_BASE_URL=http://api:6969
+      # A6a synthetic TCMS demo (Batch Item v1.1.0): points the gated
+      # DigiTax Risk Review call at a locally-run reqeli API (separate
+      # repository, not started by this compose file) -- see
+      # examples/n8n/docker-compose.phase1-upload-demo.yml for the same
+      # variable and its full rationale. Override if you run it elsewhere.
+      - FACTURX_RISK_REVIEW_API_BASE_URL=${FACTURX_RISK_REVIEW_API_BASE_URL:-http://host.docker.internal:8090}
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_DIAG_ENABLED=false
       # P2.1 Wave 1 A5 Stage 1: Code nodes generate secure correlationId/

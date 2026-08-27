@@ -57,6 +57,11 @@ section.
 ## Required environment/credentials
 
 - `FACTURX_API_BASE_URL`
+- `FACTURX_RISK_REVIEW_API_BASE_URL` -- base URL of the accepted DigiTax
+  Risk Review service (`POST /v1/risk-review`), used only by Batch Item
+  v1.1.0's gated advisory step (A6a synthetic TCMS demo); never called for a
+  clean (`unauffaellig`) report. That service is a separate repository, not
+  bundled or started by any compose file in this repository.
 - `PDF_EXTRACTION_API_BASE_URL`
 - organization master-data credential/reference
 - optional VAT validation credential

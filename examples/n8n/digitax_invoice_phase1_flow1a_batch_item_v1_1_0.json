@@ -1,0 +1,526 @@
+{
+  "id": "digitax-invoice-phase1-batch-item",
+  "name": "DigiTax | Invoice Phase 1 | Flow 1a | Batch Item | v1.1.0",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "phase1-invoice-batch-item",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1000001-0000-4000-8000-000000000001",
+      "name": "01.1 Receive batch item",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        0
+      ],
+      "webhookId": "digitax-phase1-invoice-batch-item"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/process",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "invoiceFile"
+            },
+            {
+              "parameterType": "formData",
+              "name": "organizationId",
+              "value": "={{ $('01.1 Receive batch item').item.json.body.organizationId }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $('01.2 Build run context').item.json.correlationId }}"
+            }
+          ]
+        }
+      },
+      "id": "b1000002-0000-4000-8000-000000000002",
+      "name": "03.1 Run DigiTax controls",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "position": [
+        -660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst attemptStart = $('01.3 Mark phase1 attempt start').item.json.phase1AttemptStartedAt;\nconst response = $input.first().json;\nconst statusCode = response.statusCode;\nconst body = response.body || {};\n\nif (statusCode !== undefined && statusCode >= 200 && statusCode < 300 && body.phase1ControlReport) {\n  return [{\n    json: {\n      processInstanceId: ctx.processInstanceId,\n      correlationId: ctx.correlationId,\n      workflowId: $workflow.id,\n      receivedAt: ctx.receivedAt,\n      outcome: \"REPORT\",\n      report: body.phase1ControlReport,\n      httpErrorCode: null,\n      n8nErrorCode: null,\n      explanation: null,\n      phase1AttemptStartedAt: attemptStart,\n      gateDecisionAt: null,\n      callerOk: true,\n      callerStatusCode: statusCode,\n      canonicalInvoice: body.canonicalInvoice,\n    },\n  }];\n}\n\nif (statusCode !== undefined) {\n  const detail = body.detail && typeof body.detail === \"object\" ? body.detail : {};\n  const httpErrorCode = detail.error_code || \"BATCH_ITEM_PROCESSING_FAILED\";\n  const callerDetail = detail.detail || response.message || \"Invoice processing failed.\";\n  return [{\n    json: {\n      processInstanceId: ctx.processInstanceId,\n      correlationId: ctx.correlationId,\n      workflowId: $workflow.id,\n      receivedAt: ctx.receivedAt,\n      outcome: \"HTTP_ERROR\",\n      report: null,\n      httpErrorCode,\n      n8nErrorCode: null,\n      explanation: callerDetail,\n      phase1AttemptStartedAt: attemptStart,\n      gateDecisionAt: null,\n      callerOk: false,\n      callerStatusCode: statusCode,\n      callerErrorCode: httpErrorCode,\n      callerDetail,\n    },\n  }];\n}\n\n// No statusCode at all: a genuine connection-level failure (03.1's error output).\nconst errObj = response.error || {};\nconst errMessage = (errObj.message || errObj || response.message || \"\").toString();\nconst errCode = (errObj.code || \"\").toString();\nconst isTimeout = /ETIMEDOUT|ECONNABORTED/i.test(errCode) || /timeout/i.test(errMessage);\nconst outcome = isTimeout ? \"TIMEOUT\" : \"TRANSPORT_FAILURE\";\nconst n8nErrorCode = isTimeout ? \"INVOICE_PROCESSING_SERVICE_TIMEOUT\" : \"INVOICE_PROCESSING_SERVICE_UNAVAILABLE\";\nconst explanation = errMessage || \"Invoice processing failed.\";\n\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome,\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode,\n    explanation,\n    phase1AttemptStartedAt: attemptStart,\n    gateDecisionAt: null,\n    callerOk: false,\n    callerStatusCode: 503,\n    callerErrorCode: n8nErrorCode,\n    callerDetail: explanation,\n  },\n}];\n"
+      },
+      "id": "b1000003-0000-4000-8000-000000000003",
+      "name": "04.1 Build control report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b1000004-0000-4000-8000-000000000004",
+      "name": "04.2 Respond to batch caller",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 01 Input and context",
+        "height": 100,
+        "width": 300,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -160
+      ],
+      "id": "note-1a-batch-00",
+      "name": "Sticky Note 0"
+    },
+    {
+      "parameters": {
+        "content": "## 03 DigiTax controls\n(real Phase-1 API boundary)",
+        "height": 120,
+        "width": 280,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -680,
+        -160
+      ],
+      "id": "note-1a-batch-01",
+      "name": "Sticky Note 1"
+    },
+    {
+      "parameters": {
+        "content": "## 04 Control report and routing\n(routing handled by the caller --\nsee Flow 1a Batch Demo)",
+        "height": 140,
+        "width": 420,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -440,
+        -160
+      ],
+      "id": "note-1a-batch-02",
+      "name": "Sticky Note 2"
+    },
+    {
+      "parameters": {
+        "content": "## VERSION INFO\nWorkflow: DigiTax | Invoice Phase 1 | Flow 1a | Batch Item | v1.1.0\nStatus: demo-ready (active, subworkflow/helper for Flow 1a Batch Demo\nat /demo/batch, AND the caller for the A6a synthetic TCMS demo)\nBoundary: one invoice file from the batch caller -> Phase 1 API -> JSON\ncontrol report + ActivityExecution -> gated DigiTax Risk Review\n(/v1/risk-review, only for a finding-bearing report) -> bounded result\nbundle. n8n never calls TCMS directly (A6a-auth-boundary-amendment.md).\nAPI/control contract: catalogVersion 0.3.0, control profile per organizationId\nRisk Review contract: RiskReviewRequest/Report v1.1.0\nLast verified: 2026-08-27 (n8n 2.33.7)\nSource: digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json",
+        "height": 260,
+        "width": 460,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -420
+      ],
+      "id": "note-1a-batch-version",
+      "name": "Version Info"
+    },
+    {
+      "parameters": {
+        "jsCode": "// No weak fallback: a missing crypto.randomUUID must fail visibly rather\n// than mint a low-entropy identity for evidence.\n// The n8n JS Task Runner sandbox does not expose a bare `crypto` global\n// (confirmed against the real pinned n8nio/n8n:2.33.7 image) -- the built-in\n// must be required explicitly, and require() itself is denied unless\n// allow-listed (NODE_FUNCTION_ALLOW_BUILTIN=crypto, set on the n8n\n// container -- see docker-compose.phase1-upload-demo.yml). No weak\n// fallback: an unavailable/disallowed crypto module must fail visibly\n// rather than mint a low-entropy identity for evidence.\nlet randomUUID;\ntry {\n  randomUUID = require(\"crypto\").randomUUID;\n} catch (e) {\n  randomUUID = undefined;\n}\nif (typeof randomUUID !== \"function\") {\n  throw new Error(\n    \"SECURE_UUID_UNAVAILABLE: refusing to mint a weak identifier for correlationId/processInstanceId without crypto.randomUUID() (require(\\\"crypto\\\") must be allow-listed via NODE_FUNCTION_ALLOW_BUILTIN=crypto on the n8n instance).\"\n  );\n}\nconst correlationId = randomUUID();\nconst processInstanceId = randomUUID();\n\nconst item = $input.first();\nreturn [{\n  json: {\n    ...item.json,\n    correlationId,\n    processInstanceId,\n    receivedAt: new Date().toISOString(),\n  },\n  binary: item.binary,\n}];\n"
+      },
+      "id": "b1000005-0000-4000-8000-000000000005",
+      "name": "01.2 Build run context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nreturn [{ json: { ...item.json, phase1AttemptStartedAt: new Date().toISOString() }, binary: item.binary }];\n"
+      },
+      "id": "b1000006-0000-4000-8000-000000000006",
+      "name": "01.3 Mark phase1 attempt start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -740,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "digitax-invoice-phase1-shared-assemble-activity-execution",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "b1000007-0000-4000-8000-000000000007",
+      "name": "Call Assemble ActivityExecution",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reconciles the shared subworkflow's minimal { activityExecution } return\n// with 04.1's own envelope (04.1 is this workflow's sole, unambiguous\n// predecessor here -- no branch multiplicity to resolve) to rebuild the\n// exact caller-facing batch-item response shape the Batch Demo caller\n// already depends on.\nconst envelope = $('04.1 Build control report').item.json;\nconst { activityExecution } = $input.first().json;\n\nconst responseBody = envelope.outcome === \"REPORT\"\n  ? { ok: true, statusCode: envelope.callerStatusCode, canonicalInvoice: envelope.canonicalInvoice, phase1ControlReport: envelope.report }\n  : { ok: false, statusCode: envelope.callerStatusCode, errorCode: envelope.callerErrorCode, detail: envelope.callerDetail };\n\nreturn [{ json: { ...responseBody, activityExecution } }];\n"
+      },
+      "id": "b1000008-0000-4000-8000-000000000008",
+      "name": "Merge ActivityExecution into outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// A6a synthetic TCMS demo: decide whether the DigiTax Risk Review advisory\n// call is needed at all, per the accepted A6a-auth-boundary-amendment.md\n// boundary (\"call DigiTax Risk Review only when the accepted gate requires\n// it\"). This node never recomputes or re-implements a Phase-1 control -- it\n// only reads the already-authoritative phase1ControlReport.status field the\n// real API produced, exactly as documented in\n// docs/invoice_phase1/control_catalog.md's status aggregation rules\n// (\"unauffaellig: all applicable automated controls passed\").\n//\n// - no report at all (ok === false, a technical/HTTP failure upstream) ->\n//   the advisory branch cannot run either; routingStatus TECHNICAL_FAILURE.\n// - report.status === \"unauffaellig\" -> a clean report; stop the advisory\n//   branch with NO_RISK_REVIEW_REQUIRED and create no request at all (per\n//   A6a-flow1a-synthetic-demo-request.md point 5), saving the round trip.\n// - otherwise -> a finding-bearing report; build the exact RiskReviewRequest\n//   v1 body from the report's own non-passed controls.\nconst merged = $input.first().json;\nconst ctx = $('01.2 Build run context').item.json;\nconst organizationId = $('01.1 Receive batch item').item.json.body.organizationId;\n\nconst ok = merged.ok === true;\nconst report = ok ? merged.phase1ControlReport : null;\nconst activityExecution = merged.activityExecution;\n\nif (!ok || !report) {\n  return [{\n    json: {\n      ...merged,\n      needsRiskReview: false,\n      routingStatus: \"TECHNICAL_FAILURE\",\n      riskReviewReport: null,\n    },\n  }];\n}\n\nif (report.status === \"unauffaellig\") {\n  return [{\n    json: {\n      ...merged,\n      needsRiskReview: false,\n      routingStatus: \"NO_RISK_REVIEW_REQUIRED\",\n      riskReviewReport: null,\n    },\n  }];\n}\n\n// Finding-bearing report: select exactly the controls the accepted\n// RiskReviewRequest v1 schema accepts as findings (failed / not_reliable /\n// not_run -- never \"passed\" or \"not_applicable\"). officialRuleIds is\n// populated only from a control's own structured schematronFindings (e.g.\n// STR-004); every other control reports an empty array, never invented.\nconst findings = (report.controls || [])\n  .filter((c) => [\"failed\", \"not_reliable\", \"not_run\"].includes(c.outcome))\n  .map((c) => ({\n    controlId: c.controlId,\n    outcome: c.outcome,\n    severity: c.severity,\n    reasonCodes: c.reasonCodes || [],\n    message: c.message ?? null,\n    evidenceRefs: c.evidenceRefs || [],\n    ruleVersion: c.ruleVersion,\n    officialRuleIds:\n      c.details && Array.isArray(c.details.schematronFindings)\n        ? c.details.schematronFindings.map((f) => f.ruleId)\n        : [],\n  }));\n\n// SHA-256 over the exact, already-assembled evidence objects -- computed\n// here, once, from the canonical JS object serialization this same workflow\n// just produced; never recomputed by DigiTax Risk Review itself, and never\n// mutated afterward. This is deliberately not a new identity concept: refs\n// follow the same evidence:// convention already used in the accepted\n// DigiTax Risk Review request fixtures.\nconst nodeCrypto = require(\"crypto\");\nconst activityExecutionSha256 = nodeCrypto\n  .createHash(\"sha256\")\n  .update(JSON.stringify(activityExecution))\n  .digest(\"hex\");\nconst controlReportSha256 = nodeCrypto\n  .createHash(\"sha256\")\n  .update(JSON.stringify(report))\n  .digest(\"hex\");\n\nconst riskReviewRequest = {\n  schemaVersion: \"1.1.0\",\n  // requestId/correlationId are never freshly minted here -- they reuse the\n  // two secure identifiers 01.2 already generated once for this run\n  // (processInstanceId is otherwise evidence-only and never sent to any\n  // API; correlationId already went to the Phase-1 API as\n  // X-Correlation-ID). Reusing processInstanceId as requestId is what makes\n  // a direct replay of this exact request body against DigiTax Risk Review\n  // provably idempotent -- see the A6a evidence folder's retry case.\n  requestId: ctx.processInstanceId,\n  correlationId: ctx.correlationId,\n  organizationId,\n  processId: activityExecution.definitionRef.processId,\n  processVersion: activityExecution.definitionRef.processVersion,\n  activityId: activityExecution.definitionRef.activityId,\n  activityVersion: activityExecution.definitionRef.activityVersion,\n  processInstanceId: ctx.processInstanceId,\n  sourceExecutionId: activityExecution.executionId,\n  activityExecutionRef: `evidence://activity-execution/${activityExecution.executionId}`,\n  activityExecutionSha256,\n  controlReportRef: `evidence://phase1-control-report/${report.reportId}`,\n  controlReportSha256,\n  findings,\n  riskCatalogVersion: \"flow1a-risk-catalog-2026-08-14\",\n  triggerPolicyVersion: \"flow1a-trigger-policy-1.0.0\",\n};\n\nreturn [{\n  json: {\n    ...merged,\n    needsRiskReview: true,\n    riskReviewRequest,\n  },\n}];\n"
+      },
+      "id": "b1000010-0000-4000-8000-000000000010",
+      "name": "04.3 Evaluate risk review gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-needs-risk-review",
+              "leftValue": "={{ $json.needsRiskReview }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000009-0000-4000-8000-000000000009",
+      "name": "04.4 Route by risk review need",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURX_RISK_REVIEW_API_BASE_URL }}/v1/risk-review",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.riskReviewRequest }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "b100000a-0000-4000-8000-00000000000a",
+      "name": "04.5 Run DigiTax Risk Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "position": [
+        80,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Never re-derives or rewrites the deterministic finding: on a real 2xx the\n// exact schema-valid RiskReviewReport is attached verbatim, and its own\n// `disposition` field (already one of NO_RISK_REVIEW_REQUIRED /\n// RISK_REVIEW_PROPOSED / EVIDENCE_INSUFFICIENT / TECHNICAL_FAILURE -- the\n// same enum this bundle's routingStatus uses) becomes routingStatus\n// unchanged. Any non-2xx or connection-level failure from the DigiTax Risk\n// Review call itself is a TECHNICAL_FAILURE of the *advisory* branch only --\n// it never discards or overwrites the already-produced, already-assembled\n// phase1ControlReport/activityExecution evidence, which the prior node\n// (04.3) still carries through unchanged.\nconst prior = $('04.3 Evaluate risk review gate').item.json;\nconst response = $input.first().json;\nconst statusCode = response.statusCode;\nconst body = response.body || {};\n\nif (statusCode !== undefined && statusCode >= 200 && statusCode < 300 && body.disposition) {\n  return [{\n    json: {\n      ...prior,\n      riskReviewReport: body,\n      routingStatus: body.disposition,\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    ...prior,\n    riskReviewReport: null,\n    routingStatus: \"TECHNICAL_FAILURE\",\n  },\n}];\n"
+      },
+      "id": "b100000b-0000-4000-8000-00000000000b",
+      "name": "04.6 Handle risk review response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Final convergence point for both the \"no risk review needed/possible\"\n// gate branch (04.3, needsRiskReview === false) and the real call branch\n// (04.6). Builds the bounded result bundle required by\n// A6a-auth-boundary-amendment.md -- phase1ControlReport, activityExecution,\n// optional riskReviewReport, and routingStatus -- additively alongside the\n// pre-existing {ok, statusCode, canonicalInvoice} / {ok:false, errorCode,\n// detail} shape the Flow 1a Batch Demo browser dashboard already depends on\n// (examples/n8n/README.md's \"Batch and profile-comparison demo\" section),\n// so this extension never breaks that existing caller.\nconst e = $input.first().json;\n\nconst bundle = e.ok\n  ? {\n      ok: true,\n      statusCode: e.statusCode,\n      canonicalInvoice: e.canonicalInvoice,\n      phase1ControlReport: e.phase1ControlReport,\n      activityExecution: e.activityExecution,\n      riskReviewReport: e.riskReviewReport,\n      routingStatus: e.routingStatus,\n    }\n  : {\n      ok: false,\n      statusCode: e.statusCode,\n      errorCode: e.errorCode,\n      detail: e.detail,\n      phase1ControlReport: null,\n      activityExecution: e.activityExecution,\n      riskReviewReport: null,\n      routingStatus: e.routingStatus,\n    };\n\nreturn [{ json: bundle }];\n"
+      },
+      "id": "b100000c-0000-4000-8000-00000000000c",
+      "name": "04.7 Assemble result bundle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 04b DigiTax Risk Review (advisory, gated)\ncalls the accepted /v1/risk-review only for a\nfinding-bearing report; n8n never calls TCMS",
+        "height": 140,
+        "width": 420,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        40,
+        -200
+      ],
+      "id": "note-1a-batch-03",
+      "name": "Sticky Note 3"
+    }
+  ],
+  "connections": {
+    "01.1 Receive batch item": {
+      "main": [
+        [
+          {
+            "node": "01.2 Build run context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03.1 Run DigiTax controls": {
+      "main": [
+        [
+          {
+            "node": "04.1 Build control report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "04.1 Build control report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.1 Build control report": {
+      "main": [
+        [
+          {
+            "node": "Call Assemble ActivityExecution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.2 Build run context": {
+      "main": [
+        [
+          {
+            "node": "01.3 Mark phase1 attempt start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.3 Mark phase1 attempt start": {
+      "main": [
+        [
+          {
+            "node": "03.1 Run DigiTax controls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Assemble ActivityExecution": {
+      "main": [
+        [
+          {
+            "node": "Merge ActivityExecution into outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge ActivityExecution into outcome": {
+      "main": [
+        [
+          {
+            "node": "04.3 Evaluate risk review gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.3 Evaluate risk review gate": {
+      "main": [
+        [
+          {
+            "node": "04.4 Route by risk review need",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.4 Route by risk review need": {
+      "main": [
+        [
+          {
+            "node": "04.5 Run DigiTax Risk Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "04.7 Assemble result bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.5 Run DigiTax Risk Review": {
+      "main": [
+        [
+          {
+            "node": "04.6 Handle risk review response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "04.6 Handle risk review response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.6 Handle risk review response": {
+      "main": [
+        [
+          {
+            "node": "04.7 Assemble result bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04.7 Assemble result bundle": {
+      "main": [
+        [
+          {
+            "node": "04.2 Respond to batch caller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

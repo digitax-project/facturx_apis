@@ -5,7 +5,7 @@ WORKFLOW_PATH = (
     Path(__file__).parent.parent
     / "examples"
     / "n8n"
-    / "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json"
+    / "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json"
 )
 
 
@@ -93,7 +93,89 @@ def test_both_controls_outputs_feed_call_assemble_via_build_control_report():
     assert targets == {BUILD_REPORT_NODE}, "both success and error outputs must converge on the classifier"
     assert data["connections"][BUILD_REPORT_NODE]["main"][0][0]["node"] == CALL_ASSEMBLE_NODE
     assert data["connections"][CALL_ASSEMBLE_NODE]["main"][0][0]["node"] == MERGE_NODE
-    assert data["connections"][MERGE_NODE]["main"][0][0]["node"] == RESPOND_NODE
+    assert data["connections"][MERGE_NODE]["main"][0][0]["node"] == RISK_REVIEW_GATE_NODE
+
+
+# ---------------------------------------------------------------------------
+# A6a synthetic TCMS demo extension (v1.1.0): gated DigiTax Risk Review call
+# and bounded result bundle. See examples/n8n/README.md's "A6a synthetic
+# TCMS demo extension" section and
+# coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md.
+# ---------------------------------------------------------------------------
+
+RISK_REVIEW_GATE_NODE = "04.3 Evaluate risk review gate"
+RISK_REVIEW_ROUTE_NODE = "04.4 Route by risk review need"
+RISK_REVIEW_CALL_NODE = "04.5 Run DigiTax Risk Review"
+RISK_REVIEW_HANDLE_NODE = "04.6 Handle risk review response"
+ASSEMBLE_BUNDLE_NODE = "04.7 Assemble result bundle"
+
+
+def test_risk_review_extension_wires_gate_through_to_respond_node():
+    data = _workflow()
+    assert data["connections"][RISK_REVIEW_GATE_NODE]["main"][0][0]["node"] == RISK_REVIEW_ROUTE_NODE
+    route_branches = data["connections"][RISK_REVIEW_ROUTE_NODE]["main"]
+    assert route_branches[0][0]["node"] == RISK_REVIEW_CALL_NODE
+    assert route_branches[1][0]["node"] == ASSEMBLE_BUNDLE_NODE
+    call_branches = data["connections"][RISK_REVIEW_CALL_NODE]["main"]
+    targets = {edge["node"] for branch in call_branches for edge in branch}
+    assert targets == {RISK_REVIEW_HANDLE_NODE}, "both success and error outputs must converge on the handler"
+    assert data["connections"][RISK_REVIEW_HANDLE_NODE]["main"][0][0]["node"] == ASSEMBLE_BUNDLE_NODE
+    assert data["connections"][ASSEMBLE_BUNDLE_NODE]["main"][0][0]["node"] == RESPOND_NODE
+
+
+def test_risk_review_gate_never_calls_the_service_for_a_clean_report():
+    nodes = {node["name"]: node for node in _workflow()["nodes"]}
+    code = nodes[RISK_REVIEW_GATE_NODE]["parameters"]["jsCode"]
+    assert '"unauffaellig"' in code
+    assert "needsRiskReview: false" in code
+    assert '"NO_RISK_REVIEW_REQUIRED"' in code
+    assert '"TECHNICAL_FAILURE"' in code
+
+
+def test_risk_review_gate_never_recomputes_a_control_and_reuses_run_identity():
+    nodes = {node["name"]: node for node in _workflow()["nodes"]}
+    code = nodes[RISK_REVIEW_GATE_NODE]["parameters"]["jsCode"]
+    # Findings are selected, never recomputed: no new control-evaluation logic.
+    assert '["failed", "not_reliable", "not_run"]' in code
+    # Identity propagation: no fresh UUID minted for the Risk Review call.
+    assert "randomUUID" not in code
+    assert "requestId: ctx.processInstanceId" in code
+    assert "correlationId: ctx.correlationId" in code
+    assert 'schemaVersion: "1.1.0"' in code
+
+
+def test_risk_review_call_is_bounded_retry_and_never_throws_on_http_error():
+    nodes = {node["name"]: node for node in _workflow()["nodes"]}
+    node = nodes[RISK_REVIEW_CALL_NODE]
+    assert node["parameters"]["url"] == "={{ $env.FACTURX_RISK_REVIEW_API_BASE_URL }}/v1/risk-review"
+    assert node["retryOnFail"] is True
+    assert node["maxTries"] == 3
+    assert node["onError"] == "continueErrorOutput"
+    assert node["parameters"]["options"]["response"]["response"]["neverError"] is True
+    assert "credentials" not in node
+
+
+def test_risk_review_response_passes_disposition_through_as_routing_status():
+    nodes = {node["name"]: node for node in _workflow()["nodes"]}
+    code = nodes[RISK_REVIEW_HANDLE_NODE]["parameters"]["jsCode"]
+    assert "riskReviewReport: body" in code
+    assert "routingStatus: body.disposition" in code
+    assert '"TECHNICAL_FAILURE"' in code
+
+
+def test_assemble_result_bundle_is_additive_to_existing_dashboard_shape():
+    nodes = {node["name"]: node for node in _workflow()["nodes"]}
+    code = nodes[ASSEMBLE_BUNDLE_NODE]["parameters"]["jsCode"]
+    for field in ("ok", "statusCode", "canonicalInvoice", "errorCode", "detail"):
+        assert field in code, f"existing Batch Demo dashboard field {field!r} must be preserved"
+    for field in ("phase1ControlReport", "activityExecution", "riskReviewReport", "routingStatus"):
+        assert field in code, f"bounded result bundle field {field!r} must be present"
+
+
+def test_no_ai_execution_profile_ref_is_set_for_the_risk_review_request():
+    nodes = {node["name"]: node for node in _workflow()["nodes"]}
+    code = nodes[RISK_REVIEW_GATE_NODE]["parameters"]["jsCode"]
+    assert "aiExecutionProfileRef" not in code
 
 
 def test_build_control_report_emits_normalized_envelope():

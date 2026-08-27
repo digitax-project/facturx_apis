@@ -46,7 +46,7 @@ workflow_file_for_id() {
     digitax-invoice-phase1-shared-assemble-activity-execution) echo "digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json" ;;
     digitax-invoice-phase1-structured-demo) echo "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json" ;;
     digitax-invoice-phase1-upload-demo) echo "digitax_invoice_phase1_flow1a_upload_v1_0_0.json" ;;
-    digitax-invoice-phase1-batch-item) echo "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json" ;;
+    digitax-invoice-phase1-batch-item) echo "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json" ;;
     digitax-invoice-phase1-flow1b-pdf-ocr) echo "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json" ;;
     *) echo "" ;;
   esac

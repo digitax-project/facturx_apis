@@ -22,7 +22,7 @@ EXPECTED_WORKFLOW_FILES = (
     "digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json",
     "digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json",
     "digitax_invoice_phase1_flow1a_upload_v1_0_0.json",
-    "digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json",
+    "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json",
     "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json",
 )
 EXPECTED_ACTIVE_IDS = {
@@ -122,3 +122,24 @@ def test_compose_dev_yml_describes_five_workflows_not_four():
     text = COMPOSE_DEV_PATH.read_text(encoding="utf-8")
     assert "four versioned" not in text.lower(), "compose.dev.yml's own description is stale (still says four)"
     assert "five versioned" in text.lower()
+
+
+def test_compose_files_set_risk_review_base_url_on_runtime_n8n_service():
+    """A6a synthetic TCMS demo: Batch Item v1.1.0's gated advisory step reads
+    FACTURX_RISK_REVIEW_API_BASE_URL. Both the dev stack and the presentation
+    demo stack's long-running n8n service must set it, or every
+    finding-bearing case would fail closed with routingStatus
+    TECHNICAL_FAILURE."""
+    upload_demo_compose = N8N_DIR / "docker-compose.phase1-upload-demo.yml"
+
+    for compose_path, service_pattern in (
+        (COMPOSE_DEV_PATH, r"\n  n8n:\n(.*?)(?=\n  \w|\nnetworks:|\Z)"),
+        (upload_demo_compose, r"\n  n8n:\n(.*?)(?=\nnetworks:|\Z)"),
+    ):
+        text = compose_path.read_text(encoding="utf-8")
+        match = re.search(service_pattern, text, re.DOTALL)
+        assert match, f"could not locate the 'n8n:' service block in {compose_path}"
+        assert "FACTURX_RISK_REVIEW_API_BASE_URL" in match.group(1), (
+            f"{compose_path} must set FACTURX_RISK_REVIEW_API_BASE_URL on the "
+            "runtime n8n service"
+        )

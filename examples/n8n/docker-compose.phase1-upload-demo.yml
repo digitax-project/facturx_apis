@@ -42,6 +42,15 @@ services:
       # not host.docker.internal -- both services are on the same isolated
       # network, so this doesn't depend on Docker Desktop's host gateway.
       - FACTURX_API_BASE_URL=http://api:6969
+      # A6a synthetic TCMS demo (Batch Item v1.1.0): the DigiTax Risk Review
+      # service (reqeli, a separate repository, never bundled or started by
+      # this compose file) is expected to already be running on the host,
+      # e.g. `powershell -File scripts/run_api.ps1` from that repository
+      # (default 127.0.0.1:8090) -- host.docker.internal reaches it from
+      # inside this container the same way FACTURX_API_BASE_URL reached
+      # host-run services before this stack containerized the API too.
+      # Override if you run it on a different host/port.
+      - FACTURX_RISK_REVIEW_API_BASE_URL=${FACTURX_RISK_REVIEW_API_BASE_URL:-http://host.docker.internal:8090}
       # n8n >=2.x blocks $env.* expression access by default; this workflow
       # family reads its API base URL that way (see examples/n8n/README.md
       # for the tradeoff against an n8n Variable/credential).

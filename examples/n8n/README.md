@@ -22,7 +22,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Structured Regression \| v1.0.0` | `digitax_invoice_phase1_flow1a_structured_regression_v1_0_0.json` | `digitax-invoice-phase1-structured-demo` | helper (inactive, CI/regression only) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Upload Demo \| v1.0.0` | `digitax_invoice_phase1_flow1a_upload_v1_0_0.json` | `digitax-invoice-phase1-upload-demo` | demo-ready (active) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Demo \| v1.0.0` | n/a -- browser page `facturx/phase1/static/batch_demo.html`, not an n8n workflow | n/a | demo-ready (served whenever `FACTURX_ENABLE_DEMO_ENDPOINTS=true`) |
-| `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.0.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo) |
+| `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.1.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo AND the A6a synthetic TCMS demo caller) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.3.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
 | `DigiTax \| Invoice Phase 1 \| Shared \| Assemble ActivityExecution \| v1.0.0` | `digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json` | `digitax-invoice-phase1-shared-assemble-activity-execution` | demo-ready (active/published -- no webhook, never externally reachable, but n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow invoke an unpublished target at all) |
 
@@ -613,30 +613,84 @@ and selected profile:
 ./examples/n8n/scripts/Test-Phase1DemoMatrix.ps1
 ```
 
-Result (2026-08-10, n8n 2.33.7, against the renamed/restructured
-`digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json`): **all 7 generated
-cases pass** -- `x_valid`, `x_missing_supplier_identifier`,
-`x_incorrect_payable`, `x_shared_unapproved_supplier` (all
-`inbound-starter-de-v1`), and `y_valid`, `y_unapproved_supplier`,
-`y_multiple_mismatches` (all `inbound-operating-de-v1`).
+Result (2026-08-10, n8n 2.33.7, against the then-current
+`digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json`, since superseded by
+`v1_1_0` below): **all 7 generated cases pass** -- `x_valid`,
+`x_missing_supplier_identifier`, `x_incorrect_payable`,
+`x_shared_unapproved_supplier` (all `inbound-starter-de-v1`), and `y_valid`,
+`y_unapproved_supplier`, `y_multiple_mismatches` (all
+`inbound-operating-de-v1`).
 
 `DigiTax | Invoice Phase 1 | Flow 1a | Batch Demo | v1.0.0` is the browser
 dashboard served by the demo API at `http://localhost:6970/demo/batch` --
 not an n8n workflow itself, so it has no export file or workflow id of its
 own; it's documented here under the same naming scheme purely for
 presentation consistency. Each selected file is sent through the separate
-`digitax_invoice_phase1_flow1a_batch_item_v1_0_0.json`
+`digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json`
 (`phase1-invoice-batch-item` webhook, node chain
 `01.1 Receive batch item -> 01.2 Build run context -> 01.3 Mark phase1
 attempt start -> 03.1 Run DigiTax controls (sends X-Correlation-ID) ->
 04.1 Build control report -> Call Assemble ActivityExecution -> Merge
-ActivityExecution into outcome -> 04.2 Respond to batch caller`). The
-caller-facing JSON shape (`{ok, statusCode, canonicalInvoice,
-phase1ControlReport}` / `{ok: false, statusCode, errorCode, detail}`) is
-unchanged; `activityExecution` is attached alongside it. The dashboard performs no invoice
-checks itself; it only consolidates API reports and requests an XLSX
-serialization for export -- routing/aggregation across the batch is the
-caller's responsibility, not this subworkflow's.
+ActivityExecution into outcome -> 04.3 Evaluate risk review gate -> 04.4
+Route by risk review need -> [04.5 Run DigiTax Risk Review -> 04.6 Handle
+risk review response |] -> 04.7 Assemble result bundle -> 04.2 Respond to
+batch caller`). The pre-existing caller-facing JSON shape (`{ok, statusCode,
+canonicalInvoice, phase1ControlReport}` / `{ok: false, statusCode,
+errorCode, detail}`) is unchanged, so the Batch Demo dashboard above is
+unaffected; `activityExecution`, `riskReviewReport`, and `routingStatus` are
+attached alongside it -- see "A6a synthetic TCMS demo extension" below. The
+dashboard performs no invoice checks itself; it only consolidates API
+reports and requests an XLSX serialization for export --
+routing/aggregation across the batch is the caller's responsibility, not
+this subworkflow's.
+
+### A6a synthetic TCMS demo extension (v1.1.0, 2026-08-27)
+
+Per `coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md`,
+n8n never authenticates to TCMS directly. Instead, Batch Item v1.1.0 adds a
+gated advisory step and returns a **bounded result bundle** alongside its
+existing dashboard-facing fields, for an authenticated TCMS backend action
+to validate and persist using its own evidence-store services:
+
+- `04.3 Evaluate risk review gate` reads only the already-authoritative
+  `phase1ControlReport.status` the real Phase-1 API produced (no control is
+  re-implemented in n8n). `status === "unauffaellig"` (or no report at all,
+  a technical failure) stops here with `routingStatus`
+  `NO_RISK_REVIEW_REQUIRED` / `TECHNICAL_FAILURE` and **no DigiTax Risk
+  Review call is made** -- matching
+  `A6a-flow1a-synthetic-demo-request.md` point 5 ("for a clean report, stop
+  the advisory branch ... create no Review Case"). Otherwise it builds the
+  exact `RiskReviewRequest v1` body from the report's own non-`passed`
+  controls (`failed`/`not_reliable`/`not_run`), reusing the run's own
+  `correlationId` and `processInstanceId` (never a freshly minted id) --
+  `processInstanceId` becomes the request's `requestId`, which is what makes
+  a direct replay of the same request body against DigiTax Risk Review
+  provably idempotent (see the A6a evidence folder).
+- `04.5 Run DigiTax Risk Review` POSTs to
+  `{{ $env.FACTURX_RISK_REVIEW_API_BASE_URL }}/v1/risk-review` (bounded
+  retry, `neverError`/`fullResponse`, same fail-safe pattern as `03.1`). No
+  `aiExecutionProfileRef` is set, so the accepted service's own deterministic
+  catalog gate runs with zero LLM/provider calls -- consistent with A6a's
+  explicit exclusion of local/cloud AI from this demo.
+- `04.6 Handle risk review response` attaches the exact schema-valid
+  `RiskReviewReport` response verbatim and copies its own `disposition`
+  field into `routingStatus` unchanged; any non-2xx or connection failure
+  from the Risk Review call itself yields `routingStatus`
+  `TECHNICAL_FAILURE` without discarding the already-produced
+  `phase1ControlReport`/`activityExecution`.
+- `04.7 Assemble result bundle` is the single place that shapes the final
+  response: the bounded bundle fields (`phase1ControlReport`,
+  `activityExecution`, `riskReviewReport`, `routingStatus`) are added
+  alongside the pre-existing `{ok, statusCode, canonicalInvoice}` /
+  `{ok: false, statusCode, errorCode, detail}` shape, never replacing it.
+
+n8n never calls any `/api/organizations/.../evidence/...` TCMS route; that
+remains the authenticated TCMS backend action's own responsibility (tracked
+as A5c), started only after this result-bundle shape is frozen.
+`tests/test_n8n_risk_review_integration.py` is the CI structural/contract
+guard for this extension; it is not a substitute for the real E2E evidence
+under `output/demo/invoice_phase1/2026-08-27/a6a-flow1a-tcms-demo/` (outside
+this repository, per the shared coordination workspace convention).
 
 Full detail in `coordination/claude-codex/handover-log.md` and
 `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.
