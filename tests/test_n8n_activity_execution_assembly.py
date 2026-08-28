@@ -169,8 +169,47 @@ def test_report_outcome_maps_to_succeeded():
     assert ae["startedAt"] == "2026-08-14T10:00:00.100Z"
     assert ae["completedAt"] == "2026-08-14T10:00:01.000Z"
     assert ae["executionId"] == "RUN-1"
-    assert ae["controlReportRef"] == "REP-1"
+    # A1 correction round 1 (High-1): A5b requires the qualified semantic
+    # reference, not the bare reportId, in all three locations.
+    assert ae["controlReportRef"] == "phase1-control-report:REP-1"
+    assert ae["outputRefs"] == ["phase1-control-report:REP-1"]
+    assert "phase1-control-report:REP-1" in ae["evidenceRefs"]
+    assert "p1" in ae["evidenceRefs"] and "v1" in ae["evidenceRefs"]
     assert ae["aiBindingRef"] is None
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_control_report_ref_uses_a5b_qualified_semantic_reference():
+    """A1 correction round 1 (High-1) regression guard: enforces A5b's exact
+    semantic qualifier `phase1-control-report:<reportId>`, not merely that
+    controlReportRef/outputRefs/evidenceRefs are JSON Schema strings. Mirrors
+    the exact check the accepted A5b evidenceStoreService.ingestActivityExecution
+    performs (`expectedControlReportRef = \`phase1-control-report:${report.reportId}\``)."""
+    envelope = {
+        **BASE_ENVELOPE,
+        "outcome": "REPORT",
+        "report": {
+            "status": "auffaellig", "routing": "priority_review",
+            "startedAt": "2026-08-14T10:00:00.100Z", "createdAt": "2026-08-14T10:00:01.000Z",
+            "runId": "RUN-QUAL", "reportId": "REP-84CB1F828E62", "sourceSha256": "abc",
+            "controlProfileId": "inbound-starter-de-v1", "controlProfileVersion": "1.0.0",
+            "correlationId": "CORR-1",
+        },
+        "httpErrorCode": None, "n8nErrorCode": None, "explanation": None,
+        "phase1AttemptStartedAt": "2026-08-14T10:00:00.050Z", "gateDecisionAt": None,
+    }
+    out = _run_chain(envelope)
+    assert out["ok"] is True, out
+    ae = out["result"]["activityExecution"]
+    expected_ref = "phase1-control-report:REP-84CB1F828E62"
+    assert ae["controlReportRef"] == expected_ref
+    assert ae["outputRefs"] == [expected_ref]
+    assert expected_ref in ae["evidenceRefs"]
+    assert "inbound-starter-de-v1" in ae["evidenceRefs"]
+    assert "1.0.0" in ae["evidenceRefs"]
+    # The bare, unqualified reportId (A1's rejected shape) must never appear.
+    assert "REP-84CB1F828E62" not in ae["outputRefs"]
+    assert ae["controlReportRef"] != "REP-84CB1F828E62"
 
 
 @pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
