@@ -27,6 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const n8nDir = path.dirname(__dirname);
 const vendorDir = path.join(n8nDir, "vendor", "p2_1");
 const tcmsContractsDir = path.join(n8nDir, "vendor", "tcms_contracts");
+const schemasDir = path.join(n8nDir, "schemas");
 const generatedDir = path.join(n8nDir, "generated");
 const require = createRequire(import.meta.url);
 
@@ -161,7 +162,30 @@ function generateRiskReviewReportValidator() {
   };
 }
 
-function writeProvenance(activityExecutionResult, riskReviewReportResult) {
+function generateResultBundleValidator() {
+  // A6a correction round 1 (plan section 6): the frozen TCMS-facing result
+  // envelope, authored in this repository (not vendored -- A5c does not yet
+  // define its own copy) at examples/n8n/schemas/result-bundle-v1.0.0.schema.json.
+  // Embedded into the Batch Item workflow's "04.7 Assemble result bundle"
+  // node immediately after bundle assembly.
+  const schemaFileName = "result-bundle-v1.0.0.schema.json";
+  const schemaPath = path.join(schemasDir, schemaFileName);
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+
+  const functionSource = compileStandaloneFunction(schema, "validateResultBundle");
+  const fileContent = `${GENERATED_HEADER}${functionSource}\n`;
+
+  mkdirSync(generatedDir, { recursive: true });
+  const outPath = path.join(generatedDir, "validate_result_bundle.generated.js");
+  writeFileSync(outPath, fileContent);
+
+  return {
+    outPath,
+    sourceSha256: sha256Hex(schemaPath),
+  };
+}
+
+function writeProvenance(activityExecutionResult, riskReviewReportResult, resultBundleResult) {
   const humanReviewDecisionSchemaPath = path.join(vendorDir, "human-review-decision.schema.json");
 
   const provenance = {
@@ -180,6 +204,11 @@ function writeProvenance(activityExecutionResult, riskReviewReportResult) {
       generatorVersion: GENERATOR_VERSION,
       status: "GENERATED",
     },
+    "result-bundle": {
+      sourceSha256: resultBundleResult.sourceSha256,
+      generatorVersion: GENERATOR_VERSION,
+      status: "GENERATED",
+    },
   };
 
   const provenancePath = path.join(generatedDir, "validator_provenance.json");
@@ -189,10 +218,12 @@ function writeProvenance(activityExecutionResult, riskReviewReportResult) {
 
 const activityExecutionResult = generateActivityExecutionValidator();
 const riskReviewReportResult = generateRiskReviewReportValidator();
-const provenancePath = writeProvenance(activityExecutionResult, riskReviewReportResult);
+const resultBundleResult = generateResultBundleValidator();
+const provenancePath = writeProvenance(activityExecutionResult, riskReviewReportResult, resultBundleResult);
 
 console.log(`Generated ${activityExecutionResult.outPath}`);
 console.log(`Generated ${riskReviewReportResult.outPath}`);
+console.log(`Generated ${resultBundleResult.outPath}`);
 console.log(`Generated ${provenancePath}`);
 console.log(
   "human-review-decision.schema.json is vendored for atomic P2.1 hash-pinning only; no validator was generated for it (Flow 2 out of scope)."

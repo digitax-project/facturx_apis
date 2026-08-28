@@ -718,17 +718,38 @@ identity). See `tests/test_n8n_batch_item_identity_contract.py`.
   `resultCode` (a different failure mode). Neither path discards the
   already-produced `phase1ControlReport`/`activityExecution`. See
   `tests/test_n8n_risk_review_report_validator.py`.
-- `04.7 Assemble result bundle` is the single place that shapes the final
-  response: the bounded bundle fields (`phase1ControlReport`,
-  `activityExecution`, `riskReviewReport`, `routingStatus`) are added
-  alongside the pre-existing `{ok, statusCode, canonicalInvoice}` /
-  `{ok: false, statusCode, errorCode, detail}` shape, never replacing it.
+- `04.7 Assemble result bundle` is the single place that shapes both the
+  pre-existing top-level dashboard shape (unchanged, `{ok, statusCode,
+  canonicalInvoice, phase1ControlReport, activityExecution,
+  riskReviewReport, routingStatus}` / `{ok: false, statusCode, errorCode,
+  detail, ...}`, plus `resultCode` when 04.6 set one) and, alongside it, one
+  new nested **`resultBundle`** object -- A6a correction round 1's frozen,
+  strict, TCMS-facing contract (plan section 6). It is validated by its own
+  generated validator (compiled from
+  `examples/n8n/schemas/result-bundle-v1.0.0.schema.json` -- authored in
+  this repository, not vendored) immediately after assembly:
+  `additionalProperties: false`, all five properties required
+  (`resultBundleSchemaVersion` const `"1.0.0"`, `phase1ControlReport`
+  object-or-null [null only on a pre-report technical failure],
+  `activityExecution` always an object [never null -- every branch carries
+  one through unconditionally], `riskReviewReport` object-or-null,
+  `routingStatus` an explicit enum of the five values this workflow
+  actually produces: `NO_RISK_REVIEW_REQUIRED`, `RISK_REVIEW_PROPOSED`,
+  `EVIDENCE_INSUFFICIENT`, `TECHNICAL_FAILURE`,
+  `RISK_REVIEW_MISSING_TCMS_ORGANIZATION_ID`). A validator failure here
+  means this workflow itself produced a structurally wrong bundle -- an
+  internal bug, not caller input -- so it throws, the same as 01.4's own
+  ActivityExecution shape guard. **A5c consumes `response.resultBundle`
+  exclusively; the legacy top-level fields (including `resultCode`) are not
+  part of the TCMS contract and may keep evolving independently.** See
+  `tests/test_n8n_result_bundle.py`.
 
 n8n never calls any `/api/organizations/.../evidence/...` TCMS route; that
 remains the authenticated TCMS backend action's own responsibility (tracked
 as A5c), started only after this result-bundle shape is frozen.
 `tests/test_n8n_batch_workflow.py`, `tests/test_n8n_batch_item_identity_contract.py`,
-and `tests/test_n8n_canonical_json.py` are the CI structural/contract guards
+`tests/test_n8n_canonical_json.py`, `tests/test_n8n_risk_review_report_validator.py`,
+and `tests/test_n8n_result_bundle.py` are the CI structural/contract guards
 for this extension; they are not a substitute for the real E2E evidence
 under `output/demo/invoice_phase1/2026-08-27/a6a-flow1a-tcms-demo/` (original
 round) and

@@ -13,5 +13,10 @@
     "sourceSha256": "5e03786b4c964436e0bf510679a72fe2ed769606d733945a56b3a5764905b406",
     "generatorVersion": "1.0.0",
     "status": "GENERATED"
+  },
+  "result-bundle": {
+    "sourceSha256": "a276190388bbcea4ea8fc921d3e7182712e3ef1c976700110ae5b94219f9ecc0",
+    "generatorVersion": "1.0.0",
+    "status": "GENERATED"
   }
 }
