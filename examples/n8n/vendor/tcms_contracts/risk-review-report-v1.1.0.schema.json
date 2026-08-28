@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitax.de/schemas/pilot/risk-review-report/1.1.0",
+  "title": "DigiTax RiskReviewReport v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "reportId",
+    "requestId",
+    "correlationId",
+    "organizationId",
+    "processId",
+    "processVersion",
+    "activityId",
+    "activityVersion",
+    "processInstanceId",
+    "sourceExecutionId",
+    "activityExecutionRef",
+    "activityExecutionSha256",
+    "controlReportRef",
+    "controlReportSha256",
+    "riskCatalogVersionUsed",
+    "triggerPolicyVersionUsed",
+    "disposition",
+    "sourceFindings",
+    "taxRisks",
+    "proposedMeasures",
+    "reviewStatus",
+    "advisoryStatus",
+    "technicalReasonCode",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.1.0" },
+    "reportId": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "correlationId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "organizationId": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "processId": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "processVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "activityId": { "type": "string", "minLength": 1, "maxLength": 150 },
+    "activityVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "processInstanceId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "sourceExecutionId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "activityExecutionRef": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "activityExecutionSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "controlReportRef": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "controlReportSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "organizationBaselineRef": { "type": ["string", "null"], "maxLength": 300 },
+    "riskCatalogVersionUsed": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "triggerPolicyVersionUsed": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "disposition": { "enum": ["NO_RISK_REVIEW_REQUIRED", "RISK_REVIEW_PROPOSED", "EVIDENCE_INSUFFICIENT", "TECHNICAL_FAILURE"] },
+    "sourceFindings": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["controlId", "outcome", "severity", "reasonCodes", "evidenceRefs", "ruleVersion", "officialRuleIds"],
+        "properties": {
+          "controlId": { "type": "string", "minLength": 1, "maxLength": 50 },
+          "outcome": { "enum": ["failed", "not_reliable", "not_run"] },
+          "severity": { "enum": ["info", "warning", "blocking", "technical"] },
+          "reasonCodes": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 150 }, "uniqueItems": true },
+          "evidenceRefs": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 500 }, "uniqueItems": true },
+          "message": { "type": ["string", "null"], "maxLength": 4000 },
+          "ruleVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "officialRuleIds": { "type": "array", "maxItems": 500, "items": { "type": "string", "minLength": 1, "maxLength": 150 }, "uniqueItems": true }
+        }
+      }
+    },
+    "taxRisks": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidateRiskId", "riskStatement", "sourceControlIds", "catalogFindingRefs", "confidence", "status"],
+        "properties": {
+          "candidateRiskId": { "type": "string", "minLength": 1, "maxLength": 150 },
+          "catalogRiskRef": { "type": ["string", "null"], "maxLength": 150 },
+          "riskStatement": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "sourceControlIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "catalogFindingRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 150 }, "uniqueItems": true },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "status": { "const": "PROPOSED" },
+          "sourceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        }
+      }
+    },
+    "proposedMeasures": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["measureId", "measureType", "description", "priority", "status", "riskRefs"],
+        "properties": {
+          "measureId": { "type": "string", "minLength": 1, "maxLength": 150 },
+          "measureType": { "enum": ["IMMEDIATE_ACTION", "PROCESS_IMPROVEMENT", "CONTROL_IMPROVEMENT", "RISK_REGISTER_UPDATE"] },
+          "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "priority": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+          "responsibleRoleRef": { "type": ["string", "null"], "maxLength": 150 },
+          "status": { "const": "PROPOSED" },
+          "riskRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        }
+      }
+    },
+    "reviewStatus": { "enum": ["NO_RISK_REVIEW_REQUIRED", "HUMAN_REVIEW_REQUIRED"] },
+    "advisoryStatus": { "enum": ["NOT_REQUIRED", "NOT_REQUESTED", "COMPLETED", "FAILED"] },
+    "technicalReasonCode": { "type": ["string", "null"], "maxLength": 150 },
+    "modelBinding": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["provider", "model", "promptVersion", "processingLocation"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "modelVersion": { "type": ["string", "null"], "maxLength": 150 },
+        "promptVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "processingLocation": { "enum": ["LOCAL", "CLOUD"] },
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

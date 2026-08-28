@@ -26,6 +26,7 @@ import standaloneCode from "ajv/dist/standalone/index.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const n8nDir = path.dirname(__dirname);
 const vendorDir = path.join(n8nDir, "vendor", "p2_1");
+const tcmsContractsDir = path.join(n8nDir, "vendor", "tcms_contracts");
 const generatedDir = path.join(n8nDir, "generated");
 const require = createRequire(import.meta.url);
 
@@ -136,7 +137,31 @@ function generateActivityExecutionValidator() {
   };
 }
 
-function writeProvenance(activityExecutionResult) {
+function generateRiskReviewReportValidator() {
+  // A6a correction round 1 (plan section 5): the accepted A5b RiskReviewReport
+  // 1.1 schema, vendored verbatim in examples/n8n/vendor/tcms_contracts/ with
+  // its own source hash/provenance (see schema_provenance.json there).
+  // Embedded into the Batch Item workflow's "04.6 Handle risk review
+  // response" node so a 2xx response is only ever accepted when it fully
+  // validates -- never merely presence-checked.
+  const schemaFileName = "risk-review-report-v1.1.0.schema.json";
+  const schemaPath = path.join(tcmsContractsDir, schemaFileName);
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+
+  const functionSource = compileStandaloneFunction(schema, "validateRiskReviewReport");
+  const fileContent = `${GENERATED_HEADER}${functionSource}\n`;
+
+  mkdirSync(generatedDir, { recursive: true });
+  const outPath = path.join(generatedDir, "validate_risk_review_report.generated.js");
+  writeFileSync(outPath, fileContent);
+
+  return {
+    outPath,
+    sourceSha256: sha256Hex(schemaPath),
+  };
+}
+
+function writeProvenance(activityExecutionResult, riskReviewReportResult) {
   const humanReviewDecisionSchemaPath = path.join(vendorDir, "human-review-decision.schema.json");
 
   const provenance = {
@@ -150,6 +175,11 @@ function writeProvenance(activityExecutionResult) {
       generatorVersion: GENERATOR_VERSION,
       status: "DEFERRED_NOT_GENERATED_FLOW_2_OUT_OF_SCOPE",
     },
+    "risk-review-report": {
+      sourceSha256: riskReviewReportResult.sourceSha256,
+      generatorVersion: GENERATOR_VERSION,
+      status: "GENERATED",
+    },
   };
 
   const provenancePath = path.join(generatedDir, "validator_provenance.json");
@@ -158,9 +188,11 @@ function writeProvenance(activityExecutionResult) {
 }
 
 const activityExecutionResult = generateActivityExecutionValidator();
-const provenancePath = writeProvenance(activityExecutionResult);
+const riskReviewReportResult = generateRiskReviewReportValidator();
+const provenancePath = writeProvenance(activityExecutionResult, riskReviewReportResult);
 
 console.log(`Generated ${activityExecutionResult.outPath}`);
+console.log(`Generated ${riskReviewReportResult.outPath}`);
 console.log(`Generated ${provenancePath}`);
 console.log(
   "human-review-decision.schema.json is vendored for atomic P2.1 hash-pinning only; no validator was generated for it (Flow 2 out of scope)."

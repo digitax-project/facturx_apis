@@ -8,5 +8,10 @@
     "sourceSha256": "3d80c0e58424e014261de4e1fb09d8fdab430f24df4d08b47053c95917ae963c",
     "generatorVersion": "1.0.0",
     "status": "DEFERRED_NOT_GENERATED_FLOW_2_OUT_OF_SCOPE"
+  },
+  "risk-review-report": {
+    "sourceSha256": "5e03786b4c964436e0bf510679a72fe2ed769606d733945a56b3a5764905b406",
+    "generatorVersion": "1.0.0",
+    "status": "GENERATED"
   }
 }

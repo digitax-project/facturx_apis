@@ -699,12 +699,25 @@ identity). See `tests/test_n8n_batch_item_identity_contract.py`.
   `aiExecutionProfileRef` is set, so the accepted service's own deterministic
   catalog gate runs with zero LLM/provider calls -- consistent with A6a's
   explicit exclusion of local/cloud AI from this demo.
-- `04.6 Handle risk review response` attaches the exact schema-valid
-  `RiskReviewReport` response verbatim and copies its own `disposition`
-  field into `routingStatus` unchanged; any non-2xx or connection failure
-  from the Risk Review call itself yields `routingStatus`
-  `TECHNICAL_FAILURE` without discarding the already-produced
-  `phase1ControlReport`/`activityExecution`.
+- `04.6 Handle risk review response` (A6a correction round 1, plan section
+  5) accepts a 2xx response only when it fully validates against the
+  accepted RiskReviewReport 1.1 schema -- vendored verbatim in
+  `examples/n8n/vendor/tcms_contracts/` with its own source hash/provenance,
+  compiled by `examples/n8n/scripts/generate-evidence-validators.mjs` into
+  `examples/n8n/generated/validate_risk_review_report.generated.js`, and
+  embedded verbatim into this node (same AJV-standalone pattern as
+  ActivityExecution's own generated validator). On success the exact
+  schema-valid `RiskReviewReport` is attached verbatim and its own
+  `disposition` field becomes `routingStatus` unchanged. A malformed
+  response, an unsupported `schemaVersion`, or an invalid `disposition`
+  value all fail the same generated validator and become
+  `riskReviewReport: null`, `routingStatus: "TECHNICAL_FAILURE"`,
+  `resultCode: "RISK_REVIEW_RESPONSE_SCHEMA_INVALID"` -- never partially
+  trusted. Any non-2xx or connection failure from the Risk Review call
+  itself remains a plain `routingStatus: "TECHNICAL_FAILURE"` with no
+  `resultCode` (a different failure mode). Neither path discards the
+  already-produced `phase1ControlReport`/`activityExecution`. See
+  `tests/test_n8n_risk_review_report_validator.py`.
 - `04.7 Assemble result bundle` is the single place that shapes the final
   response: the bounded bundle fields (`phase1ControlReport`,
   `activityExecution`, `riskReviewReport`, `routingStatus`) are added
