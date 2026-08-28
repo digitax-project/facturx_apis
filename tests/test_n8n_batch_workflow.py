@@ -30,7 +30,12 @@ def test_batch_workflow_is_portable_and_profile_dynamic():
     assert process["parameters"]["url"].startswith("={{ $env.")
     parameters = process["parameters"]["bodyParameters"]["parameters"]
     organization = next(item for item in parameters if item["name"] == "organizationId")
-    assert WEBHOOK_NODE in organization["value"]
+    # A6a correction round 1 (section 3): the Phase-1 API keeps its existing
+    # multipart field name "organizationId", but n8n now supplies its value
+    # from the resolved phase1ProfileKey (01.2 Build run context), not the
+    # raw webhook body directly.
+    assert "01.2 Build run context" in organization["value"]
+    assert "phase1ProfileKey" in organization["value"]
     assert "unternehmen-x-demo" not in organization["value"]
     assert "unternehmen-y-demo" not in organization["value"]
 

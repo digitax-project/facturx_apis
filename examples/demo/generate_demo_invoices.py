@@ -397,6 +397,14 @@ def generate(output_dir: Path = DEFAULT_OUTPUT_DIR) -> list:
             {
                 "scenarioId": scenario["id"],
                 "organizationId": scenario["organizationId"],
+                # A6a correction round 1 (section 3): a synthetic, explicit TCMS
+                # organization route id -- distinct from organizationId (the
+                # Phase-1 profile key) -- so a finding-bearing scenario posted
+                # through the Batch Item workflow's new contract still reaches
+                # DigiTax Risk Review instead of failing closed with
+                # RISK_REVIEW_MISSING_TCMS_ORGANIZATION_ID. Never a real,
+                # authenticated TCMS identity -- standalone demo/test use only.
+                "tcmsOrganizationId": f"tcms-test-org-{scenario['organizationId']}",
                 "controlProfileId": scenario["controlProfileId"],
                 "mismatchCategory": scenario["category"],
                 "injectedMismatches": scenario["injectedMismatches"],

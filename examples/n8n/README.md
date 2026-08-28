@@ -644,13 +644,32 @@ reports and requests an XLSX serialization for export --
 routing/aggregation across the batch is the caller's responsibility, not
 this subworkflow's.
 
-### A6a synthetic TCMS demo extension (v1.1.0, 2026-08-27)
+### A6a synthetic TCMS demo extension (v1.1.0, 2026-08-27; identity contract corrected 2026-08-28)
 
 Per `coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md`,
 n8n never authenticates to TCMS directly. Instead, Batch Item v1.1.0 adds a
 gated advisory step and returns a **bounded result bundle** alongside its
 existing dashboard-facing fields, for an authenticated TCMS backend action
 to validate and persist using its own evidence-store services:
+
+**Request contract (A6a correction round 1, plan section 3).** The Batch
+Item webhook body now separates two identities a single `organizationId`
+field used to conflate:
+
+| Field | Meaning | Rule |
+| --- | --- | --- |
+| `phase1ProfileKey` | Phase-1 profile lookup key, e.g. `unternehmen-x-demo` | new contract field; `01.2 Build run context` resolves it |
+| `organizationId` | legacy alias for `phase1ProfileKey` | standalone compatibility only, used only when `phase1ProfileKey` is absent; never a `tcmsOrganizationId` fallback |
+| `tcmsOrganizationId` | authenticated TCMS organization route id | required for TCMS ingestion and any Risk Review intended for attachment |
+
+`03.1 Run DigiTax controls` still POSTs to the real Phase-1 API's own
+unchanged multipart field name `organizationId` -- n8n supplies its value
+from the resolved `phase1ProfileKey`, not the raw webhook body. A
+finding-bearing report with no `tcmsOrganizationId` fails closed in `04.3`
+with `routingStatus: "RISK_REVIEW_MISSING_TCMS_ORGANIZATION_ID"` *before*
+DigiTax Risk Review is ever called; a clean report is unaffected and is
+still returned (just never presented as TCMS-ingestible without a real TCMS
+identity). See `tests/test_n8n_batch_item_identity_contract.py`.
 
 - `04.3 Evaluate risk review gate` reads only the already-authoritative
   `phase1ControlReport.status` the real Phase-1 API produced (no control is
@@ -659,13 +678,21 @@ to validate and persist using its own evidence-store services:
   `NO_RISK_REVIEW_REQUIRED` / `TECHNICAL_FAILURE` and **no DigiTax Risk
   Review call is made** -- matching
   `A6a-flow1a-synthetic-demo-request.md` point 5 ("for a clean report, stop
-  the advisory branch ... create no Review Case"). Otherwise it builds the
-  exact `RiskReviewRequest v1` body from the report's own non-`passed`
-  controls (`failed`/`not_reliable`/`not_run`), reusing the run's own
-  `correlationId` and `processInstanceId` (never a freshly minted id) --
-  `processInstanceId` becomes the request's `requestId`, which is what makes
-  a direct replay of the same request body against DigiTax Risk Review
-  provably idempotent (see the A6a evidence folder).
+  the advisory branch ... create no Review Case"). A finding-bearing report
+  with no `tcmsOrganizationId` stops here too, per the request-contract
+  table above. Otherwise it builds the exact `RiskReviewRequest v1` body
+  from the report's own non-`passed` controls
+  (`failed`/`not_reliable`/`not_run`), reusing the run's own `correlationId`
+  and `processInstanceId` (never a freshly minted id) -- `processInstanceId`
+  becomes the request's `requestId`, which is what makes a direct replay of
+  the same request body against DigiTax Risk Review provably idempotent
+  (see the A6a evidence folder). The request's own `organizationId` field is
+  `tcmsOrganizationId`, never `phase1ProfileKey`. Evidence hashes
+  (`activityExecutionSha256`, `controlReportSha256`) are computed with the
+  accepted `canonical-json-v1` algorithm (`examples/n8n/vendor/canonicalJson.js`,
+  embedded via `examples/n8n/scripts/sync-embedded-literals.mjs`), matching
+  A5b's own hash independently recomputed after a JSONB round trip -- see
+  `tests/test_n8n_canonical_json.py`.
 - `04.5 Run DigiTax Risk Review` POSTs to
   `{{ $env.FACTURX_RISK_REVIEW_API_BASE_URL }}/v1/risk-review` (bounded
   retry, `neverError`/`fullResponse`, same fail-safe pattern as `03.1`). No
@@ -687,10 +714,14 @@ to validate and persist using its own evidence-store services:
 n8n never calls any `/api/organizations/.../evidence/...` TCMS route; that
 remains the authenticated TCMS backend action's own responsibility (tracked
 as A5c), started only after this result-bundle shape is frozen.
-`tests/test_n8n_risk_review_integration.py` is the CI structural/contract
-guard for this extension; it is not a substitute for the real E2E evidence
-under `output/demo/invoice_phase1/2026-08-27/a6a-flow1a-tcms-demo/` (outside
-this repository, per the shared coordination workspace convention).
+`tests/test_n8n_batch_workflow.py`, `tests/test_n8n_batch_item_identity_contract.py`,
+and `tests/test_n8n_canonical_json.py` are the CI structural/contract guards
+for this extension; they are not a substitute for the real E2E evidence
+under `output/demo/invoice_phase1/2026-08-27/a6a-flow1a-tcms-demo/` (original
+round) and
+`output/demo/invoice_phase1/2026-08-27/a6a-flow1a-tcms-demo-correction-round1/`
+(this correction round) (outside this repository, per the shared
+coordination workspace convention).
 
 Full detail in `coordination/claude-codex/handover-log.md` and
 `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.
