@@ -162,18 +162,67 @@ function New-LockfileFromVendoredSnapshot {
     }
 }
 
+function ConvertTo-CanonicalJsonString {
+    # A hand-rolled serializer, not ConvertTo-Json: Windows PowerShell 5.1's
+    # ConvertTo-Json indents nested objects relative to the preceding
+    # property name's column rather than a clean multiple of the nesting
+    # depth, and PowerShell 7+ (pwsh, not installed on every machine this
+    # script runs on) formats differently again. Neither is byte-comparable
+    # to the committed convention (2-space indent, single space after ":")
+    # across machines/PowerShell versions, which -CheckOnly's byte-for-byte
+    # comparison depends on. This serializer's only contract is standard
+    # JSON.stringify(obj, null, 2)-equivalent output, independent of which
+    # PowerShell engine or version runs it.
+    param($Value, [int]$Depth = 0)
+    $indent = "  " * $Depth
+    $childIndent = "  " * ($Depth + 1)
+
+    if ($null -eq $Value) {
+        return "null"
+    }
+    if ($Value -is [bool]) {
+        return $(if ($Value) { "true" } else { "false" })
+    }
+    if ($Value -is [string]) {
+        $escaped = $Value -replace '\\', '\\\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t'
+        return "`"$escaped`""
+    }
+    if ($Value -is [System.Collections.Specialized.OrderedDictionary] -or $Value -is [hashtable]) {
+        $keys = @($Value.Keys)
+        if ($keys.Count -eq 0) { return "{}" }
+        $lines = @()
+        foreach ($key in $keys) {
+            $childJson = ConvertTo-CanonicalJsonString -Value $Value[$key] -Depth ($Depth + 1)
+            $lines += "$childIndent`"$key`": $childJson"
+        }
+        return "{`n" + ($lines -join ",`n") + "`n$indent}"
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $props = $Value.PSObject.Properties
+        if (@($props).Count -eq 0) { return "{}" }
+        $lines = @()
+        foreach ($prop in $props) {
+            $childJson = ConvertTo-CanonicalJsonString -Value $prop.Value -Depth ($Depth + 1)
+            $lines += "$childIndent`"$($prop.Name)`": $childJson"
+        }
+        return "{`n" + ($lines -join ",`n") + "`n$indent}"
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $items = @($Value)
+        if ($items.Count -eq 0) { return "[]" }
+        $lines = @()
+        foreach ($item in $items) {
+            $lines += "$childIndent$(ConvertTo-CanonicalJsonString -Value $item -Depth ($Depth + 1))"
+        }
+        return "[`n" + ($lines -join ",`n") + "`n$indent]"
+    }
+    # Numbers (int/double/etc.) print via their invariant-culture string form.
+    return [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Write-JsonFile {
-    # ConvertTo-Json on Windows PowerShell 5.1 embeds CRLF between every
-    # property internally (an Environment.NewLine artifact, unrelated to any
-    # git checkout filter) -- normalized to LF-only here so -Regenerate's
-    # output is byte-identical to what git actually stores (its clean filter
-    # already normalizes CRLF->LF on commit) and so a fresh -CheckOnly/
-    # -VerifyAgainstSource regeneration is byte-comparable against a checked-
-    # out file on any machine, not just the one that originally ran
-    # -Regenerate. Discovered by testing against a genuine fresh git clone,
-    # not merely re-running in the same working directory.
     param([string]$Path, $Object)
-    $json = ($Object | ConvertTo-Json -Depth 10) -replace "`r`n", "`n"
+    $json = ConvertTo-CanonicalJsonString -Value $Object
     [System.IO.File]::WriteAllText($Path, "$json`n")
 }
 
@@ -209,9 +258,14 @@ elseif ($CheckOnly) {
         $regenerated = New-LockfileFromVendoredSnapshot -VendoredSnapshotPath $VendoredSnapshotPath -SourceRef $existingSourceRef
         Write-JsonFile -Path $tempLockfilePath -Object $regenerated
 
-        $committedBytes = [System.IO.File]::ReadAllBytes($LockfilePath)
-        $regeneratedBytes = [System.IO.File]::ReadAllBytes($tempLockfilePath)
-        if (-not [System.Linq.Enumerable]::SequenceEqual($committedBytes, $regeneratedBytes)) {
+        # Normalize CRLF->LF on the committed side before comparing: a
+        # checkout with core.autocrlf=true (as this repo uses) rewrites the
+        # committed LF-only file to CRLF on disk, which would otherwise
+        # fail this check on every such machine even though Write-JsonFile
+        # above already guarantees $regeneratedBytes is LF-only.
+        $committedText = [System.IO.File]::ReadAllText($LockfilePath) -replace "`r`n", "`n"
+        $regeneratedText = [System.IO.File]::ReadAllText($tempLockfilePath) -replace "`r`n", "`n"
+        if ($committedText -cne $regeneratedText) {
             throw "Activity binding lockfile drift detected: $LockfilePath does not match a fresh regeneration from the committed vendored snapshot ($VendoredSnapshotPath) and workflow files."
         }
         Write-Host "OK: $LockfilePath matches a fresh regeneration from the committed vendored snapshot byte-for-byte."

@@ -42,8 +42,16 @@ const CANONICAL_JSON_VENDOR_PATH = path.join(n8nDir, "vendor", "canonicalJson.js
 const BINDING_ASSERT_NODE_NAME = "01.1 Assert activity binding published";
 const RISK_REVIEW_GATE_NODE_NAME = "04.3 Evaluate risk review gate";
 
+// Normalizes CRLF to LF so the check is content-based rather than
+// dependent on the checkout's line-ending conversion (core.autocrlf=true
+// on Windows rewrites every text file to CRLF on checkout, which would
+// otherwise show up as spurious "drift" against an LF-only regeneration).
+function readText(p) {
+  return readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+}
+
 function loadJson(p) {
-  return JSON.parse(readFileSync(p, "utf8"));
+  return JSON.parse(readText(p));
 }
 
 function writeJson(p, obj) {
@@ -115,7 +123,7 @@ function regenerateBindingEmbed() {
 // --- 2. canonical-json-v1 -> batch item risk review gate -------------------
 
 function regenerateCanonicalJsonEmbed() {
-  const vendorSource = readFileSync(CANONICAL_JSON_VENDOR_PATH, "utf8");
+  const vendorSource = readText(CANONICAL_JSON_VENDOR_PATH);
   const functionsSource = extractBetweenMarkers(
     vendorSource,
     "// CANONICAL-JSON-V1-BEGIN",
@@ -138,7 +146,7 @@ const results = [regenerateBindingEmbed(), regenerateCanonicalJsonEmbed()];
 if (checkOnly) {
   let drift = false;
   for (const { workflow, path: p } of results) {
-    const committed = readFileSync(p, "utf8");
+    const committed = readText(p);
     const regenerated = `${JSON.stringify(workflow, null, 2)}\n`;
     if (committed !== regenerated) {
       drift = true;
