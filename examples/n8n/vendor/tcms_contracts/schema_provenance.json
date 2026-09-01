@@ -1,7 +1,7 @@
 {
-  "risk-review-report-v1.1.0": {
-    "sourceRef": "tcms-framework@58a601222dbe805bcb4077bfbd501704ad5fed78:server/contracts/pilot/risk-review-report-v1.1.0.schema.json",
-    "sourceSha256": "5e03786b4c964436e0bf510679a72fe2ed769606d733945a56b3a5764905b406",
+  "risk-review-report-v1.2.0": {
+    "sourceRef": "tcms-framework@9d75d783405efd2a7086cadf268ce3dce23ad339:server/contracts/pilot/risk-review-report-v1.2.0.schema.json",
+    "sourceSha256": "ac69c61b8550ca34e29de54f50051879a1825eb2f0aa753173717173e8060afe",
     "usage": "GENERATED_RISK_REVIEW_REPORT_RESPONSE_VALIDATION"
   }
 }

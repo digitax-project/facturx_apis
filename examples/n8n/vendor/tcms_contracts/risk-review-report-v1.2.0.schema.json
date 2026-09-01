@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://digitax.de/schemas/pilot/risk-review-report/1.1.0",
+  "$id": "https://digitax.de/schemas/pilot/risk-review-report/1.2.0",
   "title": "DigiTax RiskReviewReport v1",
   "type": "object",
   "additionalProperties": false,
@@ -32,7 +32,7 @@
     "createdAt"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.1.0" },
+    "schemaVersion": { "const": "1.2.0" },
     "reportId": { "type": "string", "minLength": 1, "maxLength": 100 },
     "requestId": { "type": "string", "minLength": 1, "maxLength": 200 },
     "correlationId": { "type": "string", "minLength": 1, "maxLength": 200 },
@@ -76,7 +76,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["candidateRiskId", "riskStatement", "sourceControlIds", "catalogFindingRefs", "confidence", "status"],
+        "required": ["candidateRiskId", "riskStatement", "sourceControlIds", "catalogFindingRefs", "confidence", "status", "evidenceBasis"],
         "properties": {
           "candidateRiskId": { "type": "string", "minLength": 1, "maxLength": 150 },
           "catalogRiskRef": { "type": ["string", "null"], "maxLength": 150 },
@@ -85,7 +85,8 @@
           "catalogFindingRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 150 }, "uniqueItems": true },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "status": { "const": "PROPOSED" },
-          "sourceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          "sourceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "evidenceBasis": { "enum": ["CONFIRMED_FAILED_CONTROL", "UNCONFIRMED_INSUFFICIENT_EVIDENCE"] }
         }
       }
     },

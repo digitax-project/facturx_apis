@@ -145,7 +145,7 @@ function generateRiskReviewReportValidator() {
   // Embedded into the Batch Item workflow's "04.6 Handle risk review
   // response" node so a 2xx response is only ever accepted when it fully
   // validates -- never merely presence-checked.
-  const schemaFileName = "risk-review-report-v1.1.0.schema.json";
+  const schemaFileName = "risk-review-report-v1.2.0.schema.json";
   const schemaPath = path.join(tcmsContractsDir, schemaFileName);
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
 

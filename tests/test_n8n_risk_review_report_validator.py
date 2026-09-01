@@ -22,7 +22,7 @@ GENERATED_DIR = N8N_DIR / "generated"
 VALIDATOR_PATH = GENERATED_DIR / "validate_risk_review_report.generated.js"
 PROVENANCE_PATH = GENERATED_DIR / "validator_provenance.json"
 GENERATOR_SCRIPT_PATH = N8N_DIR / "scripts" / "generate-evidence-validators.mjs"
-VENDOR_SCHEMA_PATH = N8N_DIR / "vendor" / "tcms_contracts" / "risk-review-report-v1.1.0.schema.json"
+VENDOR_SCHEMA_PATH = N8N_DIR / "vendor" / "tcms_contracts" / "risk-review-report-v1.2.0.schema.json"
 VENDOR_PROVENANCE_PATH = N8N_DIR / "vendor" / "tcms_contracts" / "schema_provenance.json"
 BATCH_ITEM_PATH = N8N_DIR / "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json"
 
@@ -41,9 +41,9 @@ def test_vendored_schema_and_provenance_exist_and_match():
 
     assert VENDOR_SCHEMA_PATH.exists()
     provenance = _load_json(VENDOR_PROVENANCE_PATH)
-    entry = provenance["risk-review-report-v1.1.0"]
+    entry = provenance["risk-review-report-v1.2.0"]
     assert entry["sourceSha256"] == hashlib.sha256(VENDOR_SCHEMA_PATH.read_bytes()).hexdigest()
-    assert "tcms-framework@58a601222dbe805bcb4077bfbd501704ad5fed78" in entry["sourceRef"]
+    assert "tcms-framework@9d75d783405efd2a7086cadf268ce3dce23ad339" in entry["sourceRef"]
     text = json.dumps(provenance).lower()
     assert "generatedat" not in text
 
@@ -123,7 +123,7 @@ def test_regenerating_produces_byte_identical_risk_review_validator(tmp_path):
 
 def _valid_risk_review_report() -> dict:
     return {
-        "schemaVersion": "1.1.0",
+        "schemaVersion": "1.2.0",
         "reportId": "RRR-1",
         "requestId": "REQ-1",
         "correlationId": "CORR-1",

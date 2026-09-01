@@ -62,6 +62,10 @@ CLASSIFY_RESPONSE_NODE = "03.2 Classify controls response"
 CONTROLS_FAILURE_NODE = "03.3 Handle controls-call failure"
 CALL_ASSEMBLE_NODE = "Call Assemble ActivityExecution"
 MERGE_ACTIVITY_EXECUTION_NODE = "Merge ActivityExecution into outcome"
+RISK_REVIEW_GATE_NODE = "03.4 Evaluate risk review gate"
+RISK_REVIEW_ROUTE_NODE = "03.5 Route by risk review need"
+RISK_REVIEW_HTTP_NODE = "03.6 Run DigiTax Risk Review"
+RISK_REVIEW_RESPONSE_NODE = "03.7 Handle risk review response"
 
 REUSED_OCR_NODE_NAMES = (
     FIX_BASE64_NODE,
@@ -97,7 +101,16 @@ FORBIDDEN_PATTERNS = [
     (re.compile(r"host\.docker\.internal"), "a hardcoded local-dev host"),
     (re.compile(r"vn ?impex", re.IGNORECASE), "the real organization name"),
 ]
-ALLOWED_HARDCODED_URL_PREFIX = "https://generativelanguage.googleapis.com/"
+ALLOWED_HARDCODED_URL_PREFIXES = (
+    "https://generativelanguage.googleapis.com/",
+    # Both embedded verbatim in the generated RiskReviewReport validator
+    # ("03.7 Handle risk review response"): the generic JSON Schema
+    # meta-schema URL, and the vendored schema's own $id -- neither is a
+    # real, deployment-specific endpoint, both are standard schema
+    # identifiers.
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://digitax.de/schemas/pilot/risk-review-report/",
+)
 
 
 def _load_workflow() -> dict:
@@ -175,7 +188,7 @@ def test_workflow_has_no_forbidden_content():
 
     url_like = re.findall(r"https?://[^\s\"'\\]+", text)
     for url in url_like:
-        assert url.startswith(ALLOWED_HARDCODED_URL_PREFIX) or "{{" in url or "\\u003c" in url, (
+        assert url.startswith(ALLOWED_HARDCODED_URL_PREFIXES) or "{{" in url or "\\u003c" in url, (
             f"unexpected hardcoded URL {url!r} -- only the public Gemini API "
             "endpoint may be hardcoded; anything deployment-specific must be "
             "an n8n expression"
@@ -419,7 +432,10 @@ def test_all_four_review_terminal_nodes_exist_and_are_noops():
 def test_every_failure_and_success_path_converges_through_activity_execution_assembly():
     """Every branch (pre-flight rejection, controls-call success/failure)
     feeds the shared "Call Assemble ActivityExecution" subworkflow, exactly
-    like every Flow 1a workflow, and every path funnels through exactly one
+    like every Flow 1a workflow, then the risk-review gate (mirroring Flow
+    1a's own "04.3"-"04.6" pattern -- own 03.x numbering here to avoid
+    colliding with this workflow's pre-existing 04.x nodes), and every path
+    (risk review run or skipped) funnels through exactly one
     "04.1 Build control report" / "04.2 Render control report" pair."""
     data = _load_workflow()
     branch_sources = (
@@ -437,7 +453,15 @@ def test_every_failure_and_success_path_converges_through_activity_execution_ass
         assert targets == {CALL_ASSEMBLE_NODE}, f"{source!r} must feed {CALL_ASSEMBLE_NODE!r}"
 
     assert data["connections"][CALL_ASSEMBLE_NODE]["main"][0][0]["node"] == MERGE_ACTIVITY_EXECUTION_NODE
-    assert data["connections"][MERGE_ACTIVITY_EXECUTION_NODE]["main"][0][0]["node"] == BUILD_SUMMARY_NODE
+    assert data["connections"][MERGE_ACTIVITY_EXECUTION_NODE]["main"][0][0]["node"] == RISK_REVIEW_GATE_NODE
+    assert data["connections"][RISK_REVIEW_GATE_NODE]["main"][0][0]["node"] == RISK_REVIEW_ROUTE_NODE
+
+    route_branches = data["connections"][RISK_REVIEW_ROUTE_NODE]["main"]
+    assert route_branches[0][0]["node"] == RISK_REVIEW_HTTP_NODE, "needsRiskReview=true must call Risk Review"
+    assert route_branches[1][0]["node"] == BUILD_SUMMARY_NODE, "needsRiskReview=false must skip straight to 04.1"
+    assert data["connections"][RISK_REVIEW_HTTP_NODE]["main"][0][0]["node"] == RISK_REVIEW_RESPONSE_NODE
+    assert data["connections"][RISK_REVIEW_RESPONSE_NODE]["main"][0][0]["node"] == BUILD_SUMMARY_NODE
+
     assert data["connections"][BUILD_SUMMARY_NODE]["main"][0][0]["node"] == BUILD_RESPONSE_NODE
     assert data["connections"][BUILD_RESPONSE_NODE]["main"][0][0]["node"] == RESPOND_NODE
     assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
