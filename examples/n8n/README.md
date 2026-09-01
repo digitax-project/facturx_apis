@@ -809,11 +809,25 @@ round; the parser gained one addition in that round -- see below):
                                        (POST /v1/invoices/process-extracted);
                                        ORG-001 and every other control are
                                        evaluated there, not in n8n
+  -> Call Assemble ActivityExecution (shared subworkflow) -> Merge ActivityExecution into outcome
+  -> 03.4 Evaluate risk review gate  -- mirrors Flow 1a's 04.3-04.6 pattern
+                                        (own 03.x numbering to avoid colliding
+                                        with this workflow's pre-existing 04.x
+                                        nodes)
+  -> 03.5 Route by risk review need
+       -> [needed]     03.6 Run DigiTax Risk Review -> 03.7 Handle risk review response
+       -> [not needed] straight to 04.1
   -> 04.1 Build control report      -- adds processingPath/aiExecutionProfile/
                                         aiProvider/modelId/modelVersion/
                                         processingLocation/promptVersion/fallbackUsed
-  -> 04.2 Render control report      -- single convergence point, HTML
-  -> 04.3 Respond to browser (HTML)
+  -> 04.5 Assemble result bundle     -- single convergence point; builds the
+                                        same frozen resultBundle contract Flow
+                                        1a's own "04.7 Assemble result bundle"
+                                        produces (result-bundle-v1.0.0.schema.json),
+                                        no longer a standalone HTML report --
+                                        both flows now converge on TCMS's
+                                        Nachweisakte page for one report format
+  -> 04.6 Respond with result bundle (JSON)
   -> 04.4 Route by review status (Switch, 4 explicit outputs)
        -> 05.1 / 05.2 / 05.3 / 05.4 Human review - standard / prioritized / technical / unknown
 ```
@@ -965,9 +979,13 @@ test_no_org_001_mirror_or_organization_resolution_left_in_n8n`). Instead:
   the API's own `status`/`routing`/`controls` straight through
   (`tests/test_n8n_flow1b_workflow.py::
   test_build_control_report_never_recomputes_status_from_scratch`).
-- The rendered HTML result (`04.2 Render control report`) states plainly
-  that control evaluation came from the authoritative Phase 1 API, not an
-  n8n-side implementation.
+- The resultBundle's `phase1ControlReport` is the real API's own report,
+  unmodified -- no n8n-side text needs to disclose that control evaluation
+  is authoritative, since it's just the same report TCMS's Nachweisakte page
+  already shows for Flow 1a. Nachweisakte itself carries a short note that
+  the local AI extraction lane assumes an already-running, OpenAI-compatible
+  endpoint (no model bundled or auto-started by this repository) whenever it
+  is rendering a Flow 1b entry.
 
 **What remains a concept, after this round**: only the OCR/LLM extraction
 step itself (`01.9`-`02.7`), and only for the local lane -- see "Optional:

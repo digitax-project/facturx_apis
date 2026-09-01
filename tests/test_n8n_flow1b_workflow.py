@@ -42,8 +42,8 @@ GEMINI_REQUEST_NODE = "02.2 Build OCR/LLM request"
 GEMINI_HTTP_NODE = "02.3 Run OCR/LLM extraction (Gemini)"
 GEMINI_PARSER_NODE = "02.5 Parse OCR/LLM output"
 BUILD_SUMMARY_NODE = "04.1 Build control report"
-BUILD_RESPONSE_NODE = "04.2 Render control report"
-RESPOND_NODE = "04.3 Respond to browser"
+ASSEMBLE_BUNDLE_NODE = "04.5 Assemble result bundle"
+RESPOND_NODE = "04.6 Respond with result bundle"
 STATUS_ROUTING_NODE = "04.4 Route by review status"
 
 RESOLVE_AI_PROFILE_NODE = "01.9 Resolve AI execution profile"
@@ -110,6 +110,11 @@ ALLOWED_HARDCODED_URL_PREFIXES = (
     # identifiers.
     "https://json-schema.org/draft/2020-12/schema",
     "https://digitax.de/schemas/pilot/risk-review-report/",
+    # The result-bundle schema's own $id, embedded verbatim in the
+    # generated validator copied into "04.5 Assemble result bundle" from
+    # Flow 1a's own "04.7" node -- same standard-schema-identifier class as
+    # the two above, not a real endpoint.
+    "https://digitax.de/schemas/a6a/result-bundle/",
 )
 
 
@@ -436,7 +441,11 @@ def test_every_failure_and_success_path_converges_through_activity_execution_ass
     1a's own "04.3"-"04.6" pattern -- own 03.x numbering here to avoid
     colliding with this workflow's pre-existing 04.x nodes), and every path
     (risk review run or skipped) funnels through exactly one
-    "04.1 Build control report" / "04.2 Render control report" pair."""
+    "04.1 Build control report" / "04.5 Assemble result bundle" pair, which
+    responds with the same frozen resultBundle contract Flow 1a's own
+    "04.7 Assemble result bundle" produces -- not a standalone HTML report
+    (removed: both flows now converge on TCMS's Nachweisakte page for a
+    single, unified report format)."""
     data = _load_workflow()
     branch_sources = (
         "01.5 Handle invalid upload",
@@ -462,8 +471,8 @@ def test_every_failure_and_success_path_converges_through_activity_execution_ass
     assert data["connections"][RISK_REVIEW_HTTP_NODE]["main"][0][0]["node"] == RISK_REVIEW_RESPONSE_NODE
     assert data["connections"][RISK_REVIEW_RESPONSE_NODE]["main"][0][0]["node"] == BUILD_SUMMARY_NODE
 
-    assert data["connections"][BUILD_SUMMARY_NODE]["main"][0][0]["node"] == BUILD_RESPONSE_NODE
-    assert data["connections"][BUILD_RESPONSE_NODE]["main"][0][0]["node"] == RESPOND_NODE
+    assert data["connections"][BUILD_SUMMARY_NODE]["main"][0][0]["node"] == ASSEMBLE_BUNDLE_NODE
+    assert data["connections"][ASSEMBLE_BUNDLE_NODE]["main"][0][0]["node"] == RESPOND_NODE
     assert data["connections"][RESPOND_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
 
 
@@ -605,26 +614,26 @@ def test_no_secrets_or_internal_urls_in_ai_selection_nodes():
         assert not re.search(r"https?://(?!\{\{)", text), f"{name!r} must not hardcode a URL"
 
 
-def test_browser_response_is_html():
+def test_response_is_json_result_bundle_with_cors_and_no_store_headers():
+    """Flow 1b no longer renders its own standalone HTML report (removed
+    2026-09-01: 'unite the report' -- both flows must produce one report
+    format, not one per flow). It now responds with the same JSON
+    resultBundle contract Flow 1a's batch-item workflow returns, so TCMS's
+    ingestion route can consume both identically and render both through
+    the same Nachweisakte page. The "Local AI extraction is a concept"
+    disclosure that used to live in this workflow's rendered HTML now lives
+    in that TCMS page instead -- there is nothing left to assert here about
+    disclosure text, since this workflow no longer produces any."""
     data = _load_workflow()
     respond_node = _nodes_by_name(data)[RESPOND_NODE]
-    assert respond_node["parameters"]["respondWith"] == "text"
-    headers = respond_node["parameters"]["options"]["responseHeaders"]["entries"]
-    content_type = next(h["value"] for h in headers if h["name"] == "Content-Type")
-    assert "text/html" in content_type
-
-
-def test_response_discloses_the_real_api_is_authoritative():
-    """AGENTS.md: never fake API reuse. The response must not claim the
-    real API "cannot yet consume" OCR fields anymore -- it must say what is
-    now actually true: control evaluation is real, only the local AI lane
-    itself remains a concept."""
-    data = _load_workflow()
-    code = _nodes_by_name(data)[BUILD_RESPONSE_NODE]["parameters"]["jsCode"]
-    assert "authoritative Phase 1 API" in code
-    assert "process-extracted" in code
-    assert "cannot yet consume" not in code
-    assert "no injection seam" not in code
+    assert respond_node["parameters"]["respondWith"] == "json"
+    assert respond_node["parameters"]["responseBody"] == "={{ $json }}"
+    headers = {
+        h["name"]: h["value"]
+        for h in respond_node["parameters"]["options"]["responseHeaders"]["entries"]
+    }
+    assert headers["Access-Control-Allow-Origin"] == "*"
+    assert headers["Cache-Control"] == "no-store"
 
 
 def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
@@ -796,6 +805,89 @@ def test_merge_activity_execution_throws_if_no_branch_envelope_found():
     assert "ACTIVITY_EXECUTION_MERGE_NO_BRANCH_ENVELOPE" in out["message"]
 
 
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_assemble_result_bundle_produces_valid_bundle_for_clean_report():
+    """"04.5 Assemble result bundle" (fed directly by "04.1 Build control
+    report") must produce the exact same schema-valid resultBundle shape
+    Flow 1a's own "04.7 Assemble result bundle" produces -- this is what
+    lets TCMS's ingestion route treat both flows identically."""
+    input_json = {
+        "report": {"status": "unauffaellig", "routing": "standard_review", "reportId": "REP-1"},
+        "activityExecution": {"schemaVersion": "1.0.0", "status": "SUCCEEDED"},
+        "riskReviewReport": None,
+        "routingStatus": "NO_RISK_REVIEW_REQUIRED",
+        "failedStep": None,
+    }
+    out = _run_with_context(_node_code(ASSEMBLE_BUNDLE_NODE), input_json, {})
+    assert out["ok"] is True, out
+    assert out["result"]["ok"] is True
+    bundle = out["result"]["resultBundle"]
+    assert bundle["resultBundleSchemaVersion"] == "1.0.0"
+    assert bundle["phase1ControlReport"]["status"] == "unauffaellig"
+    assert bundle["activityExecution"]["status"] == "SUCCEEDED"
+    assert bundle["riskReviewReport"] is None
+    assert bundle["routingStatus"] == "NO_RISK_REVIEW_REQUIRED"
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_assemble_result_bundle_carries_risk_review_report_through():
+    input_json = {
+        "report": {"status": "nicht_pruefbar", "routing": "prioritized_review", "reportId": "REP-2"},
+        "activityExecution": {"schemaVersion": "1.0.0", "status": "SUCCEEDED"},
+        "riskReviewReport": {"disposition": "RISK_REVIEW_PROPOSED", "taxRisks": []},
+        "routingStatus": "RISK_REVIEW_PROPOSED",
+        "failedStep": None,
+    }
+    out = _run_with_context(_node_code(ASSEMBLE_BUNDLE_NODE), input_json, {})
+    assert out["ok"] is True, out
+    bundle = out["result"]["resultBundle"]
+    assert bundle["riskReviewReport"]["disposition"] == "RISK_REVIEW_PROPOSED"
+    assert bundle["routingStatus"] == "RISK_REVIEW_PROPOSED"
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_assemble_result_bundle_allows_null_report_on_technical_failure():
+    """A failed branch surfaces errorCode/explanation/failedStep at the top
+    level (outside the nested resultBundle) -- the same shape Flow 1a's own
+    "04.7" produces, so a caller that reads the raw response for a
+    human-readable failure reason (e.g. the Docker E2E tests further down
+    this file) still finds it, even though TCMS's ingestion route only
+    reads response.resultBundle."""
+    input_json = {
+        "report": None,
+        "activityExecution": {"schemaVersion": "1.0.0", "status": "FAILED"},
+        "riskReviewReport": None,
+        "routingStatus": "TECHNICAL_FAILURE",
+        "failedStep": "03.1 Run DigiTax controls",
+        "errorCode": "OCR_SERVICE_UNAVAILABLE",
+        "explanation": "The OCR service did not respond.",
+    }
+    out = _run_with_context(_node_code(ASSEMBLE_BUNDLE_NODE), input_json, {})
+    assert out["ok"] is True, out
+    result = out["result"]
+    assert result["ok"] is False
+    assert result["errorCode"] == "OCR_SERVICE_UNAVAILABLE"
+    assert result["failedStep"] == "03.1 Run DigiTax controls"
+    bundle = result["resultBundle"]
+    assert bundle["phase1ControlReport"] is None
+    assert bundle["routingStatus"] == "TECHNICAL_FAILURE"
+
+
+@pytest.mark.skipif(not NODE_AVAILABLE, reason="node.js not available")
+def test_assemble_result_bundle_throws_on_schema_violation():
+    """No `activityExecution` at all (required, object-only, never
+    null/undefined) must fail closed -- an internal bug, not caller input,
+    exactly like Flow 1a's own "04.7" guard."""
+    input_json = {
+        "report": None,
+        "riskReviewReport": None,
+        "routingStatus": "TECHNICAL_FAILURE",
+    }
+    out = _run_with_context(_node_code(ASSEMBLE_BUNDLE_NODE), input_json, {})
+    assert out["ok"] is False
+    assert "RESULT_BUNDLE_SCHEMA_INVALID" in out["message"]
+
+
 # ---------------------------------------------------------------------------
 # Real n8n E2E: a genuinely fresh, ephemeral n8n container plus a real
 # Phase 1 API container on the same isolated Docker network -- not a
@@ -952,10 +1044,11 @@ def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
     crashed the whole execution whenever require("crypto") wasn't
     allow-listed, before any of this workflow's own error handling ever
     ran). It must converge to a proper, non-empty
-    nicht_pruefbar/technical_review/OCR_SERVICE_UNAVAILABLE payload -- and
-    now also to a real (FAILED/PRE_FLIGHT_REJECTED) ActivityExecution via
-    the shared subworkflow, since the API/binding assertion node is on the
-    same critical path."""
+    {ok: false, errorCode: OCR_SERVICE_UNAVAILABLE, resultBundle:
+    {routingStatus: TECHNICAL_FAILURE}} payload -- and now also to a real
+    (FAILED/PRE_FLIGHT_REJECTED) ActivityExecution via the shared
+    subworkflow, since the API/binding assertion node is on the same
+    critical path."""
     stack = _Flow1bStack(with_api=False)
     try:
         stack.start()
@@ -972,10 +1065,15 @@ def test_e2e_cloud_gemini_without_credential_converges_to_technical_review():
             "cloud-gemini without a configured credential must never return an "
             "empty response -- it must converge to a proper technical_review payload"
         )
-        body = response.text
-        assert "nicht_pruefbar" in body
-        assert "technical_review" in body
-        assert "OCR_SERVICE_UNAVAILABLE" in body
+        # Flow 1b no longer renders its own HTML with a "nicht_pruefbar"
+        # banner: it now returns the same structured JSON resultBundle
+        # envelope Flow 1a produces on a technical failure (ok: false,
+        # phase1ControlReport: null, routingStatus: TECHNICAL_FAILURE).
+        payload = response.json()
+        assert payload["ok"] is False
+        assert payload["errorCode"] == "OCR_SERVICE_UNAVAILABLE"
+        assert payload["resultBundle"]["phase1ControlReport"] is None
+        assert payload["resultBundle"]["routingStatus"] == "TECHNICAL_FAILURE"
     finally:
         stack.stop()
 
@@ -1111,10 +1209,13 @@ def test_e2e_malformed_local_model_output_converges_to_technical_review():
         )
         assert response.status_code == 200
         assert len(response.content) > 0
-        body = response.text
-        assert "nicht_pruefbar" in body
-        assert "technical_review" in body
-        assert "LOCAL_LLM_OUTPUT_PARSE_FAILED" in body
+        # Same structured JSON resultBundle envelope as the cloud-credential
+        # failure test above -- no more standalone HTML report.
+        payload = response.json()
+        assert payload["ok"] is False
+        assert payload["errorCode"] == "LOCAL_LLM_OUTPUT_PARSE_FAILED"
+        assert payload["resultBundle"]["phase1ControlReport"] is None
+        assert payload["resultBundle"]["routingStatus"] == "TECHNICAL_FAILURE"
     finally:
         _docker("rm", "-f", stack.n8n_container, timeout=30)
         _docker("rm", "-f", stub_container, timeout=30)
