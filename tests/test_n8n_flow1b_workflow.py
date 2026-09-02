@@ -217,8 +217,13 @@ def test_no_org_001_mirror_or_organization_resolution_left_in_n8n():
     text = json.dumps(data)
     assert 'CONTROL_ID = "ORG-001"' not in text
     assert "_normalize_for_match" not in text
-    assert "buyerMasterData" not in text
     assert "BUYER_PROFILES" not in text
+    # `buyerMasterData` itself is fine to see here now -- since 2026-09-02
+    # ("finish 1a/1b so they work for any company") it's an opaque,
+    # caller-supplied JSON string this workflow only parses and forwards
+    # unchanged to the real Phase 1 API, never inspects or matches against
+    # anything. The actual guard is that no *matching logic* re-appears --
+    # covered by the three assertions above.
 
 
 def test_controls_node_calls_the_real_process_extracted_endpoint():
