@@ -119,6 +119,67 @@ def test_valid_local_ai_extraction_is_unauffaellig(client):
     assert control_ids["ORG-001"] == "passed"
 
 
+def test_buyer_master_data_works_for_an_organization_with_no_demo_fixture(client):
+    """The whole point of buyerMasterData: a real organization that is NOT
+    "unternehmen-x-demo"/"unternehmen-y-demo" (never in the hardcoded
+    ORGANIZATION_CONTEXTS dict) still gets a meaningful ORG-001 result, by
+    supplying its own identity directly instead of a profile-key lookup."""
+    body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
+    body["buyerMasterData"] = {
+        "name": "Unternehmen X",
+        "street": "Musterweg 10",
+        "postalCode": "04109",
+        "city": "Leipzig",
+        "countryCode": "DE",
+    }
+    body["controlProfileId"] = "inbound-starter-de-v1"
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    control_ids = {c["controlId"]: c["outcome"] for c in report["controls"]}
+    assert control_ids["ORG-001"] == "passed"
+
+
+def test_buyer_master_data_evaluates_against_the_supplied_buyer_not_a_fixture(client):
+    """Proves the match is against the *supplied* buyerMasterData, not
+    accidentally still the Unternehmen X fixture: a mismatched supplied
+    address must fail, even though the invoice's own buyer still says
+    "Unternehmen X" / Leipzig (which would pass against the real fixture)."""
+    body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
+    body["buyerMasterData"] = {
+        "name": "VN-IMPEX GmbH",
+        "street": "Hafenstrasse 5",
+        "postalCode": "20457",
+        "city": "Hamburg",
+        "countryCode": "DE",
+    }
+    body["controlProfileId"] = "inbound-starter-de-v1"
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    control_ids = {c["controlId"]: c["outcome"] for c in report["controls"]}
+    assert control_ids["ORG-001"] == "failed"
+
+
+def test_buyer_master_data_without_control_profile_id_is_rejected(client):
+    body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
+    body["buyerMasterData"] = {
+        "name": "VN-IMPEX GmbH", "street": "Hafenstrasse 5",
+        "postalCode": "20457", "city": "Hamburg", "countryCode": "DE",
+    }
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "CONTROL_PROFILE_ID_REQUIRED"
+
+
+def test_incomplete_buyer_master_data_is_422_not_500(client):
+    body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
+    body["buyerMasterData"] = {"name": "VN-IMPEX GmbH"}  # missing street/postalCode/city/countryCode
+    body["controlProfileId"] = "inbound-starter-de-v1"
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 422
+
+
 def test_correlation_id_echoed_verbatim(client):
     response = client.post(
         "/v1/invoices/process-extracted",

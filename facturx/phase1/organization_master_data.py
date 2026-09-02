@@ -53,3 +53,29 @@ def resolve_master_data(organization_id: str | None, demo_mode: bool) -> dict | 
     """Return a known synthetic context without silently accepting unknown IDs."""
     resolved_id = DEMO_ORGANIZATION_ID if demo_mode and not organization_id else organization_id
     return ORGANIZATION_CONTEXTS.get(resolved_id)
+
+
+def build_buyer_master_data_context(
+    organization_id: str | None,
+    control_profile_id: str,
+    buyer_master_data: dict,
+) -> dict:
+    """Builds the same organization-context shape `resolve_master_data`
+    returns, directly from a real caller's own data instead of a hardcoded
+    fixture -- the path any real (non-demo) organization goes through.
+    `approvedSuppliers` has no TCMS-side data model yet, so it always
+    defaults to empty here; a control profile that requires ORG-002 for a
+    real organization is out of scope until that data model exists.
+    """
+    return {
+        "organizationId": organization_id,
+        "controlProfileId": control_profile_id,
+        "buyer": {
+            "name": buyer_master_data["name"],
+            "street": buyer_master_data["street"],
+            "postalCode": buyer_master_data["postalCode"],
+            "city": buyer_master_data["city"],
+            "countryCode": buyer_master_data["countryCode"],
+        },
+        "approvedSuppliers": [],
+    }

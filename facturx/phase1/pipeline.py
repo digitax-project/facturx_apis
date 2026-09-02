@@ -37,7 +37,7 @@ from .document_intake import DocumentInspection, inspect_document
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import PdfExtractionAdapter, normalize_pdf_extraction
 from .normalize.structured import normalize_structured_invoice
-from .organization_master_data import resolve_master_data
+from .organization_master_data import build_buyer_master_data_context, resolve_master_data
 from .report import build_report
 from .validate.schematron import SchematronValidationResult, validate_schematron
 from .validate.structured import StructuredValidationResult, validate_structured_xml
@@ -89,15 +89,35 @@ def _document_block(inspection: DocumentInspection) -> dict:
     }
 
 
-def resolve_organization_context(organization_id: Optional[str], demo_mode: bool) -> dict:
+def resolve_organization_context(
+    organization_id: Optional[str],
+    demo_mode: bool,
+    buyer_master_data: Optional[dict] = None,
+    control_profile_id: Optional[str] = None,
+) -> dict:
+    # A real (non-demo) caller sends its own buyer master data directly --
+    # no fixture lookup, no hardcoded organization list. This always wins
+    # over organizationId/demoMode when present, since a real caller has no
+    # reason to also want the demo fixture path.
+    if buyer_master_data is not None:
+        if not control_profile_id:
+            raise UnsupportedInputError(
+                "CONTROL_PROFILE_ID_REQUIRED",
+                "controlProfileId is required whenever buyerMasterData is supplied.",
+                status_code=400,
+            )
+        return build_buyer_master_data_context(
+            organization_id, control_profile_id, buyer_master_data
+        )
+
     master_data = resolve_master_data(organization_id, demo_mode)
     if master_data is None:
         raise UnsupportedInputError(
             "ORGANIZATION_CONTEXT_REQUIRED",
             "This run requires an explicit organization context. Pass "
             "organizationId=unternehmen-x-demo, organizationId=unternehmen-y-demo, "
-            "or demoMode=true; there is no "
-            "silent fallback to demo master data.",
+            "demoMode=true, or a real buyerMasterData object with a "
+            "controlProfileId; there is no silent fallback to demo master data.",
             status_code=400,
         )
     return master_data
@@ -241,11 +261,15 @@ def process_invoice(
     demo_mode: bool,
     pdf_extraction_adapter: PdfExtractionAdapter,
     correlation_id: Optional[str] = None,
+    buyer_master_data: Optional[dict] = None,
+    control_profile_id: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Returns (canonical_invoice, phase1_control_report), both already
     validated against their own contract schemas."""
     started_at = datetime.now(timezone.utc).isoformat()
-    organization_context = resolve_organization_context(organization_id, demo_mode)
+    organization_context = resolve_organization_context(
+        organization_id, demo_mode, buyer_master_data, control_profile_id
+    )
     control_profile = get_control_profile(organization_context["controlProfileId"])
     inspection = inspect_document(file_bytes, filename, content_type)
 
@@ -344,6 +368,8 @@ def process_extracted_invoice(
     organization_id: Optional[str],
     demo_mode: bool,
     correlation_id: Optional[str] = None,
+    buyer_master_data: Optional[dict] = None,
+    control_profile_id: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Runs the same catalog/executor as process_invoice() against canonical
     invoice fields and field evidence an external caller (Flow 1b's n8n
@@ -364,7 +390,9 @@ def process_extracted_invoice(
     cannot inject a fabricated control result.
     """
     started_at = datetime.now(timezone.utc).isoformat()
-    organization_context = resolve_organization_context(organization_id, demo_mode)
+    organization_context = resolve_organization_context(
+        organization_id, demo_mode, buyer_master_data, control_profile_id
+    )
     control_profile = get_control_profile(organization_context["controlProfileId"])
 
     canonical_invoice = {

@@ -7,6 +7,7 @@ pipeline becomes 400/415/422, TechnicalProcessingError becomes 5xx, and a
 completed classification (including one whose *result* is nicht_pruefbar)
 is always a normal 200 response.
 """
+import json
 import logging
 import os
 import re
@@ -265,6 +266,17 @@ async def process(
     file: UploadFile,
     organizationId: Optional[str] = Form(None),
     demoMode: bool = Form(False),
+    buyerMasterData: Optional[str] = Form(
+        None,
+        description=(
+            "A real (non-demo) caller's own buyer identity, as a JSON-encoded "
+            "object with name/street/postalCode/city/countryCode -- multipart "
+            "form data has no native nested-object type. Requires "
+            "controlProfileId. Takes priority over organizationId/demoMode "
+            "when present."
+        ),
+    ),
+    controlProfileId: Optional[str] = Form(None),
     x_correlation_id: Optional[str] = Header(
         None,
         alias="X-Correlation-ID",
@@ -289,6 +301,18 @@ async def process(
     correlation_id = None
     try:
         correlation_id = _validate_correlation_id(x_correlation_id)
+        if buyerMasterData is not None:
+            try:
+                buyer_master_data_raw = json.loads(buyerMasterData)
+            except json.JSONDecodeError as exc:
+                raise UnsupportedInputError(
+                    "INVALID_REQUEST_BODY", "buyerMasterData must be valid JSON.", status_code=422,
+                ) from exc
+        else:
+            buyer_master_data_raw = None
+        buyer_master_data = _parse_buyer_master_data(buyer_master_data_raw)
+        control_profile_id = _parse_control_profile_id(controlProfileId)
+
         content = await _read_upload_bounded(file)
         canonical_invoice, report = process_invoice(
             file_bytes=content,
@@ -298,6 +322,8 @@ async def process(
             demo_mode=demoMode,
             correlation_id=correlation_id,
             pdf_extraction_adapter=adapter,
+            buyer_master_data=buyer_master_data,
+            control_profile_id=control_profile_id,
         )
     except (UnsupportedInputError, TechnicalProcessingError) as exc:
         logger.warning(
@@ -329,6 +355,38 @@ def _require_nonempty_string_field(source: dict, field_name: str, path: str) -> 
             "INVALID_REQUEST_BODY", f"{path!r} is required and must be a non-empty string.", status_code=422,
         )
     return value
+
+
+_BUYER_MASTER_DATA_FIELDS = ("name", "street", "postalCode", "city", "countryCode")
+
+
+def _parse_buyer_master_data(raw: object) -> Optional[dict]:
+    """A real (non-demo) caller's own buyer identity, sent directly in the
+    request instead of looked up by a hardcoded organizationId fixture. Not
+    present at all (None) means "use the demo organizationId/demoMode path
+    instead" -- an explicit empty object is still a validation error, never
+    silently treated as absent.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise UnsupportedInputError(
+            "INVALID_REQUEST_BODY", "buyerMasterData must be an object when present.", status_code=422,
+        )
+    return {
+        field: _require_nonempty_string_field(raw, field, f"buyerMasterData.{field}")
+        for field in _BUYER_MASTER_DATA_FIELDS
+    }
+
+
+def _parse_control_profile_id(raw: object) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        raise UnsupportedInputError(
+            "INVALID_REQUEST_BODY", "controlProfileId must be a non-empty string when present.", status_code=422,
+        )
+    return raw
 
 
 @router.post(
@@ -377,6 +435,8 @@ async def process_extracted(
             raise UnsupportedInputError(
                 "INVALID_REQUEST_BODY", "demoMode must be a boolean when present.", status_code=422,
             )
+        buyer_master_data = _parse_buyer_master_data(payload.get("buyerMasterData"))
+        control_profile_id = _parse_control_profile_id(payload.get("controlProfileId"))
 
         document_in = _require_object_field(payload, "document")
         extraction_in = _require_object_field(payload, "extraction")
@@ -455,6 +515,8 @@ async def process_extracted(
             organization_id=organization_id,
             demo_mode=demo_mode,
             correlation_id=correlation_id,
+            buyer_master_data=buyer_master_data,
+            control_profile_id=control_profile_id,
         )
     except (UnsupportedInputError, TechnicalProcessingError) as exc:
         logger.warning(

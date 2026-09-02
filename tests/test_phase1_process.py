@@ -5,6 +5,7 @@ schema-valid, catalog/profile identified, source hash matches, and no
 booking/approval/payment action anywhere in the response.
 """
 import hashlib
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -118,6 +119,70 @@ def test_fx01_valid_zugferd_hybrid_pdf_is_unauffaellig(client, valid_hybrid_pdf_
     assert "STR-004" in control_ids
     str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
     assert str_004["outcome"] == "passed"
+
+
+def test_buyer_master_data_works_for_an_organization_with_no_demo_fixture(
+    client, valid_hybrid_pdf_bytes
+):
+    """Same proof as the process-extracted endpoint's equivalent test, for
+    the multipart /v1/invoices/process endpoint: a real organization not in
+    the hardcoded ORGANIZATION_CONTEXTS dict still gets a meaningful ORG-001
+    result by sending its own identity directly, as a JSON-encoded form
+    field (multipart has no native nested-object type)."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Musterweg 10",
+                    "postalCode": "04109",
+                    "city": "Leipzig",
+                    "countryCode": "DE",
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    control_ids = {c["controlId"]: c["outcome"] for c in report["controls"]}
+    assert control_ids["ORG-001"] == "passed"
+
+
+def test_buyer_master_data_without_control_profile_id_is_rejected(
+    client, valid_hybrid_pdf_bytes
+):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X", "street": "Musterweg 10",
+                    "postalCode": "04109", "city": "Leipzig", "countryCode": "DE",
+                }
+            ),
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "CONTROL_PROFILE_ID_REQUIRED"
+
+
+def test_malformed_buyer_master_data_json_is_422_not_500(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": "{not valid json",
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_fx04_xsd_invalid_xml_is_klaerung_erforderlich(client, invalid_xsd_xml_bytes):

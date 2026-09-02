@@ -23,7 +23,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Upload Demo \| v1.0.0` | `digitax_invoice_phase1_flow1a_upload_v1_0_0.json` | `digitax-invoice-phase1-upload-demo` | demo-ready (active) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Demo \| v1.0.0` | n/a -- browser page `facturx/phase1/static/batch_demo.html`, not an n8n workflow | n/a | demo-ready (served whenever `FACTURX_ENABLE_DEMO_ENDPOINTS=true`) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.1.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo AND the A6a synthetic TCMS demo caller) |
-| `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.3.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | concept (inactive, credentials pending) |
+| `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.3.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | working, live-verified both AI lanes (exported inactive/credential-free by design, same as every other workflow here -- see "Import status" below) |
 | `DigiTax \| Invoice Phase 1 \| Shared \| Assemble ActivityExecution \| v1.0.0` | `digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json` | `digitax-invoice-phase1-shared-assemble-activity-execution` | demo-ready (active/published -- no webhook, never externally reachable, but n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow invoke an unpublished target at all) |
 
 Workflow **ids are deterministic and never change** across a rename --
@@ -1008,16 +1008,22 @@ than a confident `MISSING_FIELD` failure. This satisfies the project-wide
 rule that low-confidence or missing OCR fields must never auto-pass --
 verified with real Node.js execution, not just asserted.
 
-### Import status: imported, credentials pending
+### Import status: imported inactive by default; live-verified (both AI lanes) in the shared devstack
 
-Imported as **inactive** by both the presentation demo stack
-(`digitax-phase1-demo-n8n`) and the developer stack's `n8n-init`
-(`digitax_devstack_n8n_data` volume) -- neither activates Flow 1b by
-default. **No Gemini credential and no `LOCAL_LLM_BASE_URL` are configured
-in either environment.** `02.3 Run OCR/LLM extraction (Gemini)` still
-carries the same `REPLACE_WITH_YOUR_CREDENTIAL_ID` placeholder as the
-historical workflow -- nothing was copied from any other n8n instance.
-Before a real end-to-end run:
+The **exported, git-committed file stays inactive with a placeholder
+credential by design** -- `02.3 Run OCR/LLM extraction (Gemini)` always
+carries `REPLACE_WITH_YOUR_CREDENTIAL_ID` on import, and both the
+presentation demo stack (`digitax-phase1-demo-n8n`) and the developer
+stack's `n8n-init` leave Flow 1b inactive by default. This is a permanent
+property of the tracked artifact, not a temporary "not yet done" state --
+a real credential and an explicit activation are always separate,
+operator-side steps, never part of the checked-in export.
+
+That said, both AI lanes (cloud Gemini and local) **have been fully
+live-verified end to end**, repeatedly, in the shared devstack this
+session -- including through a complete `stop-all-services.ps1`/
+`start-all-services.ps1` cycle, proving the verification wasn't an
+artifact of one long-running process. To reproduce:
 
 1. Open the n8n UI (`http://localhost:5679` for either stack).
 2. Select **DigiTax | Invoice Phase 1 | Flow 1b | PDF OCR/LLM Concept | v0.3.0**.
@@ -1026,14 +1032,13 @@ Before a real end-to-end run:
    Studio API key). For local AI: set `LOCAL_LLM_BASE_URL`/`LOCAL_LLM_MODEL`
    in `.env` (dev stack) before starting, pointing at an OpenAI-compatible
    endpoint you already run yourself.
-4. Activate the workflow only after that -- it is deliberately left
-   inactive on import.
+4. Activate the workflow (`n8n update:workflow --active=true` or via the
+   UI) -- it is deliberately left inactive on import.
 
-Status is **imported, inactive, visually structured, credentials
-pending** -- not "working." Control evaluation already calls the real
-Phase 1 API (see above); the remaining gap is purely credentials
-(Gemini API key or a reachable local endpoint). No E2E claim is made
-without a credential or a real local endpoint actually present.
+Flow 1b now responds with the same JSON `resultBundle` contract Flow 1a
+does (see "04.5 Assemble result bundle" / "04.6 Respond with result
+bundle") -- not a standalone HTML report -- so both flows render through
+the same TCMS Nachweisakte page.
 
 ### Verification
 
@@ -1057,11 +1062,12 @@ without a credential or a real local endpoint actually present.
   temporarily activated for this check only -- an unknown AI profile, a
   missing AI profile, and an unconfigured local provider each independently
   confirmed to route to `nicht_pruefbar`/`technical_review` rather than a
-  cloud default or a silent fallback. The cloud lane itself fails at
-  credential resolution in this environment (no real Gemini credential is
-  configured anywhere in this repository or its containers), so it is
-  reported as configured/importable but not E2E-verified, per the
-  AI-selection spec's own instruction for that case.
+  cloud default or a silent fallback. Both the local lane and the cloud
+  (real Gemini credential, provisioned only in the running devstack's own
+  credential store -- never in git) lane have since been live-verified
+  end to end, producing real, correctly-routed results (including a real
+  DigiTax Risk Review call and a matched organization risk on the TCMS
+  side), reproducible via the steps above.
 - Full detail, exact commands, and evidence in
   `coordination/claude-codex/handover-log.md` and
   `output/bpmn/flowcharts/n8n/n8n_flow01_mapping.md`.
