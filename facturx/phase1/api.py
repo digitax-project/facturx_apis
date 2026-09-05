@@ -11,11 +11,13 @@ import json
 import logging
 import os
 import re
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from pypdf import PdfReader
 
 from .capabilities import CAPABILITIES
 from .document_intake import MAX_UPLOAD_BYTES, inspect_document
@@ -205,6 +207,36 @@ async def inspect(file: UploadFile):
     }
 
 
+_MIN_REAL_TEXT_CHARS = 50
+
+
+@router.post("/v1/invoices/extract-text")
+async def extract_text(file: UploadFile):
+    """Deterministic, free, instant first step for the text-extraction-
+    first architecture (validated 2026-09-03/04 across multiple random-
+    sample accuracy rounds against a real pilot organization's invoices):
+    most real invoices are born-digital PDFs with a
+    fully extractable, lossless text layer, making a render-to-image step
+    unnecessary lossy work for the majority of real documents. A caller
+    (Flow 1b's local lane) uses `hasText` to decide whether to send the
+    returned `text` to a text-only LLM instead of rendering the page to an
+    image and using a vision model. `_MIN_REAL_TEXT_CHARS` matches the
+    threshold used throughout this session's own testing to distinguish a
+    real text layer from a near-empty one (e.g. a scanned PDF with only a
+    handful of stray characters from a corrupted/partial layer)."""
+    content = await _read_upload_bounded(file)
+    try:
+        reader = PdfReader(BytesIO(content))
+        text = "".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        text = ""
+    return {
+        "text": text,
+        "charCount": len(text),
+        "hasText": len(text.strip()) >= _MIN_REAL_TEXT_CHARS,
+    }
+
+
 @router.post("/v1/invoices/normalize")
 async def normalize(
     file: UploadFile,
@@ -337,6 +369,16 @@ async def process(
 _ALLOWED_EXTRACTION_STATUSES = ("completed", "partial", "failed")
 _SHA256_HEX_PATTERN = re.compile(r"^[A-Fa-f0-9]{64}$")
 _SUPPORTED_EXTRACTED_MIME_TYPE = "application/pdf"
+# Only the two methods that genuinely apply to an externally-extracted
+# plain PDF -- unlike sourceType/detectedFormat above, method has two
+# legitimate values here (added 2026-09-04 for the text-extraction-first
+# architecture: a caller now legitimately did either a vision/OCR read or
+# a real-text-layer + text-only-LLM read of the same plain PDF), so it is
+# validated against this narrow set rather than hardcoded outright.
+# embedded_xml/direct_xml stay forbidden here regardless -- this endpoint
+# only ever exists for the plain-PDF case, so a caller can never claim a
+# structured-document method to route around STR-003/STR-004.
+_ALLOWED_EXTRACTED_METHODS = ("ocr_llm", "text_llm")
 
 
 def _require_object_field(payload: dict, field_name: str) -> dict:
@@ -358,6 +400,39 @@ def _require_nonempty_string_field(source: dict, field_name: str, path: str) -> 
 
 
 _BUYER_MASTER_DATA_FIELDS = ("name", "street", "postalCode", "city", "countryCode")
+_ALTERNATE_ADDRESS_FIELDS = ("label", "street", "postalCode", "city", "countryCode")
+
+
+def _parse_alternate_addresses(raw: object) -> list[dict]:
+    """Legitimate secondary addresses (e.g. a delivery/forwarding address)
+    ORG-001 should accept alongside the primary buyer address -- see
+    evaluate_org_001's own doc comment. Absent entirely (not present in the
+    request at all) is the normal case and returns an empty list; present
+    but malformed is a real validation error, never silently ignored.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise UnsupportedInputError(
+            "INVALID_REQUEST_BODY", "buyerMasterData.alternateAddresses must be an array when present.", status_code=422,
+        )
+    parsed = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY",
+                f"buyerMasterData.alternateAddresses[{index}] must be an object.",
+                status_code=422,
+            )
+        parsed.append(
+            {
+                field: _require_nonempty_string_field(
+                    entry, field, f"buyerMasterData.alternateAddresses[{index}].{field}"
+                )
+                for field in _ALTERNATE_ADDRESS_FIELDS
+            }
+        )
+    return parsed
 
 
 def _parse_buyer_master_data(raw: object) -> Optional[dict]:
@@ -373,10 +448,12 @@ def _parse_buyer_master_data(raw: object) -> Optional[dict]:
         raise UnsupportedInputError(
             "INVALID_REQUEST_BODY", "buyerMasterData must be an object when present.", status_code=422,
         )
-    return {
+    parsed = {
         field: _require_nonempty_string_field(raw, field, f"buyerMasterData.{field}")
         for field in _BUYER_MASTER_DATA_FIELDS
     }
+    parsed["alternateAddresses"] = _parse_alternate_addresses(raw.get("alternateAddresses"))
+    return parsed
 
 
 def _parse_control_profile_id(raw: object) -> Optional[str]:
@@ -466,6 +543,13 @@ async def process_extracted(
                 f"extraction.status must be one of {_ALLOWED_EXTRACTION_STATUSES}.",
                 status_code=422,
             )
+        extraction_method = extraction_in.get("method", "ocr_llm")
+        if extraction_method not in _ALLOWED_EXTRACTED_METHODS:
+            raise UnsupportedInputError(
+                "INVALID_REQUEST_BODY",
+                f"extraction.method must be one of {_ALLOWED_EXTRACTED_METHODS} for this endpoint.",
+                status_code=422,
+            )
         overall_confidence = extraction_in.get("overallConfidence")
         if isinstance(overall_confidence, bool) or not isinstance(overall_confidence, (int, float)) or not (
             0.0 <= float(overall_confidence) <= 1.0
@@ -500,7 +584,7 @@ async def process_extracted(
             "profile": None,
         }
         extraction = {
-            "method": "ocr_llm",
+            "method": extraction_method,
             "status": extraction_status,
             "overallConfidence": float(overall_confidence),
             "adapterVersion": adapter_version,

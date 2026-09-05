@@ -152,6 +152,157 @@ def test_buyer_master_data_works_for_an_organization_with_no_demo_fixture(
     assert control_ids["ORG-001"] == "passed"
 
 
+def test_org001_passes_on_alternate_delivery_address_despite_name_mismatch(
+    client, valid_hybrid_pdf_bytes
+):
+    """A legitimate secondary delivery/forwarding address is expected to
+    carry a DIFFERENT name on the invoice than the buyer's own legal name
+    (e.g. a logistics partner plus a goods-identification marking) --
+    confirmed live for a real pilot organization's own real delivery
+    arrangement with a logistics partner, 2026-09-05. ORG-001 must accept
+    a match on address alone against any approved alternate, without also
+    requiring the name to match."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Registered Office Str. 1",
+                    "postalCode": "99999",
+                    "city": "Registeredcity",
+                    "countryCode": "DE",
+                    "alternateAddresses": [
+                        {
+                            "label": "Delivery via a logistics partner, goods-identification marking on the name line",
+                            "street": "Musterweg 10",
+                            "postalCode": "04109",
+                            "city": "Leipzig",
+                            "countryCode": "DE",
+                        }
+                    ],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    control_ids = {c["controlId"]: c["outcome"] for c in report["controls"]}
+    assert control_ids["ORG-001"] == "passed"
+
+
+def test_org001_treats_strasse_and_str_abbreviation_as_equivalent(
+    client, blank_pdf_bytes
+):
+    """Real gap caught live 2026-09-05 by a genuine-random-sample stress
+    test against a real pilot organization's invoices: a real invoice's
+    extracted street spelled the suffix out in full ("...-Straße") while
+    the matching master-data record on file used the abbreviation
+    ("...-Str."), an identical address that still produced a false
+    ORG-001 mismatch. Reproduced here with a synthetic address (not the
+    real one) -- the extracted street spells the suffix out in full while
+    the recorded alternate uses the abbreviation, so this only passes if
+    the normalization actually folds them together (not just a
+    coincidentally-matching fixture string)."""
+    fields = _happy_path_fields()
+    fields["invoice.buyer.address.street"] = _f("Musterhahn-Straße 5", confidence=0.95)
+    fields["invoice.buyer.address.postalCode"] = _f("54321", confidence=0.95)
+    fields["invoice.buyer.address.city"] = _f("Musterstadt (Beispielland)", confidence=0.95)
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Registered Office Str. 1",
+                    "postalCode": "99999",
+                    "city": "Registeredcity",
+                    "countryCode": "DE",
+                    "alternateAddresses": [
+                        {
+                            "label": "Recorded with the abbreviation",
+                            "street": "Musterhahn-Str. 5",
+                            "postalCode": "54321",
+                            "city": "Musterstadt (Beispielland)",
+                            "countryCode": "DE",
+                        }
+                    ],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    org_001 = next(c for c in report["controls"] if c["controlId"] == "ORG-001")
+    assert org_001["outcome"] == "passed"
+
+
+def test_org001_fails_when_address_matches_neither_primary_nor_any_alternate(
+    client, valid_hybrid_pdf_bytes
+):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Registered Office Str. 1",
+                    "postalCode": "99999",
+                    "city": "Registeredcity",
+                    "countryCode": "DE",
+                    "alternateAddresses": [
+                        {
+                            "label": "A real but unrelated alternate address",
+                            "street": "Some Other Str. 5",
+                            "postalCode": "12345",
+                            "city": "Elsewhere",
+                            "countryCode": "DE",
+                        }
+                    ],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    org_001 = next(c for c in report["controls"] if c["controlId"] == "ORG-001")
+    assert org_001["outcome"] == "failed"
+    assert "MASTER_DATA_MISMATCH" in org_001["reasonCodes"]
+
+
+def test_malformed_alternate_address_entry_is_422_not_500(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X", "street": "Musterweg 10",
+                    "postalCode": "04109", "city": "Leipzig", "countryCode": "DE",
+                    "alternateAddresses": [{"label": "missing every other field"}],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_buyer_master_data_without_control_profile_id_is_rejected(
     client, valid_hybrid_pdf_bytes
 ):
