@@ -24,6 +24,8 @@ EXPECTED_WORKFLOW_FILES = (
     "digitax_invoice_phase1_flow1a_upload_v1_0_0.json",
     "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json",
     "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json",
+    "digitax_invoice_phase1_flow0_mailbox_intake_v0_1_0.json",
+    "digitax_invoice_phase1_flow2_teams_review_notify_v0_1_0.json",
 )
 EXPECTED_ACTIVE_IDS = {
     "digitax-invoice-phase1-upload-demo",
@@ -33,6 +35,8 @@ EXPECTED_ACTIVE_IDS = {
 EXPECTED_INACTIVE_IDS = {
     "digitax-invoice-phase1-structured-demo",
     "digitax-invoice-phase1-flow1b-pdf-ocr",
+    "digitax-invoice-phase1-flow0-mailbox-intake",
+    "digitax-invoice-phase1-flow2-teams-review-notify",
 }
 
 
@@ -66,7 +70,7 @@ def test_n8n_init_workflow_ids_match_every_shipped_workflow_file():
         f"n8n-init.sh WORKFLOW_IDS {workflow_ids} does not match the actual "
         f"shipped workflow ids {actual_ids}"
     )
-    assert len(workflow_ids) == 5, "expected exactly five workflows in the developer stack"
+    assert len(workflow_ids) == 7, "expected exactly seven workflows in the developer stack"
 
 
 def test_n8n_init_active_ids_match_expected_policy():
@@ -94,10 +98,10 @@ def test_n8n_init_shared_subworkflow_imported_before_its_callers():
         assert shared_index < ordered_ids.index(caller_id)
 
 
-def test_n8n_init_verification_messages_say_five():
+def test_n8n_init_verification_messages_say_seven():
     source = _n8n_init_source()
-    assert "expect exactly 5" in source
-    assert "5 workflows imported" in source
+    assert "expect exactly 7" in source
+    assert "7 workflows imported" in source
 
 
 def test_compose_dev_yml_sets_crypto_builtin_allowlist_on_runtime_n8n_service():
@@ -118,10 +122,11 @@ def test_compose_dev_yml_sets_crypto_builtin_allowlist_on_runtime_n8n_service():
     )
 
 
-def test_compose_dev_yml_describes_five_workflows_not_four():
+def test_compose_dev_yml_describes_seven_workflows_not_four_or_five():
     text = COMPOSE_DEV_PATH.read_text(encoding="utf-8")
     assert "four versioned" not in text.lower(), "compose.dev.yml's own description is stale (still says four)"
-    assert "five versioned" in text.lower()
+    assert "five versioned" not in text.lower(), "compose.dev.yml's own description is stale (still says five)"
+    assert "seven versioned" in text.lower()
 
 
 def test_compose_files_set_risk_review_base_url_on_runtime_n8n_service():

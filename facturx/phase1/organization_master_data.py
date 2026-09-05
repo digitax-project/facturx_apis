@@ -76,6 +76,7 @@ def build_buyer_master_data_context(
             "postalCode": buyer_master_data["postalCode"],
             "city": buyer_master_data["city"],
             "countryCode": buyer_master_data["countryCode"],
+            "alternateAddresses": buyer_master_data.get("alternateAddresses", []),
         },
         "approvedSuppliers": [],
     }

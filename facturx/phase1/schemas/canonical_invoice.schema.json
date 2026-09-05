@@ -26,7 +26,7 @@
       "additionalProperties": false,
       "required": ["method", "status", "overallConfidence"],
       "properties": {
-        "method": { "enum": ["embedded_xml", "direct_xml", "ocr_llm"] },
+        "method": { "enum": ["embedded_xml", "direct_xml", "ocr_llm", "text_llm"] },
         "status": { "enum": ["completed", "partial", "failed"] },
         "overallConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "adapterVersion": { "type": ["string", "null"] },

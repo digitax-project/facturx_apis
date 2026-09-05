@@ -40,7 +40,7 @@ WORKFLOWS_DIR="/data/workflows"
 # webhook and is never externally reachable, but n8n 2.33.7's
 # WorkflowPublicationService refuses to let Execute Workflow invoke an
 # unpublished target at all, confirmed empirically.
-WORKFLOW_IDS="digitax-invoice-phase1-shared-assemble-activity-execution digitax-invoice-phase1-structured-demo digitax-invoice-phase1-upload-demo digitax-invoice-phase1-batch-item digitax-invoice-phase1-flow1b-pdf-ocr"
+WORKFLOW_IDS="digitax-invoice-phase1-shared-assemble-activity-execution digitax-invoice-phase1-structured-demo digitax-invoice-phase1-upload-demo digitax-invoice-phase1-batch-item digitax-invoice-phase1-flow1b-pdf-ocr digitax-invoice-phase1-flow0-mailbox-intake digitax-invoice-phase1-flow2-teams-review-notify"
 workflow_file_for_id() {
   case "$1" in
     digitax-invoice-phase1-shared-assemble-activity-execution) echo "digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json" ;;
@@ -48,6 +48,8 @@ workflow_file_for_id() {
     digitax-invoice-phase1-upload-demo) echo "digitax_invoice_phase1_flow1a_upload_v1_0_0.json" ;;
     digitax-invoice-phase1-batch-item) echo "digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json" ;;
     digitax-invoice-phase1-flow1b-pdf-ocr) echo "digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json" ;;
+    digitax-invoice-phase1-flow0-mailbox-intake) echo "digitax_invoice_phase1_flow0_mailbox_intake_v0_1_0.json" ;;
+    digitax-invoice-phase1-flow2-teams-review-notify) echo "digitax_invoice_phase1_flow2_teams_review_notify_v0_1_0.json" ;;
     *) echo "" ;;
   esac
 }
@@ -86,7 +88,7 @@ for id in $ACTIVE_IDS; do
   n8n publish:workflow --id="$id" >/dev/null
 done
 
-echo "[n8n-init] Verifying imported workflow set (expect exactly 5, no duplicates)..."
+echo "[n8n-init] Verifying imported workflow set (expect exactly 7, no duplicates)..."
 GOT_IDS=$(existing_ids | sort)
 EXPECT_IDS=$(printf '%s\n' $WORKFLOW_IDS | sort)
 if [ "$GOT_IDS" != "$EXPECT_IDS" ]; then
@@ -110,4 +112,4 @@ if [ "$GOT_ACTIVE" != "$EXPECT_ACTIVE" ]; then
   exit 1
 fi
 
-echo "[n8n-init] Done. 5 workflows imported; Upload Demo + Batch Item + shared Assemble ActivityExecution active, Structured Regression + Flow 1b inactive."
+echo "[n8n-init] Done. 7 workflows imported; Upload Demo + Batch Item + shared Assemble ActivityExecution active, Structured Regression + Flow 1b + Flow 0 + Flow 2 inactive."

@@ -1,0 +1,1016 @@
+{
+  "id": "digitax-invoice-phase1-flow0-mailbox-intake",
+  "name": "DigiTax | Invoice Phase 1 | Flow 0 | Mailbox Intake | v0.1.0",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "content": "# Flow 0: Mailbox Intake (v0.1.0)\n\nWatches one Outlook mail folder, classifies which messages/attachments are\nreal invoices addressed to Unternehmen X, then routes each confirmed invoice\ninto the existing frozen Flow 1a (structured factur-X/XRechnung) or Flow 1b\n(PDF/OCR) webhook -- exactly the same webhooks TCMS's own browser-triggered\nroutes call -- and finally ingests the resulting resultBundle into TCMS\nthrough a dedicated service-to-service endpoint, since an email arriving on\nits own has no browser session to authenticate with.\n\nThis instance is single-tenant (one mailbox, one real TCMS organization,\nset via UNTERNEHMEN_X_TCMS_ORGANIZATION_ID) -- no per-company mailbox routing\nlogic exists here on purpose.\n\nLOCAL AI ONLY, no exceptions: both classification steps (body-level\n\"has invoice?\" and per-attachment is_invoice/is_issued_to_company) call\nLOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL exclusively -- never Gemini or any other\ncloud provider. This is a deliberate policy decision (H1, real-tenant\nsession, 2026-09-02), not a cost/latency choice: real invoice content must\nnever leave the local machine. If you are tempted to add a cloud fallback\nhere, don't -- ask first.\n\nImported inactive: fill in the REPLACE_WITH_YOUR_CREDENTIAL_ID Microsoft\nOutlook credential and the REPLACE_WITH_YOUR_INVOICE_FOLDER folder\nreference in the n8n UI, set LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL/\nLOCAL_PDF_RENDER_URL (same vars Flow 1b's local lane already uses) plus\nthe Flow 0 env vars documented in .env.example, and publish a real\nOrganizationBaseline for this organization in TCMS (Flow 0 fails closed\nwith no buyer master data to send) before activating.",
+        "height": 560,
+        "width": 900,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-2016, -640],
+      "typeVersion": 1,
+      "id": "f0-note-version",
+      "name": "Version Info"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours" }]
+        }
+      },
+      "id": "f0-start-workflow",
+      "name": "Start Workflow",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [-2016, 48],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "resource": "folderMessage",
+        "folderId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Testrechnungen"
+        },
+        "filtersUI": {},
+        "options": {}
+      },
+      "id": "f0-get-messages",
+      "name": "Get All Messages from one specific Mail-Folder",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "position": [-1792, 48],
+      "webhookId": "digitax-flow0-get-messages",
+      "typeVersion": 2,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Microsoft Outlook"
+        }
+      },
+      "notes": "Points at a dedicated test-invoice mail folder -- no subject-keyword pre-filter, since every message moved into this folder is already a real test invoice by construction; the two-stage classification gate downstream (local text classification, then per-attachment local vision classification) still runs unchanged. Credential id and folder value are placeholders -- pick your own Microsoft Outlook credential and folder live in the n8n UI after importing (n8n-init re-imports this file on every container restart, which resets these to whatever this file says, so a real deployment will re-pick them after a restart regardless)."
+    },
+    {
+      "parameters": {
+        "html": "={{ $json.subject }}\n{{ $json.bodyPreview }}",
+        "destinationKey": "markdown",
+        "options": {}
+      },
+      "id": "f0-markdown",
+      "name": "Markdown",
+      "type": "n8n-nodes-base.markdown",
+      "position": [-1568, 48],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Local-AI-only classification (H1 decision, 2026-09-02): plain text\n// completion, no vision needed at this stage -- the body/subject text is\n// enough to decide whether to even look at attachments.\nconst PROMPT_PREFIX = 'Classify the following email text into exactly one category: \"has invoice\" (there is at least one invoice in the message) or \"has no invoice\" (there is no invoice in the message). Output JSON only, no markdown fences, in the form {\"category\": \"has invoice\"} or {\"category\": \"has no invoice\"}.\\n\\nEmail text:\\n';\n\nreturn items.map(item => ({\n  json: {\n    localRequest: {\n      model: $env.LOCAL_LLM_MODEL,\n      temperature: 0,\n      messages: [\n        { role: 'user', content: PROMPT_PREFIX + (item.json.markdown || '') },\n      ],\n    },\n  },\n}));\n"
+      },
+      "id": "f0-build-message-classification-request",
+      "name": "Build Message Classification Request (Local)",
+      "type": "n8n-nodes-base.code",
+      "position": [-1408, 48],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LOCAL_LLM_BASE_URL }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.localRequest) }}",
+        "options": {}
+      },
+      "id": "f0-classify-message-locally",
+      "name": "Classify Message Locally",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [-1280, 48],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "onError": "continueErrorOutput",
+      "notes": "OpenAI-compatible /chat/completions call against LOCAL_LLM_BASE_URL -- same env var Flow 1b's local lane already uses. No credential by default (a local dev endpoint is typically unauthenticated); add an Authorization header sourced from an environment expression if yours needs one. No cloud fallback on failure -- routes to \"Message Classification Unavailable (Local AI)\" instead."
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractText(item) {\n  const j = item.json || {};\n  if (\n    Array.isArray(j.choices) &&\n    j.choices[0] &&\n    j.choices[0].message &&\n    typeof j.choices[0].message.content === 'string'\n  ) {\n    return j.choices[0].message.content;\n  }\n  throw new Error('Could not find local LLM text output in expected choices[0].message.content field.');\n}\n\nfunction stripFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\n// The chain since \"Markdown\" (Build Message Classification Request ->\n// Classify Message Locally, an httpRequest node whose JSON response\n// replaces $json entirely) has discarded the original message's own\n// fields -- id, subject, sender, etc. Recovered here from the original\n// list node. Must use itemMatching(index), not the bare .item shorthand:\n// this Code node runs once for ALL items, so $('NodeName').item (no\n// index) always resolves to the SAME fixed item regardless of which item\n// the current .map() iteration is on -- confirmed live 2026-09-02 with a\n// real 2-message batch, where both items silently ended up with the\n// first message's subject/id. itemMatching(index) uses n8n's real\n// pairedItem lineage instead of a naive fixed/positional lookup.\nreturn items.map((item, index) => {\n  const original = $('Get All Messages from one specific Mail-Folder').itemMatching(index).json;\n  const raw = extractText(item);\n  const cleaned = stripFences(raw);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Local LLM message-classification output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  // Fail closed: anything other than exactly \"has invoice\" is treated as\n  // \"has no invoice\" -- never assume a message needs processing on an\n  // ambiguous or unexpected model answer.\n  return {\n    json: {\n      ...original,\n      category: parsed.category === 'has invoice' ? 'has invoice' : 'has no invoice',\n    },\n  };\n});\n"
+      },
+      "id": "f0-parse-message-classification",
+      "name": "Parse Message Classification",
+      "type": "n8n-nodes-base.code",
+      "position": [-1152, 48],
+      "typeVersion": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0-has-invoice-message-cond-1",
+              "operator": { "type": "string", "operation": "equals" },
+              "leftValue": "={{ $json.category }}",
+              "rightValue": "has invoice"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0-has-invoice-message-level",
+      "name": "Has Invoice (Message Level)?",
+      "type": "n8n-nodes-base.if",
+      "position": [-1024, 48],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-1152, 224],
+      "id": "f0-message-classification-unavailable",
+      "name": "Message Classification Unavailable (Local AI)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-992, 144],
+      "id": "f0-excluding-mail",
+      "name": "Excluding mail which is not invoice for company"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "output": "raw",
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "id": "f0-download-attachments",
+      "name": "Download Attachments",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "position": [-896, -64],
+      "webhookId": "digitax-flow0-download-attachments",
+      "typeVersion": 2,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Microsoft Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "move",
+        "messageId": "={{ $json.id }}",
+        "folderId": ""
+      },
+      "id": "f0-claim-message",
+      "name": "Claim Message (move to Verarbeitet)",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "position": [-896, -64],
+      "typeVersion": 2,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Microsoft Outlook"
+        }
+      },
+      "notes": "SERIAL GATE, not a side branch -- confirmed live 2026-09-04 that a parallel/dead-end version of this node does NOT prevent duplicate TCMS ingestion: when a manual run overlaps a scheduled run, both fetch and fully process the same message (both reach \"Ingest Result to TCMS\"), and only the SECOND one's mailbox move 404s -- the duplicate submission itself still goes through. Making this a real gate (its success output is the only path to \"Split Attachments\"/\"Extract Email Metadata\") means whichever execution loses the race (message already moved by the other) stops HERE and never reaches Flow 1a/1b submission at all -- exactly one execution processes each message. `onError: continueErrorOutput` routes a 404 (someone else already claimed it) to the dedicated error branch below instead of failing the whole execution. Deliberately placed after \"Download Attachments\" rather than right after \"Get All Messages\": Exchange/Graph message ids are not stable across a folder move, and \"Download Attachments\" needs the pre-move id -- moving earlier broke it with a live 404 ErrorItemNotFound (confirmed 2026-09-04). The move operation's own success output is just `{success: true}` (not the message's properties, and NOT its binary attachments) -- \"Recover Message + Attachments After Claim\" restores both from \"Download Attachments\" via itemMatching."
+    },
+    {
+      "parameters": {
+        "jsCode": "// \"Claim Message\" (the move above) replaces $json with just {success:\n// true} and drops the downloaded attachment binary entirely -- neither\n// n8n's docs/UI make this obvious (confirmed live 2026-09-04). Recover\n// both the message fields AND the binary attachments from \"Download\n// Attachments\", the last node that actually had them, via\n// itemMatching(index) -- not the bare .item shorthand, which always\n// resolves to a fixed item regardless of loop position in a Code node\n// that runs once for all items.\nreturn items.map((item, index) => {\n  const original = $('Download Attachments').itemMatching(index);\n  return { json: original.json, binary: original.binary };\n});"
+      },
+      "id": "f0-recover-after-claim",
+      "name": "Recover Message + Attachments After Claim",
+      "type": "n8n-nodes-base.code",
+      "position": [-784, -128],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {},
+      "id": "f0-message-already-claimed",
+      "name": "Message Already Claimed (Race Lost)",
+      "type": "n8n-nodes-base.noOp",
+      "position": [-784, 32],
+      "typeVersion": 1,
+      "notes": "This execution lost the race: another overlapping Flow 0 run (scheduled or manual) already claimed/moved this exact message first, so \"Claim Message\" 404'd. Intentional, quiet dead-end -- the OTHER execution is the one actually processing this invoice, so stopping here (not retrying, not erroring the whole workflow) is correct."
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"subject\": \"{{$json.subject}}\",\n  \"senderEmail\": \"{{$json.sender.emailAddress.address}}\",\n  \"senderName\": \"{{$json.sender.emailAddress.name}}\",\n  \"messageId\": \"{{$json.id}}\",\n  \"receivedAt\": \"{{$json.receivedDateTime}}\",\n  \"webLink\": \"{{$json.webLink}}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-672, -160],
+      "id": "f0-extract-email-metadata",
+      "name": "Extract Email Metadata for new invoice"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Inherited from the legacy prototype, but $input.first().json.id was\n// wrong for a multi-message batch: it always points at the FIRST message\n// in the whole input, not the message the outer loop is currently on,\n// silently pairing every attachment after the first with the wrong\n// message's metadata (confirmed live 2026-09-02 with a real 2-message\n// batch -- downstream, \"Merge Attachment + Message Metadata by\n// messageId\" then fails to match the mispaired item and drops it).\n// item.json.id is the current message's own id, matching how\n// metadata/subject/sender are already correctly read from `item.json`\n// two lines below.\nlet results = [];\n\nfor (const item of $input.all()) {\n\tif (!item.binary) continue;\n\n\tconst metadata = item.json;\n\n\tfor (const key of Object.keys(item.binary)) {\n\t\tresults.push({\n\t\t\tjson: {\n\t\t\t\tfileName: item.binary[key].fileName,\n\t\t\t\tmessageId: item.json.id,\n\t\t\t\tsubject: metadata.subject,\n\t\t\t\tsenderName: metadata.sender?.emailAddress?.name || '',\n\t\t\t\tsenderEmail: metadata.sender?.emailAddress?.address || '',\n\t\t\t\treceivedAt: metadata.receivedAt,\n\t\t\t\twebLink: metadata.webLink\n\t\t\t},\n\t\t\tbinary: {\n\t\t\t\tdata: item.binary[key]\n\t\t\t}\n\t\t});\n\t}\n}\n\nreturn results;\n"
+      },
+      "id": "f0-split-attachments",
+      "name": "Split Attachments",
+      "type": "n8n-nodes-base.code",
+      "position": [-672, 48],
+      "typeVersion": 2,
+      "retryOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "messageId, webLink, senderEmail, senderName, messageId",
+        "outputDataFrom": "input2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [-448, -64],
+      "id": "f0-merge-attachment-metadata",
+      "name": "Merge Attachment + Message Metadata by messageId"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const buffer = await this.helpers.getBinaryDataBuffer(i, 'data');\n  results.push({\n    json: {\n      ...item.json,\n      attachmentBase64: buffer.toString('base64'),\n      attachmentMimeType: item.binary.data.mimeType,\n    },\n    binary: item.binary,\n  });\n}\nreturn results;\n"
+      },
+      "id": "f0-encode-attachment",
+      "name": "Encode Attachment for Local Classification",
+      "type": "n8n-nodes-base.code",
+      "position": [-224, 16],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "f0-route-cond-pdf",
+                    "leftValue": "={{ $json.attachmentMimeType }}",
+                    "rightValue": "application/pdf",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "outputKey": "pdf"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "f0-route-cond-image",
+                    "leftValue": "={{ $json.attachmentMimeType }}",
+                    "rightValue": "^image/",
+                    "operator": { "type": "string", "operation": "regex" }
+                  }
+                ]
+              },
+              "outputKey": "image"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "f0-route-by-attachment-type",
+      "name": "Route by Attachment Type",
+      "type": "n8n-nodes-base.switch",
+      "position": [-96, 16],
+      "typeVersion": 3.4,
+      "notes": "PDF -> rendered to PNG first (most local vision endpoints reject a raw PDF as image_url, per Flow 1b's own local lane). image/* -> classified directly. Anything else (docx, xml, unknown) -> \"Attachment Not Classifiable (Local AI)\", never guessed at."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LOCAL_PDF_RENDER_URL }}/render",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ pdfBase64: $json.attachmentBase64, page: 0 }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "f0-render-pdf-png",
+      "name": "Render PDF Page as PNG (Local)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [128, -80],
+      "typeVersion": 4.2,
+      "onError": "continueErrorOutput",
+      "notes": "Same dev-only render helper Flow 1b's local lane uses (examples/n8n/scripts/pdf_render_service.py), resolved purely from LOCAL_PDF_RENDER_URL. Not bundled or auto-started; must already be running. Response is expected to carry pngBase64, same contract as Flow 1b's own render call."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Local-AI-only classification (H1 decision, 2026-09-02): never Gemini,\n// never any cloud vision provider, for real invoice content.\nconst PROMPT = 'You are an accounts receivable agent helping to identify whether an email attachment is an invoice. Look at the image and answer: (1) is_invoice: is this document an invoice? (2) is_issued_to_company: is this invoice addressed/issued to the buyer company (not some unrelated document)? Output JSON only, no markdown fences, exactly in the form {\"is_invoice\": true, \"is_issued_to_company\": true}.';\n\nreturn items.map(item => {\n  // Came from the render branch (PDF -> PNG) or the passthrough branch\n  // (already an image) -- either way, one image to classify.\n  const base64 = item.json.pngBase64 !== undefined ? item.json.pngBase64 : item.json.attachmentBase64;\n  const mimeType = item.json.pngBase64 !== undefined ? 'image/png' : item.json.attachmentMimeType;\n\n  return {\n    json: {\n      localRequest: {\n        model: $env.LOCAL_LLM_MODEL,\n        temperature: 0,\n        messages: [\n          {\n            role: 'user',\n            content: [\n              { type: 'text', text: PROMPT },\n              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },\n            ],\n          },\n        ],\n      },\n    },\n    binary: item.binary,\n  };\n});\n"
+      },
+      "id": "f0-build-vision-classification-request",
+      "name": "Build Vision Classification Request (Local)",
+      "type": "n8n-nodes-base.code",
+      "position": [352, -32],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LOCAL_LLM_BASE_URL }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.localRequest) }}",
+        "options": {}
+      },
+      "id": "f0-classify-attachment-locally",
+      "name": "Classify Attachment Locally",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [480, -32],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "onError": "continueErrorOutput",
+      "notes": "Same LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL as Flow 1b's local lane -- gemma-3-27b-it-qat is the proven-working vision model for this project (qwen/qwen3.8-27b is NOT vision-capable, per the root README). No cloud fallback on failure -- routes to \"Attachment Not Classifiable (Local AI)\" instead."
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractText(item) {\n  const j = item.json || {};\n  if (\n    Array.isArray(j.choices) &&\n    j.choices[0] &&\n    j.choices[0].message &&\n    typeof j.choices[0].message.content === 'string'\n  ) {\n    return j.choices[0].message.content;\n  }\n  throw new Error('Could not find local LLM text output in expected choices[0].message.content field.');\n}\n\nfunction stripFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nreturn items.map(item => {\n  const raw = extractText(item);\n  const cleaned = stripFences(raw);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Local LLM attachment-classification output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  return {\n    json: {\n      is_invoice: parsed.is_invoice === true,\n      is_issued_to_company: parsed.is_issued_to_company === true,\n    },\n  };\n});\n"
+      },
+      "id": "f0-parse-attachment-classification",
+      "name": "Parse Attachment Classification",
+      "type": "n8n-nodes-base.code",
+      "position": [608, -32],
+      "typeVersion": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [352, 176],
+      "id": "f0-attachment-not-classifiable",
+      "name": "Attachment Not Classifiable (Local AI)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0-filter-cond-1",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "leftValue": "={{ $json.is_invoice }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "f0-filter-invoices",
+      "name": "Filter Invoices",
+      "type": "n8n-nodes-base.filter",
+      "position": [736, -32],
+      "typeVersion": 2.2,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "f0-has-invoice-cond-1",
+              "operator": { "type": "object", "operation": "notEmpty", "singleValue": true },
+              "leftValue": "={{ $input.first().json }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-has-invoice",
+      "name": "Has Invoice?",
+      "type": "n8n-nodes-base.if",
+      "position": [864, -32],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [992, 16],
+      "id": "f0-pdf-not-invoice",
+      "name": "Attachment is not Invoice"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [864, -256],
+      "id": "f0-merge-to-proceed",
+      "name": "Merge to proceed object"
+    },
+    {
+      "parameters": {
+        "content": "## Mail intake and per-attachment invoice classification (local AI only)\nBody-level \"has invoice?\" classifier, then per-attachment is_invoice/\nis_issued_to_company vision check -- both call LOCAL_LLM_BASE_URL/\nLOCAL_LLM_MODEL exclusively (H1 decision, 2026-09-02: real invoice content\nnever touches a cloud AI provider). PDFs are rendered to PNG first via\nLOCAL_PDF_RENDER_URL, same as Flow 1b's own local lane. Everything from\n\"Detect Invoice Format\" onward is new: Flow 0's own job is routing and TCMS\ningestion, not re-running the legacy K1/K2/BZSt/Excel/Reqeli chain (out of\nscope here).",
+        "height": 460,
+        "width": 2700,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-1856, -800],
+      "typeVersion": 1,
+      "id": "f0-note-intake-scope",
+      "name": "Sticky Note: intake scope"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/inspect",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-detect-format",
+      "name": "Detect Invoice Format",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1088, -256],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1088, -80],
+      "id": "f0-inspect-unavailable",
+      "name": "Inspect Service Unavailable"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.TCMS_BASE_URL }}/api/organizations/{{ $env.UNTERNEHMEN_X_TCMS_ORGANIZATION_ID }}/evidence/n8n-invoice-context",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.N8N_INGEST_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-fetch-buyer-master-data",
+      "name": "Fetch Unternehmen X Buyer Master Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1328, -256],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "onError": "continueErrorOutput",
+      "notes": "GETs this organization's real buyer master data (name/address/countryCode) and controlProfileId straight from its published TCMS OrganizationBaseline -- see server/api/organizations/[organizationId]/evidence/n8n-invoice-context/index.get.ts in tcms-framework. Fails closed (this branch) if no baseline has been published yet; Unternehmen X's real address is never hardcoded or duplicated into this workflow or into facturx_apis's own config."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1328, -80],
+      "id": "f0-buyer-master-data-missing",
+      "name": "Buyer Master Data Missing"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0-structured-cond-1",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "leftValue": "={{ [\"factur-x\", \"xrechnung\"].includes($('Detect Invoice Format').item.json.detectedFormat) }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0-is-structured-format",
+      "name": "Is Structured Format?",
+      "type": "n8n-nodes-base.if",
+      "position": [1568, -256],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only Unternehmen X's own real buyer master data (fetched moments ago from its\n// own published OrganizationBaseline) is forwarded -- never a demo fixture.\nconst organizationId = $env.UNTERNEHMEN_X_TCMS_ORGANIZATION_ID;\n\n// n8n's httpRequest node replaces the item with its HTTP response -- it\n// does not pass through pre-existing binary. \"Detect Invoice Format\" and\n// \"Fetch Unternehmen X Buyer Master Data\" are both httpRequest nodes sitting\n// between the attachment and here, so item.binary is empty by this point\n// (confirmed live 2026-09-02: \"Submit to Flow 1a/1b\" failed with \"input\n// data [does not] contain a binary file 'data'\"). Recovered from the last\n// node that still had it. Must use itemMatching(index), not the bare\n// .item shorthand -- this Code node runs once for ALL items, so\n// $('NodeName').item (no index) always resolves to the SAME fixed item\n// regardless of loop position (confirmed live 2026-09-02: with a multi-\n// attachment batch this silently attached the FIRST attachment's file to\n// every submission instead of each item's own file). itemMatching(index)\n// uses n8n's real pairedItem lineage instead of a naive fixed lookup.\nreturn items.map((item, index) => ({\n  json: {\n    phase1ProfileKey: organizationId,\n    tcmsOrganizationId: organizationId,\n    buyerMasterData: JSON.stringify(item.json.buyerMasterData),\n    controlProfileId: item.json.controlProfileId,\n  },\n  binary: $('Merge Attachment + Message Metadata by messageId').itemMatching(index).binary,\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1808, -384],
+      "id": "f0-build-flow1a-fields",
+      "name": "Build Flow 1a Submission Fields"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_SELF_BASE_URL }}/webhook/phase1-invoice-batch-item",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "invoiceFile",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "phase1ProfileKey",
+              "value": "={{ $json.phase1ProfileKey }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "tcmsOrganizationId",
+              "value": "={{ $json.tcmsOrganizationId }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "buyerMasterData",
+              "value": "={{ $json.buyerMasterData }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "controlProfileId",
+              "value": "={{ $json.controlProfileId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-submit-flow1a",
+      "name": "Submit to Flow 1a",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2048, -384],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "notes": "Calls Flow 1a's own webhook (digitax-phase1-invoice-batch-item) directly, on this same n8n instance -- the identical webhook TCMS's own n8n-batch-item-runs route calls. Returns {resultBundle: ...} on success."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2048, -240],
+      "id": "f0-flow1a-submission-failed",
+      "name": "Flow 1a Submission Failed"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TCMS_BASE_URL }}/api/organizations/{{ $env.UNTERNEHMEN_X_TCMS_ORGANIZATION_ID }}/evidence/n8n-inbound-runs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { resultBundle: $json.resultBundle } }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.N8N_INGEST_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-ingest-structured",
+      "name": "Ingest Result to TCMS (Structured)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2288, -384],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "onError": "continueErrorOutput",
+      "notes": "Server-to-server ingestion: no browser session exists for an email that arrived on its own -- see server/api/organizations/[organizationId]/evidence/n8n-inbound-runs/index.post.ts in tcms-framework."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2288, -520],
+      "id": "f0-tcms-ingest-failed-structured",
+      "name": "TCMS Ingestion Failed (Structured)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0-ai-profile-cond-1",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "leftValue": "={{ [\"local-default\", \"cloud-gemini\"].includes($env.UNTERNEHMEN_X_AI_EXECUTION_PROFILE) }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0-check-ai-profile",
+      "name": "Check AI Execution Profile Configured",
+      "type": "n8n-nodes-base.if",
+      "position": [1808, -128],
+      "typeVersion": 2.2,
+      "notes": "No default: UNTERNEHMEN_X_AI_EXECUTION_PROFILE must be explicitly set to local-default or cloud-gemini before Flow 0 will run any PDF/OCR invoice through Flow 1b -- never silently defaulted to cloud. Given H1's local-AI-only decision, set this to local-default in practice; cloud-gemini remains selectable here only because Flow 1b itself still treats it as a legitimate, explicit choice for OTHER callers (e.g. TCMS's own browser-triggered upload) -- Flow 0 should not select it for real Unternehmen X mail."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2048, 96],
+      "id": "f0-ai-profile-not-configured",
+      "name": "AI Execution Profile Not Configured"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only Unternehmen X's own real buyer master data (fetched moments ago from its\n// own published OrganizationBaseline) is forwarded -- never a demo fixture.\nconst organizationId = $env.UNTERNEHMEN_X_TCMS_ORGANIZATION_ID;\n\n// n8n's httpRequest node replaces the item with its HTTP response -- it\n// does not pass through pre-existing binary. \"Detect Invoice Format\" and\n// \"Fetch Unternehmen X Buyer Master Data\" are both httpRequest nodes sitting\n// between the attachment and here, so item.binary is empty by this point\n// (confirmed live 2026-09-02: \"Submit to Flow 1a/1b\" failed with \"input\n// data [does not] contain a binary file 'data'\"). Recovered from the last\n// node that still had it. Must use itemMatching(index), not the bare\n// .item shorthand -- this Code node runs once for ALL items, so\n// $('NodeName').item (no index) always resolves to the SAME fixed item\n// regardless of loop position (confirmed live 2026-09-02: with a multi-\n// attachment batch this silently attached the FIRST attachment's file to\n// every submission instead of each item's own file). itemMatching(index)\n// uses n8n's real pairedItem lineage instead of a naive fixed lookup.\nreturn items.map((item, index) => ({\n  json: {\n    organizationId,\n    tcmsOrganizationId: organizationId,\n    buyerMasterData: JSON.stringify(item.json.buyerMasterData),\n    controlProfileId: item.json.controlProfileId,\n    aiExecutionProfile: $env.UNTERNEHMEN_X_AI_EXECUTION_PROFILE,\n  },\n  binary: $('Merge Attachment + Message Metadata by messageId').itemMatching(index).binary,\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2048, -128],
+      "id": "f0-build-flow1b-fields",
+      "name": "Build Flow 1b Submission Fields"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_SELF_BASE_URL }}/webhook/phase1-flow1b-pdf-upload",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "data",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "organizationId",
+              "value": "={{ $json.organizationId }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "tcmsOrganizationId",
+              "value": "={{ $json.tcmsOrganizationId }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "buyerMasterData",
+              "value": "={{ $json.buyerMasterData }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "controlProfileId",
+              "value": "={{ $json.controlProfileId }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "aiExecutionProfile",
+              "value": "={{ $json.aiExecutionProfile }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-submit-flow1b",
+      "name": "Submit to Flow 1b",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2288, -128],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "notes": "Calls Flow 1b's own webhook (digitax-phase1-flow1b-pdf-upload) directly, on this same n8n instance -- the identical webhook TCMS's own n8n-flow1b-runs route calls. The multipart file field must be named \"data\" (matches Flow 1b's own OCR chain, not \"invoiceFile\" like Flow 1a). Returns {resultBundle: ...} on success (unified with Flow 1a's envelope since 2026-09-01)."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2288, 16],
+      "id": "f0-flow1b-submission-failed",
+      "name": "Flow 1b Submission Failed"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TCMS_BASE_URL }}/api/organizations/{{ $env.UNTERNEHMEN_X_TCMS_ORGANIZATION_ID }}/evidence/n8n-inbound-runs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { resultBundle: $json.resultBundle } }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.N8N_INGEST_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0-ingest-ocr",
+      "name": "Ingest Result to TCMS (OCR)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2528, -128],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "onError": "continueErrorOutput",
+      "notes": "Server-to-server ingestion: no browser session exists for an email that arrived on its own -- see server/api/organizations/[organizationId]/evidence/n8n-inbound-runs/index.post.ts in tcms-framework."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2528, 16],
+      "id": "f0-tcms-ingest-failed-ocr",
+      "name": "TCMS Ingestion Failed (OCR)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2768, -256],
+      "id": "f0-end-workflow",
+      "name": "End Workflow"
+    },
+    {
+      "parameters": {
+        "content": "## Format detection, routing, submission, TCMS ingestion\nNew for Flow 0. Detects factur-X/XRechnung vs. PDF/unknown via the\nexisting /v1/invoices/inspect endpoint, fetches this organization's real\nbuyer master data from its own published TCMS OrganizationBaseline (never\nhardcoded here), then calls Flow 1a's or Flow 1b's existing webhook\ndirectly -- the exact same webhooks TCMS's own browser-triggered routes\ncall -- and finally POSTs the resulting resultBundle into TCMS's dedicated\nservice-to-service ingestion endpoint.",
+        "height": 380,
+        "width": 1760,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [1088, -640],
+      "typeVersion": 1,
+      "id": "f0-note-routing-scope",
+      "name": "Sticky Note: routing scope"
+    }
+  ],
+  "connections": {
+    "Start Workflow": {
+      "main": [
+        [{ "node": "Get All Messages from one specific Mail-Folder", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get All Messages from one specific Mail-Folder": {
+      "main": [
+        [{ "node": "Markdown", "type": "main", "index": 0 }]
+      ]
+    },
+    "Markdown": {
+      "main": [
+        [{ "node": "Build Message Classification Request (Local)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Message Classification Request (Local)": {
+      "main": [
+        [{ "node": "Classify Message Locally", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classify Message Locally": {
+      "main": [
+        [{ "node": "Parse Message Classification", "type": "main", "index": 0 }],
+        [{ "node": "Message Classification Unavailable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Message Classification": {
+      "main": [
+        [{ "node": "Has Invoice (Message Level)?", "type": "main", "index": 0 }],
+        [{ "node": "Message Classification Unavailable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Has Invoice (Message Level)?": {
+      "main": [
+        [{ "node": "Download Attachments", "type": "main", "index": 0 }],
+        [{ "node": "Excluding mail which is not invoice for company", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download Attachments": {
+      "main": [
+        [
+          { "node": "Claim Message (move to Verarbeitet)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claim Message (move to Verarbeitet)": {
+      "main": [
+        [{ "node": "Recover Message + Attachments After Claim", "type": "main", "index": 0 }],
+        [{ "node": "Message Already Claimed (Race Lost)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Recover Message + Attachments After Claim": {
+      "main": [
+        [
+          { "node": "Split Attachments", "type": "main", "index": 0 },
+          { "node": "Extract Email Metadata for new invoice", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Extract Email Metadata for new invoice": {
+      "main": [
+        [{ "node": "Merge Attachment + Message Metadata by messageId", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split Attachments": {
+      "main": [
+        [{ "node": "Merge Attachment + Message Metadata by messageId", "type": "main", "index": 1 }]
+      ]
+    },
+    "Merge Attachment + Message Metadata by messageId": {
+      "main": [
+        [
+          { "node": "Encode Attachment for Local Classification", "type": "main", "index": 0 },
+          { "node": "Merge to proceed object", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Encode Attachment for Local Classification": {
+      "main": [
+        [{ "node": "Route by Attachment Type", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Attachment Type": {
+      "main": [
+        [{ "node": "Render PDF Page as PNG (Local)", "type": "main", "index": 0 }],
+        [{ "node": "Build Vision Classification Request (Local)", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Not Classifiable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Render PDF Page as PNG (Local)": {
+      "main": [
+        [{ "node": "Build Vision Classification Request (Local)", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Not Classifiable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Vision Classification Request (Local)": {
+      "main": [
+        [{ "node": "Classify Attachment Locally", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classify Attachment Locally": {
+      "main": [
+        [{ "node": "Parse Attachment Classification", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Not Classifiable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Attachment Classification": {
+      "main": [
+        [{ "node": "Filter Invoices", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Not Classifiable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Filter Invoices": {
+      "main": [
+        [{ "node": "Has Invoice?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Has Invoice?": {
+      "main": [
+        [{ "node": "Merge to proceed object", "type": "main", "index": 1 }],
+        [{ "node": "Attachment is not Invoice", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge to proceed object": {
+      "main": [
+        [{ "node": "Detect Invoice Format", "type": "main", "index": 0 }]
+      ]
+    },
+    "Detect Invoice Format": {
+      "main": [
+        [{ "node": "Fetch Unternehmen X Buyer Master Data", "type": "main", "index": 0 }],
+        [{ "node": "Inspect Service Unavailable", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Unternehmen X Buyer Master Data": {
+      "main": [
+        [{ "node": "Is Structured Format?", "type": "main", "index": 0 }],
+        [{ "node": "Buyer Master Data Missing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is Structured Format?": {
+      "main": [
+        [{ "node": "Build Flow 1a Submission Fields", "type": "main", "index": 0 }],
+        [{ "node": "Check AI Execution Profile Configured", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Flow 1a Submission Fields": {
+      "main": [
+        [{ "node": "Submit to Flow 1a", "type": "main", "index": 0 }]
+      ]
+    },
+    "Submit to Flow 1a": {
+      "main": [
+        [{ "node": "Ingest Result to TCMS (Structured)", "type": "main", "index": 0 }],
+        [{ "node": "Flow 1a Submission Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ingest Result to TCMS (Structured)": {
+      "main": [
+        [{ "node": "End Workflow", "type": "main", "index": 0 }],
+        [{ "node": "TCMS Ingestion Failed (Structured)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check AI Execution Profile Configured": {
+      "main": [
+        [{ "node": "Build Flow 1b Submission Fields", "type": "main", "index": 0 }],
+        [{ "node": "AI Execution Profile Not Configured", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Flow 1b Submission Fields": {
+      "main": [
+        [{ "node": "Submit to Flow 1b", "type": "main", "index": 0 }]
+      ]
+    },
+    "Submit to Flow 1b": {
+      "main": [
+        [{ "node": "Ingest Result to TCMS (OCR)", "type": "main", "index": 0 }],
+        [{ "node": "Flow 1b Submission Failed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ingest Result to TCMS (OCR)": {
+      "main": [
+        [{ "node": "End Workflow", "type": "main", "index": 0 }],
+        [{ "node": "TCMS Ingestion Failed (OCR)", "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}

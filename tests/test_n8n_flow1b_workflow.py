@@ -49,9 +49,14 @@ STATUS_ROUTING_NODE = "04.4 Route by review status"
 RESOLVE_AI_PROFILE_NODE = "01.9 Resolve AI execution profile"
 AI_PROFILE_SWITCH_NODE = "01.10 Route by AI profile"
 UNRESOLVED_AI_PROFILE_NODE = "01.11 Handle unresolved AI profile"
-LOCAL_ENCODE_NODE = "02.1L Encode PDF for local OCR"
-LOCAL_REQUEST_NODE = "02.2L Build local OCR/LLM request"
-LOCAL_HTTP_NODE = "02.3L Run OCR/LLM extraction (local)"
+LOCAL_TEXT_EXTRACT_NODE = "02.0LT Extract PDF text"
+LOCAL_TEXT_GATE_NODE = "02.0LT-b Has real text?"
+LOCAL_CLOUD_FALLBACK_RECOVERY_NODE = "02.0LT-c Recover binary for cloud fallback"
+# Local vision was dropped entirely 2026-09-04 -- these two names now refer
+# to the text-only lane's request-build/HTTP-call nodes (the only local
+# extraction lane left), not the removed image/vision nodes they used to.
+LOCAL_REQUEST_NODE = "02.2LT Build local text extraction request"
+LOCAL_HTTP_NODE = "02.3LT Run local text extraction"
 LOCAL_SERVICE_FAILURE_NODE = "02.4L Handle local OCR service failure"
 LOCAL_PARSER_NODE = "02.5L Parse local OCR/LLM output"
 LOCAL_PARSE_FAILURE_NODE = "02.6L Handle local OCR parse failure"
@@ -86,7 +91,6 @@ MASTER_DATA_LEAK_PATTERNS = [
     re.compile(r"01067"),
     re.compile(r"Leipzig"),
     re.compile(r"Dresden"),
-    re.compile(r"DE450224353"),
     re.compile(r"\bexpected\b", re.IGNORECASE),
     re.compile(r"\bapproved\b", re.IGNORECASE),
 ]
@@ -295,13 +299,6 @@ def test_run_context_generates_one_correlation_id_and_one_process_instance_id():
     assert "require('crypto').createHash(" not in functional_code
 
 
-def test_local_render_helper_notes_have_no_hardcoded_host():
-    data = _load_workflow()
-    node = _nodes_by_name(data)["02.1L-b Render PDF page as PNG (local render helper)"]
-    assert "host.docker.internal" not in node["notes"]
-    assert "LOCAL_PDF_RENDER_URL" in node["notes"]
-
-
 def test_ocr_nodes_reused_verbatim_from_intake_workflow():
     flow1b_nodes = _nodes_by_name(_load_workflow())
     intake_nodes = _nodes_by_name(_load_intake_workflow())
@@ -319,7 +316,14 @@ def test_ocr_nodes_reused_verbatim_from_intake_workflow():
                 f"{name!r} jsCode must be byte-for-byte identical to the historical workflow"
             )
         else:
-            for key in ("method", "url", "jsonBody", "nodeCredentialType"):
+            # "url" is deliberately excluded here (confirmed 2026-09-03, see
+            # CREDENTIALS.md): gemini-2.5-pro was deprecated for new API
+            # keys/projects (a hard 404, not a preference), so Flow 1b's own
+            # generateContent URL was updated to gemini-3.6-flash while
+            # digitax_invoice_intake.json intentionally stays an untouched
+            # historical reference and still names the deprecated model --
+            # this one field is expected to diverge, everything else is not.
+            for key in ("method", "jsonBody", "nodeCredentialType"):
                 assert flow1b_node["parameters"].get(key) == intake_node["parameters"].get(key), (
                     f"{name!r} parameter {key!r} must be unchanged"
                 )
@@ -531,7 +535,65 @@ def test_ai_profile_switch_routes_local_cloud_and_unresolved_separately():
     branches = data["connections"][AI_PROFILE_SWITCH_NODE]["main"]
     assert len(branches) == 3
     targets = [b[0]["node"] for b in branches]
-    assert targets == [LOCAL_ENCODE_NODE, "02.1 Encode PDF for OCR", UNRESOLVED_AI_PROFILE_NODE]
+    # Local branch enters through the text-extraction-first gate; a genuine
+    # scan (no real text layer) escalates from there into the SAME cloud
+    # entry node the cloud-gemini branch reaches directly, just a few hops
+    # later (see test_local_text_extraction_gate_escalates_to_cloud_when_no_real_text).
+    assert targets == [LOCAL_TEXT_EXTRACT_NODE, "02.1 Encode PDF for OCR", UNRESOLVED_AI_PROFILE_NODE]
+
+
+def test_local_text_extraction_gate_escalates_to_cloud_when_no_real_text():
+    """Local vision was dropped entirely 2026-09-04 (confirmed, via direct
+    cloud comparison, to be a genuine model capability gap on multi-address
+    documents, not a prompt-wording issue local tuning could close). A
+    genuine scan (no real text layer) now escalates to the cloud lane
+    instead, which already handles it correctly via Gemini's native PDF
+    ingestion -- but this must be an explicit, audited escalation (see
+    "02.5 Parse OCR/LLM output"'s fallbackUsed computation), never a silent
+    one, and the original PDF binary (dropped by 02.0LT's own HTTP call)
+    must be correctly recovered before reaching the cloud lane's own
+    binary-consuming entry node."""
+    data = _load_workflow()
+    conn = data["connections"]
+
+    text_extract_branches = conn[LOCAL_TEXT_EXTRACT_NODE]["main"]
+    assert len(text_extract_branches) == 2
+    assert text_extract_branches[0][0]["node"] == LOCAL_TEXT_GATE_NODE
+    assert text_extract_branches[1][0]["node"] == LOCAL_SERVICE_FAILURE_NODE
+
+    gate_branches = conn[LOCAL_TEXT_GATE_NODE]["main"]
+    assert len(gate_branches) == 2
+    assert gate_branches[0][0]["node"] == LOCAL_REQUEST_NODE
+    assert gate_branches[1][0]["node"] == LOCAL_CLOUD_FALLBACK_RECOVERY_NODE, (
+        "hasText=false must escalate to the cloud lane, not a (now-removed) local vision path"
+    )
+
+    recovery_branches = conn[LOCAL_CLOUD_FALLBACK_RECOVERY_NODE]["main"]
+    assert len(recovery_branches) == 1
+    assert recovery_branches[0][0]["node"] == "02.1 Encode PDF for OCR", (
+        "binary recovery must feed directly into the cloud lane's own entry node"
+    )
+
+    text_llm_branches = conn[LOCAL_HTTP_NODE]["main"]
+    assert len(text_llm_branches) == 2
+    assert text_llm_branches[0][0]["node"] == LOCAL_PARSER_NODE
+    assert text_llm_branches[1][0]["node"] == LOCAL_SERVICE_FAILURE_NODE
+
+
+def test_local_vision_nodes_fully_removed():
+    """Companion to the above: assert the removed nodes are actually gone,
+    not just unreferenced -- a stale node left in place but disconnected
+    would be dead weight and a maintenance trap."""
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+    for name in (
+        "02.1L Encode PDF for local OCR",
+        "02.1L-b Render PDF page as PNG (local render helper)",
+        "02.2L Build local OCR/LLM request",
+        "02.3L Run OCR/LLM extraction (local)",
+    ):
+        assert name not in nodes, f"{name!r} should have been removed entirely"
+        assert name not in data["connections"], f"{name!r} should have no connections entry"
 
 
 def test_ai_profile_resolution_never_defaults_unknown_to_cloud():

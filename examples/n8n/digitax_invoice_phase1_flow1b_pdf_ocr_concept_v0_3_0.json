@@ -94,7 +94,168 @@
     },
     {
       "parameters": {
-        "jsCode": "// AI-execution-profile resolution (2026-08-11, dev-stack/AI-selection\n// round). The browser sends only a stable profile ID -- provider URLs,\n// model names, and credentials are resolved here, server-side, and never\n// travel to or from the browser. No profile ID ever defaults to cloud:\n// a missing/unknown ID is classified \"unknown\" and fails safely downstream\n// (01.11), and an unconfigured local endpoint is classified\n// \"local_unavailable\" rather than silently trying (and definitely never\n// silently falling back to cloud).\nconst PROFILE_REGISTRY = {\n  \"local-default\": {\n    aiProvider: \"local-openai-compatible\",\n    modelId: $env.LOCAL_LLM_MODEL || \"local-default-model\",\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: \"flow1b-extract-v1\",\n  },\n  \"cloud-gemini\": {\n    aiProvider: \"google-gemini\",\n    modelId: \"gemini-2.5-pro\",\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: \"flow1b-extract-v1\",\n  },\n};\n\nconst ctx = $input.first().json;\nconst requested = ctx.aiExecutionProfile;\nconst known = requested ? PROFILE_REGISTRY[requested] : null;\n\nlet profileStatus;\nif (!known) {\n  profileStatus = \"unknown\";\n} else if (requested === \"local-default\" && !($env.LOCAL_LLM_BASE_URL || \"\").trim()) {\n  // Configured-availability check only -- a genuine runtime connection\n  // failure at call time is still caught by 02.3L's own error branch.\n  profileStatus = \"local_unavailable\";\n} else if (requested === \"local-default\") {\n  profileStatus = \"local\";\n} else {\n  profileStatus = \"cloud\";\n}\n\nreturn [\n  {\n    json: {\n      ...ctx,\n      aiProfileStatus: profileStatus,\n      resolvedProfile: known,\n    },\n    binary: $input.first().binary,\n  },\n];\n"
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/inspect",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1000040-0000-4000-8000-000000000040",
+      "name": "01.4b Inspect document format",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2660,
+        0
+      ],
+      "onError": "continueErrorOutput",
+      "notes": "Added 2026-09-04, completing the architecture: a genuinely structured invoice (embedded ZUGFeRD/Factur-X XML, or a real XRechnung XML) must be extracted deterministically from its own XML, never sent through the OCR/LLM pipeline below -- confirmed live: routing a real Factur-X file (embedded_xml-eligible) through the text/vision lane instead produced spurious CAL-001 'missing netAmount' failures on every line item, even though the same file's own embedded XML extracts perfectly via /v1/invoices/process. Calls the real Phase 1 API's own POST /v1/invoices/inspect (the same classification /v1/invoices/process itself uses internally) via FACTURX_API_BASE_URL. onError: continueErrorOutput routes to \"01.5 Handle invalid upload\" -- if the API itself is unreachable here, nothing downstream (03.1's equivalent calls) would work either, so this is the same technical_review failure class as any other call to this API."
+    },
+    {
+      "parameters": {
+        "jsCode": "// \"01.4b Inspect document format\" is an HTTP Request node -- like every\n// other HTTP node in this workflow, it REPLACES the item's json entirely\n// with the raw response body, not just drops binary. Confirmed live\n// 2026-09-04: this silently discarded aiExecutionProfile, organizationId,\n// correlationId, processInstanceId, and every other context field\n// \"01.2 Build run context\" built -- invisible on the structured-document\n// branch (which recovers its own context via named references, e.g.\n// \"01.4e\"'s $('01.2 Build run context')...), but it broke the plain-PDF\n// branch outright: \"01.9 Resolve AI execution profile\" reads\n// $input.first().json.aiExecutionProfile directly, which had already been\n// overwritten with the inspect response's own unrelated fields, producing\n// no execution and no response at all for a plain PDF request.\n// Fix: merge the inspect result's two fields actually needed downstream\n// (sourceType, detectedFormat) into the ORIGINAL context recovered via\n// itemMatching, rather than keeping only the inspect response.\nreturn items.map((item, index) => {\n  const original = $('01.4 Has valid upload?').itemMatching(index);\n  return {\n    json: {\n      ...original.json,\n      sourceType: item.json.sourceType,\n      detectedFormat: item.json.detectedFormat,\n    },\n    binary: original.binary,\n  };\n});\n"
+      },
+      "id": "b1000041-0000-4000-8000-000000000041",
+      "name": "01.4c Recover binary after inspect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-structured-document",
+              "leftValue": "={{ ['hybrid_pdf', 'xml'].includes($json.sourceType) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000042-0000-4000-8000-000000000042",
+      "name": "01.4d Is structured document?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2420,
+        0
+      ],
+      "notes": "True (embedded ZUGFeRD/Factur-X XML, or a real XRechnung XML) -> deterministic XML extraction branch below, skipping the OCR/LLM pipeline entirely. False (a genuine plain PDF) -> falls through unchanged to the existing AI-execution-profile pipeline (\"01.9 Resolve AI execution profile\" onward), exactly as before this gate existed."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/process",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "organizationId",
+              "value": "={{ $('01.2 Build run context').item.json.organizationId }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "buyerMasterData",
+              "value": "={{ JSON.stringify($('01.2 Build run context').item.json.buyerMasterData) }}"
+            },
+            {
+              "parameterType": "formData",
+              "name": "controlProfileId",
+              "value": "={{ $('01.2 Build run context').item.json.controlProfileId }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $('01.2 Build run context').item.json.correlationId }}"
+            }
+          ]
+        }
+      },
+      "id": "b1000043-0000-4000-8000-000000000043",
+      "name": "01.4e Run XML extraction (structured)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "position": [
+        -2300,
+        -100
+      ],
+      "notes": "Calls the real Phase 1 API's own POST /v1/invoices/process directly -- the SAME endpoint Flow 1a uses, and the one that already contains the real embedded_xml/direct_xml extraction logic. Same fullResponse/neverError contract as \"03.1 Run DigiTax controls\", so any HTTP status lands here as normal output for \"01.4f Build XML result envelope\" to classify; only a genuine connection-level failure uses the error output, routed to \"01.5 Handle invalid upload\" (same technical_review failure class)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the SAME envelope shape \"03.2 Classify controls response\"\n// produces on its success path, so this branch can converge on the exact\n// same \"Call Assemble ActivityExecution\" downstream node -- no separate\n// convergence logic needed. processingPath is explicitly \"structured_xml\"\n// here (never \"pdf_ocr\", which \"01.2 Build run context\" hardcodes for\n// every other branch) and aiProvider/modelId/etc. are all null: no AI was\n// involved in this result at all, the invoice's own embedded XML was\n// extracted deterministically.\nconst ctx = $('01.2 Build run context').item.json;\nconst resp = $input.first().json;\nconst statusCode = resp.statusCode;\nconst body = resp.body || {};\n\nfunction baseFields() {\n  return {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    tcmsOrganizationId: ctx.tcmsOrganizationId,\n    receivedAt: ctx.receivedAt,\n    phase1AttemptStartedAt: new Date().toISOString(),\n    gateDecisionAt: null,\n    organizationId: ctx.organizationId,\n    processingPath: \"structured_xml\",\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: null,\n    modelId: null,\n    modelVersion: null,\n    processingLocation: null,\n    promptVersion: null,\n    fallbackUsed: false,\n  };\n}\n\nif (statusCode >= 200 && statusCode < 300) {\n  const invoice = body.canonicalInvoice.invoice;\n  const document = body.canonicalInvoice.document;\n  const report = body.phase1ControlReport;\n  return [{\n    json: {\n      ...baseFields(),\n      outcome: \"REPORT\",\n      report,\n      httpErrorCode: null,\n      n8nErrorCode: null,\n      explanation: null,\n      phase1Status: report.status,\n      routing: report.routing,\n      failedStep: null,\n      invoice,\n      document,\n    },\n  }];\n}\n\nconst apiDetail = (body.detail && typeof body.detail === \"object\") ? body.detail : {};\nconst httpErrorCode = apiDetail.error_code || `HTTP_${statusCode}`;\nconst retryNote = statusCode >= 400 && statusCode < 500\n  ? \"Not retried: this is a deterministic input/contract error.\"\n  : \"This response was received from the service (not a connection failure), so it was not subject to the connection-level retry either.\";\nconst explanation = `${apiDetail.detail || `01.4e Run XML extraction (structured) returned HTTP ${statusCode}.`} (HTTP ${statusCode}). ${retryNote}`;\n\nreturn [{\n  json: {\n    ...baseFields(),\n    outcome: \"HTTP_ERROR\",\n    report: null,\n    httpErrorCode,\n    n8nErrorCode: null,\n    explanation,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.4e Run XML extraction (structured)\",\n    invoice: null,\n    document: null,\n  },\n}];\n"
+      },
+      "id": "b1000044-0000-4000-8000-000000000044",
+      "name": "01.4f Build XML result envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2180,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dedicated handler for \"01.4b Inspect document format\"'s and\n// \"01.4e Run XML extraction (structured)\"'s error outputs -- NOT the\n// same \"01.5 Handle invalid upload\" the pre-flight input/contract checks\n// use, since that node reads a completely different ctx shape\n// (errorCode/explanation from \"01.3 Validate upload request\"'s own\n// validation, not an HTTP node's {error:{...}} shape) and hardcodes\n// failedStep to \"01.3 Validate upload request\", which would be wrong\n// here. Mirrors \"02.4 Handle OCR service failure\"'s own pattern instead:\n// recover ctx via a named reference to \"01.2 Build run context\" (a\n// genuine common ancestor), since an HTTP node's error output carries no\n// prior json fields forward at all.\nconst ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"DOCUMENT_FORMAT_CHECK_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The document-format check or structured XML extraction step did not complete successfully.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"01.4b-01.4e Inspect/run structured XML extraction\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: \"structured_xml\",\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: null,\n    modelId: null,\n    modelVersion: null,\n    processingLocation: null,\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+      },
+      "id": "b1000045-0000-4000-8000-000000000045",
+      "name": "01.4g Handle document format check failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2540,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// AI-execution-profile resolution (2026-08-11, dev-stack/AI-selection\n// round). The browser sends only a stable profile ID -- provider URLs,\n// model names, and credentials are resolved here, server-side, and never\n// travel to or from the browser. No profile ID ever defaults to cloud:\n// a missing/unknown ID is classified \"unknown\" and fails safely downstream\n// (01.11), and an unconfigured local endpoint is classified\n// \"local_unavailable\" rather than silently trying (and definitely never\n// silently falling back to cloud).\nconst PROFILE_REGISTRY = {\n  \"local-default\": {\n    aiProvider: \"local-openai-compatible\",\n    modelId: $env.LOCAL_LLM_MODEL || \"local-default-model\",\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: \"flow1b-extract-v1\",\n  },\n  \"cloud-gemini\": {\n    // Static/documentary only -- the actual model that answers is\n    // resolved at runtime by the model-cascade gates in 02.3/02.3a-g\n    // (research/benchmarking feature; see \"02.5 Parse OCR/LLM output\"'s\n    // own notes) and reported dynamically via item.json.usedModel there,\n    // not read from this field. This just names the preferred/first-tier\n    // model for anyone reading this registry.\n    aiProvider: \"google-gemini\",\n    modelId: \"gemini-3.6-flash\",\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: \"flow1b-extract-v1\",\n  },\n};\n\nconst ctx = $input.first().json;\nconst requested = ctx.aiExecutionProfile;\nconst known = requested ? PROFILE_REGISTRY[requested] : null;\n\nlet profileStatus;\nif (!known) {\n  profileStatus = \"unknown\";\n} else if (requested === \"local-default\" && !($env.LOCAL_LLM_BASE_URL || \"\").trim()) {\n  // Configured-availability check only -- a genuine runtime connection\n  // failure at call time is still caught by 02.3L's own error branch.\n  profileStatus = \"local_unavailable\";\n} else if (requested === \"local-default\") {\n  profileStatus = \"local\";\n} else {\n  profileStatus = \"cloud\";\n}\n\nreturn [\n  {\n    json: {\n      ...ctx,\n      aiProfileStatus: profileStatus,\n      resolvedProfile: known,\n    },\n    binary: $input.first().binary,\n  },\n];\n"
       },
       "id": "b1000015-0000-4000-8000-000000000015",
       "name": "01.9 Resolve AI execution profile",
@@ -193,11 +354,11 @@
       "id": "c3dae39f-3de6-418f-ba5f-3eae110bef89",
       "name": "02.1 Encode PDF for OCR",
       "onError": "continueErrorOutput",
-      "notes": "REUSED VERBATIM from examples/n8n/digitax_invoice_intake.json (same node id/parameters -- jsCode is unchanged, so it stays covered by test_ocr_nodes_reused_verbatim_from_intake_workflow). Do not modify the extraction logic here -- see the workflow-level note on why binaryPropertyName stays \"data\". Cloud lane only -- the local lane has its own identical copy, \"02.1L Encode PDF for local OCR\", so the two provider paths stay technically independent end to end. onError: \"continueErrorOutput\" added 2026-08-11 (same pattern as \"02.5 Parse OCR/LLM output\"): getBinaryDataBuffer can throw for reasons unrelated to the OCR service itself (e.g. a missing/corrupted binary attachment), and this must never crash the run unhandled -- it now routes to \"02.4 Handle OCR service failure\" instead."
+      "notes": "REUSED VERBATIM from examples/n8n/digitax_invoice_intake.json (same node id/parameters -- jsCode is unchanged, so it stays covered by test_ocr_nodes_reused_verbatim_from_intake_workflow). Do not modify the extraction logic here -- see the workflow-level note on why binaryPropertyName stays \"data\". Reached two ways since 2026-09-04: directly from the cloud-gemini profile, and via \"02.0LT-c Recover binary for cloud fallback\" when the local lane's document turns out to have no real text layer (local vision was dropped entirely; Gemini's native PDF ingestion handles a genuine scan instead). onError: \"continueErrorOutput\" added 2026-08-11 (same pattern as \"02.5 Parse OCR/LLM output\"): getBinaryDataBuffer can throw for reasons unrelated to the OCR service itself (e.g. a missing/corrupted binary attachment), and this must never crash the run unhandled -- it now routes to \"02.4 Handle OCR service failure\" instead."
     },
     {
       "parameters": {
-        "jsCode": "return items.map(item => {\n  return {\n    json: {\n      geminiRequest: {\n        contents: [\n          {\n            parts: [\n              {\n                inline_data: {\n                  mime_type: 'application/pdf',\n                  data: item.json.pdfBase64\n                }\n              },\n              {\n                text: `Extract invoice header information from this PDF and return JSON only.\n\nExtraction rules:\n1. Distinguish seller (the party issuing/sending the invoice) from buyer\n   (the party the invoice is addressed to) using only the document's own\n   labels and layout -- for example \"Rechnungssteller\"/\"Von\"/\"Lieferant\"\n   typically marks the seller, and \"Rechnungsempfaenger\"/\"An\"/\"Kunde\"/\n   \"Bill To\" typically marks the buyer. Do not assume in advance which\n   company is the buyer or seller; read it from the document only.\n2. Assign each VAT ID to whichever party it is printed next to on the\n   document -- as \"VAT-ID (Seller)\" or \"VAT-ID (Buyer)\" accordingly.\n3. If a VAT ID's owner (seller or buyer) cannot be determined with\n   confidence from the document alone, return \"not found\" for that field\n   rather than guessing.\n4. All monetary amounts are plain numbers -- no currency symbol, no\n   thousands separator, dot as decimal separator (e.g. 119.00, not\n   \"119,00\" or \"EUR 119,00\").\n5. Dates use YYYY-MM-DD.\n6. \"Line Items\" is an array with one entry per distinct line/position in\n   the invoice's line-item table; an empty array if no such table is\n   visible.\n7. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"Type Code\": \"string\",\n  \"Currency\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Tax ID (Seller)\": \"string\",\n  \"Tax ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\",\n  \"Supply Description\": \"string\",\n  \"Delivery Date\": \"string\",\n  \"Period Start\": \"string\",\n  \"Period End\": \"string\",\n  \"Net Total\": \"number\",\n  \"Tax Basis\": \"number\",\n  \"Tax Amount\": \"number\",\n  \"Gross Total\": \"number\",\n  \"Payable Amount\": \"number\",\n  \"Charge Total\": \"number\",\n  \"Allowance Total\": \"number\",\n  \"Prepaid Amount\": \"number\",\n  \"Rounding Amount\": \"number\",\n  \"Line Items\": [{\"Description\": \"string\", \"Quantity\": \"number\", \"Net Amount\": \"number\", \"VAT Rate\": \"number\"}]\n}\n\nIf a text field is missing or illegible, return \"not found\". If a number\nfield is missing or illegible, return null.`\n              }\n            ]\n          }\n        ]\n      }\n    }\n  };\n});\n"
+        "jsCode": "return items.map(item => {\n  return {\n    json: {\n      geminiRequest: {\n        contents: [\n          {\n            parts: [\n              {\n                inline_data: {\n                  mime_type: 'application/pdf',\n                  data: item.json.pdfBase64\n                }\n              },\n              {\n                text: `Extract invoice header information from this PDF and return JSON only.\n\nExtraction rules:\n1. Distinguish seller (the party issuing/sending the invoice) from buyer\n   (the party the invoice is addressed to) using only the document's own\n   labels and layout -- for example \"Rechnungssteller\"/\"Von\"/\"Lieferant\"\n   typically marks the seller, and \"Rechnungsempfaenger\"/\"An\"/\"Kunde\"/\n   \"Bill To\"/\"Geschaeftsadresse\"/\"Rechnungsadresse\"/\"Invoice Address\"\n   typically marks the buyer. A clearly labeled company/business address\n   block (e.g. \"Geschaeftsadresse\") is the buyer's real billing identity --\n   prefer it over a delivery/shipping address block (labels include\n   \"Lieferadresse\", \"Lieferanschrift\", \"Versandadresse\", \"Delivery\n   Address\", \"Shipping Address\"), which is only where goods are sent and\n   may belong to a different party (e.g. a different company name at a\n   different address). A field like \"Auftraggeber\"/\"Ordered by\"/\"Orderer\"\n   names the individual who placed the order, not necessarily the buyer's\n   legal entity -- never use it as the buyer name when a separate company\n   address block exists. If NO address block is explicitly labeled as the\n   buyer/bill-to party, the buyer is normally the unlabeled recipient\n   address printed near the top of the document, right after or below the\n   seller's own letterhead/address (the conventional \"window\" position for\n   the invoiced party) -- never a block explicitly labeled as a delivery/\n   shipping address, even if that block is positioned more prominently on\n   the page. Do not assume in advance which company is the buyer or\n   seller; read it from the document only.\n2. Assign each VAT ID to whichever party it is printed next to on the\n   document -- as \"VAT-ID (Seller)\" or \"VAT-ID (Buyer)\" accordingly.\n2b. Every \"Country\" field (Country (Seller), Country (Buyer)) must be the\n   2-letter ISO 3166-1 alpha-2 country code (e.g. DE, NL, VN, FR, US),\n   never the full country name in any language -- even if the document\n   itself prints the full name (e.g. \"Deutschland\", \"Germany\",\n   \"Niederlande\", \"Việt Nam\"), convert it to its 2-letter code yourself.\n2c. \"Currency\" must be the 3-letter ISO 4217 currency code (e.g. EUR, USD,\n   GBP, VND), never a currency symbol or word -- even if the document only\n   ever prints a symbol like \"€\" or \"$\", convert it to its 3-letter code\n   yourself (€ -> EUR, $ -> USD, £ -> GBP, ¥ -> JPY, ₫ -> VND).\n3. If a VAT ID's owner (seller or buyer) cannot be determined with\n   confidence from the document alone, return \"not found\" for that field\n   rather than guessing.\n4. All monetary amounts are plain numbers -- no currency symbol, no\n   thousands separator, dot as decimal separator (e.g. 119.00, not\n   \"119,00\" or \"EUR 119,00\").\n5. Dates use YYYY-MM-DD. If the document has no actual date for a date\n   field (Invoice Date, Delivery Date, Period Start, Period End) -- for\n   example a vague delivery term like \"as soon as possible\" instead of a\n   real date -- return null for that field, never the vague phrase itself\n   and never \"not found\" (which is not a valid date either).\n6. \"Line Items\" is an array with one entry per distinct line/position in\n   the invoice's line-item table; an empty array if no such table is\n   visible. Each line item's \"Net Amount\" is that line's EXTENDED total\n   EXCLUDING VAT/tax (quantity multiplied by that line's net unit price),\n   never the per-unit price alone -- for example, quantity 2 at a unit\n   price of 108.00 has Net Amount 216.00, not 108.00. If the document\n   shows both a unit-price column and an extended/line-total column, use\n   the extended/line-total column, not the unit price. If the document\n   shows BOTH a value excluding VAT/tax and a value including VAT/tax for\n   the same line (look for header pairs like \"ohne USt.\"/\"inkl. USt.\",\n   \"exkl. MwSt.\"/\"inkl. MwSt.\", \"net\"/\"gross\", \"excl. VAT\"/\"incl. VAT\"),\n   always use the excluding-VAT (net) value for Net Amount, even if it is\n   the smaller number or appears in a different column position than\n   usual. If a line's amount is shown ONLY including VAT/tax with no net\n   figure anywhere for that line (a document-level Subtotal box does not\n   count as a per-line figure), return null for that line's Net Amount\n   rather than using the gross figure or guessing.\n7. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"Type Code\": \"string\",\n  \"Currency\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Tax ID (Seller)\": \"string\",\n  \"Tax ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\",\n  \"Supply Description\": \"string\",\n  \"Delivery Date\": \"string\",\n  \"Period Start\": \"string\",\n  \"Period End\": \"string\",\n  \"Net Total\": \"number\",\n  \"Tax Basis\": \"number\",\n  \"Tax Amount\": \"number\",\n  \"Gross Total\": \"number\",\n  \"Payable Amount\": \"number\",\n  \"Charge Total\": \"number\",\n  \"Allowance Total\": \"number\",\n  \"Prepaid Amount\": \"number\",\n  \"Rounding Amount\": \"number\",\n  \"Line Items\": [{\"Description\": \"string\", \"Quantity\": \"number\", \"Net Amount\": \"number\", \"VAT Rate\": \"number\"}]\n}\n\nIf a text field is missing or illegible, return \"not found\". If a number\nfield is missing or illegible, return null.`\n              }\n            ]\n          }\n        ]\n      }\n    }\n  };\n});\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -212,13 +373,20 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "googlePalmApi",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.geminiRequest) }}",
-        "options": {}
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
       },
       "id": "851db9a0-6882-4e19-8201-bd9e2e601d5c",
       "name": "02.3 Run OCR/LLM extraction (Gemini)",
@@ -238,11 +406,189 @@
         }
       },
       "onError": "continueErrorOutput",
-      "notes": "REUSED VERBATIM from digitax_invoice_intake.json, including its existing retryOnFail/maxTries:5/onError:continueErrorOutput. Credential is the same REPLACE_WITH_YOUR_CREDENTIAL_ID placeholder as the historical workflow -- select a real Google Gemini (PaLM) API credential in the n8n UI before activating; nothing is copied from any other n8n instance."
+      "notes": "REUSED VERBATIM from digitax_invoice_intake.json, including its existing retryOnFail/maxTries:5/onError:continueErrorOutput. Select your own Gemini credential in the n8n UI after importing -- this checked-in template intentionally carries a placeholder id, not any one instance's real credential. (Was temporarily bound to a real pilot-instance credential 2026-09-03 for a local-vs-cloud comparison test; that binding has since been reverted so this file stays a portable template.) Tier 1 of a 3-tier model cascade added 2026-09-04 -- see \"02.3a Tier 1 quota exceeded?\"'s notes for why this exists and why it is a research/benchmarking feature, not the recommended Unternehmen X production configuration."
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"OCR_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The cloud OCR/LLM extraction step (PDF encode, request build, or the Gemini service call itself) did not complete successfully.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1-02.3 Encode/build/run OCR extraction (cloud)\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "tier1-quota-exceeded",
+              "leftValue": "={{ $json.statusCode === 429 || ($json.body && $json.body.error && $json.body.error.status === 'RESOURCE_EXHAUSTED') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000050-0000-4000-8000-000000000050",
+      "name": "02.3a Tier 1 quota exceeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -960,
+        140
+      ],
+      "notes": "Research/benchmarking feature added 2026-09-04, NOT the recommended Unternehmen X production configuration: for the dissertation's own local-vs-cloud and cloud-model-vs-model accuracy comparison, testing volume alone exhausted gemini-3.6-flash's free-tier daily quota (confirmed live, 2026-09-04). This 3-tier cascade (gemini-3.6-flash -> gemini-3.5-flash-lite -> gemini-3.5-flash) keeps benchmarking runs going across a quota wall by trying the next tier ONLY on a confirmed quota-exceeded response (HTTP 429 or body.error.status === 'RESOURCE_EXHAUSTED'), never on any other kind of failure (a genuine bad-request/auth/schema error still fails immediately, unchanged). For Unternehmen X's real production deployment, this cascade should NOT be used -- a real business's invoice content belongs on a single paid tier with an actual data-confidentiality commitment (see CREDENTIALS.md's Gemini section), not a free-tier quota scavenger hunt across three different models with three different accuracy profiles."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('02.2 Build OCR/LLM request').item.json.geminiRequest) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "b1000051-0000-4000-8000-000000000051",
+      "name": "02.3b Run OCR/LLM extraction (Gemini, tier 2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -960,
+        280
+      ],
+      "executeOnce": false,
+      "retryOnFail": true,
+      "typeVersion": 4.2,
+      "maxTries": 5,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "Tier 2 of the model cascade -- gemini-3.5-flash-lite. Reads geminiRequest via a named reference to \"02.2 Build OCR/LLM request\" rather than $json, since tier 1's own HTTP call already replaced $json with its own response body by the time this node might run."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "tier2-quota-exceeded",
+              "leftValue": "={{ $json.statusCode === 429 || ($json.body && $json.body.error && $json.body.error.status === 'RESOURCE_EXHAUSTED') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000052-0000-4000-8000-000000000052",
+      "name": "02.3c Tier 2 quota exceeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -960,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('02.2 Build OCR/LLM request').item.json.geminiRequest) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "b1000053-0000-4000-8000-000000000053",
+      "name": "02.3d Run OCR/LLM extraction (Gemini, tier 3)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -960,
+        560
+      ],
+      "executeOnce": false,
+      "retryOnFail": true,
+      "typeVersion": 4.2,
+      "maxTries": 5,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "Tier 3 (last resort) of the model cascade -- gemini-3.5-flash. Whatever this returns, quota-exceeded or not, goes straight to tagging and the shared parser -- there is no further tier to fall back to."
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$json, usedModel: 'gemini-3.6-flash' } }];\n"
+      },
+      "id": "b1000054-0000-4000-8000-000000000054",
+      "name": "02.3e Tag model (tier 1)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$json, usedModel: 'gemini-3.5-flash-lite' } }];\n"
+      },
+      "id": "b1000055-0000-4000-8000-000000000055",
+      "name": "02.3f Tag model (tier 2)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$json, usedModel: 'gemini-3.5-flash' } }];\n"
+      },
+      "id": "b1000056-0000-4000-8000-000000000056",
+      "name": "02.3g Tag model (tier 3)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"OCR_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The cloud OCR/LLM extraction step (PDF encode, request build, or the Gemini service call itself) did not complete successfully.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1-02.3 Encode/build/run OCR extraction (cloud)\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: ctx.aiExecutionProfile !== \"cloud-gemini\",\n  },\n}];\n"
       },
       "id": "b1000009-0000-4000-8000-000000000009",
       "name": "02.4 Handle OCR service failure",
@@ -256,7 +602,7 @@
     },
     {
       "parameters": {
-        "jsCode": "function extractTextFromGeminiResponse(item) {\n  const j = item.json || {};\n\n  if (\n    Array.isArray(j.candidates) &&\n    j.candidates[0] &&\n    j.candidates[0].content &&\n    Array.isArray(j.candidates[0].content.parts) &&\n    j.candidates[0].content.parts[0] &&\n    typeof j.candidates[0].content.parts[0].text === 'string'\n  ) {\n    return j.candidates[0].content.parts[0].text;\n  }\n\n  throw new Error('Could not find Gemini text output in expected response fields.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nfunction ensureLineItems(obj) {\n  const raw = obj['Line Items'];\n  if (!Array.isArray(raw)) return [];\n  return raw.map((li) => ({\n    Description: typeof li['Description'] === 'string' && li['Description'].trim() ? li['Description'].trim() : 'not found',\n    Quantity: li['Quantity'],\n    'Net Amount': li['Net Amount'],\n    'VAT Rate': li['VAT Rate'],\n  }));\n}\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\nreturn items.map(item => {\n  const rawText = extractTextFromGeminiResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Gemini output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'Type Code': ensureField(parsed, 'Type Code'),\n    'Currency': ensureField(parsed, 'Currency'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Tax ID (Seller)': ensureField(parsed, 'Tax ID (Seller)'),\n    'Tax ID (Buyer)': ensureField(parsed, 'Tax ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)'),\n    'Supply Description': ensureField(parsed, 'Supply Description'),\n    'Delivery Date': ensureField(parsed, 'Delivery Date'),\n    'Period Start': ensureField(parsed, 'Period Start'),\n    'Period End': ensureField(parsed, 'Period End'),\n    'Net Total': parsed['Net Total'],\n    'Tax Basis': parsed['Tax Basis'],\n    'Tax Amount': parsed['Tax Amount'],\n    'Gross Total': parsed['Gross Total'],\n    'Payable Amount': parsed['Payable Amount'],\n    'Charge Total': parsed['Charge Total'],\n    'Allowance Total': parsed['Allowance Total'],\n    'Prepaid Amount': parsed['Prepaid Amount'],\n    'Rounding Amount': parsed['Rounding Amount'],\n    'Line Items': ensureLineItems(parsed)\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      gemini_raw_text: rawText,\n      aiMeta: {\n        aiProvider: profile.aiProvider,\n        modelId: profile.modelId,\n        modelVersion: profile.modelVersion,\n        processingLocation: profile.processingLocation,\n        promptVersion: profile.promptVersion,\n        fallbackUsed: false,\n      },\n    }\n  };\n});\n"
+        "jsCode": "// Reads from item.json.body -- the fullResponse shape the model-cascade\n// gate nodes upstream (02.3/02.3a-g) preserve, since they need the real\n// HTTP statusCode alongside the body to detect a quota-exceeded response\n// and cascade to the next model tier (research/benchmarking feature, added\n// 2026-09-04 -- NOT the recommended Unternehmen X production configuration,\n// which should run a single paid-tier engine with a real data-\n// confidentiality commitment, not a free-tier quota cascade; this exists\n// for comparing local-vs-cloud and cloud-model-vs-model accuracy for the\n// dissertation's own evaluation).\nfunction extractTextFromGeminiResponse(item) {\n  const j = (item.json && item.json.body) || {};\n\n  if (\n    Array.isArray(j.candidates) &&\n    j.candidates[0] &&\n    j.candidates[0].content &&\n    Array.isArray(j.candidates[0].content.parts) &&\n    j.candidates[0].content.parts[0] &&\n    typeof j.candidates[0].content.parts[0].text === 'string'\n  ) {\n    return j.candidates[0].content.parts[0].text;\n  }\n\n  throw new Error('Could not find Gemini text output in expected response fields.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nfunction ensureLineItems(obj) {\n  const raw = obj['Line Items'];\n  if (!Array.isArray(raw)) return [];\n  return raw.map((li) => ({\n    Description: typeof li['Description'] === 'string' && li['Description'].trim() ? li['Description'].trim() : 'not found',\n    Quantity: li['Quantity'],\n    'Net Amount': li['Net Amount'],\n    'VAT Rate': li['VAT Rate'],\n  }));\n}\n\n// Added 2026-09-04: this node ALWAYS parses a genuine Gemini response, by\n// construction -- whether reached directly (aiExecutionProfile ===\n// 'cloud-gemini') or via the new no-text-layer escalation from the local\n// lane (see \"02.0LT-b Has real text?\"'s false branch). Using\n// $('01.9...').resolvedProfile here (as before) would be wrong for the\n// escalation case: it reflects the ORIGINALLY requested profile\n// (local-openai-compatible), not what actually processed this document.\n// aiProvider/modelId/processingLocation are therefore hardcoded to the\n// real Gemini values (matching the model already hardcoded into\n// \"02.3 Run OCR/LLM extraction (Gemini)\"'s own URL), and fallbackUsed is\n// computed from the ORIGINAL request instead of assumed false -- a caller\n// who explicitly chose local-default must be able to see, in the audit\n// trail, that this specific document was actually escalated to cloud, not\n// silently processed by the local endpoint it asked for.\nconst ctx = $('01.2 Build run context').item.json;\nconst fallbackUsed = ctx.aiExecutionProfile !== 'cloud-gemini';\n\nreturn items.map(item => {\n  const rawText = extractTextFromGeminiResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Gemini output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'Type Code': ensureField(parsed, 'Type Code'),\n    'Currency': ensureField(parsed, 'Currency'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Tax ID (Seller)': ensureField(parsed, 'Tax ID (Seller)'),\n    'Tax ID (Buyer)': ensureField(parsed, 'Tax ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)'),\n    'Supply Description': ensureField(parsed, 'Supply Description'),\n    'Delivery Date': ensureField(parsed, 'Delivery Date'),\n    'Period Start': ensureField(parsed, 'Period Start'),\n    'Period End': ensureField(parsed, 'Period End'),\n    'Net Total': parsed['Net Total'],\n    'Tax Basis': parsed['Tax Basis'],\n    'Tax Amount': parsed['Tax Amount'],\n    'Gross Total': parsed['Gross Total'],\n    'Payable Amount': parsed['Payable Amount'],\n    'Charge Total': parsed['Charge Total'],\n    'Allowance Total': parsed['Allowance Total'],\n    'Prepaid Amount': parsed['Prepaid Amount'],\n    'Rounding Amount': parsed['Rounding Amount'],\n    'Line Items': ensureLineItems(parsed)\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      gemini_raw_text: rawText,\n      aiMeta: {\n        aiProvider: 'google-gemini',\n        modelId: item.json.usedModel || 'unknown-gemini-model',\n        modelVersion: null,\n        processingLocation: 'cloud',\n        promptVersion: 'flow1b-extract-v1',\n        fallbackUsed,\n      },\n    }\n  };\n});\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -271,7 +617,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"OCR_OUTPUT_PARSE_FAILED\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"Gemini's response could not be parsed into the expected JSON shape.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.5 Parse OCR/LLM output\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"OCR_OUTPUT_PARSE_FAILED\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"Gemini's response could not be parsed into the expected JSON shape.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.5 Parse OCR/LLM output\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"google-gemini\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"cloud\",\n    promptVersion: null,\n    fallbackUsed: ctx.aiExecutionProfile !== \"cloud-gemini\",\n  },\n}];\n"
       },
       "id": "b100000a-0000-4000-8000-00000000000a",
       "name": "02.6 Handle OCR parse failure",
@@ -284,31 +630,90 @@
     },
     {
       "parameters": {
-        "jsCode": "const binaryPropertyName = 'data';\nconst result = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);\n\n  result.push({\n    json: {\n      pdfMimeType: 'application/pdf',\n      pdfBase64: buffer.toString('base64')\n    }\n  });\n}\n\nreturn result;\n"
+        "method": "POST",
+        "url": "={{ $env.FACTURX_API_BASE_URL }}/v1/invoices/extract-text",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
       },
-      "id": "b1000018-0000-4000-8000-000000000018",
-      "name": "02.1L Encode PDF for local OCR",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "b1000020-0000-4000-8000-000000000020",
+      "name": "02.0LT Extract PDF text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         -1400,
-        460
+        340
       ],
       "onError": "continueErrorOutput",
-      "notes": "Identical logic to \"02.1 Encode PDF for OCR\", kept as its own node so the local lane is a technically independent path from the cloud lane, per the AI-selection spec. onError: \"continueErrorOutput\" added 2026-08-11: getBinaryDataBuffer can throw for reasons unrelated to the local provider (e.g. a missing/corrupted binary attachment), and this must never crash the run unhandled -- it now routes to \"02.4L Handle local OCR service failure\" instead."
+      "notes": "Local lane only, added 2026-09-04 (text-extraction-first architecture, validated across multiple random-sample accuracy rounds during pilot testing): most real invoices are born-digital PDFs with a fully extractable, lossless text layer, so rendering to a PNG and using a vision model is unnecessarily lossy work for the majority of real documents. Calls the real Phase 1 API's own POST /v1/invoices/extract-text (deterministic pypdf text extraction, no AI involved) via FACTURX_API_BASE_URL -- the same authoritative service 03.1 already calls, not a separate dev-only helper like the PNG render service below. Cloud lane is untouched and does not need this: Gemini's inline_data content part already ingests the PDF natively (see \"02.2 Build OCR/LLM request\"'s notes), so cloud never went through a lossy image-render step to begin with. onError: continueErrorOutput routes to the existing \"02.4L Handle local OCR service failure\" -- this endpoint's own internal design already degrades to hasText:false for any pypdf failure, so an actual HTTP-level failure here means the Phase 1 API itself is unreachable, the same failure class as every other local-lane call to it."
     },
     {
       "parameters": {
-        "jsCode": "// CONCEPT: assumes a local, OpenAI-compatible multimodal endpoint that\n// accepts a document as a base64 data URL in an image_url content part\n// (the convention used by several local inference servers). No model is\n// bundled or downloaded by this workflow -- LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL\n// point at whatever locally-run endpoint the developer configures.\nconst EXTRACTION_PROMPT = `Extract invoice header information from this PDF and return JSON only.\n\nExtraction rules:\n1. Distinguish seller (the party issuing/sending the invoice) from buyer\n   (the party the invoice is addressed to) using only the document's own\n   labels and layout -- for example \"Rechnungssteller\"/\"Von\"/\"Lieferant\"\n   typically marks the seller, and \"Rechnungsempfaenger\"/\"An\"/\"Kunde\"/\n   \"Bill To\" typically marks the buyer. Do not assume in advance which\n   company is the buyer or seller; read it from the document only.\n2. Assign each VAT ID to whichever party it is printed next to on the\n   document -- as \"VAT-ID (Seller)\" or \"VAT-ID (Buyer)\" accordingly.\n3. If a VAT ID's owner (seller or buyer) cannot be determined with\n   confidence from the document alone, return \"not found\" for that field\n   rather than guessing.\n4. All monetary amounts are plain numbers -- no currency symbol, no\n   thousands separator, dot as decimal separator (e.g. 119.00, not\n   \"119,00\" or \"EUR 119,00\").\n5. Dates use YYYY-MM-DD.\n6. \"Line Items\" is an array with one entry per distinct line/position in\n   the invoice's line-item table; an empty array if no such table is\n   visible.\n7. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"Type Code\": \"string\",\n  \"Currency\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Tax ID (Seller)\": \"string\",\n  \"Tax ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\",\n  \"Supply Description\": \"string\",\n  \"Delivery Date\": \"string\",\n  \"Period Start\": \"string\",\n  \"Period End\": \"string\",\n  \"Net Total\": \"number\",\n  \"Tax Basis\": \"number\",\n  \"Tax Amount\": \"number\",\n  \"Gross Total\": \"number\",\n  \"Payable Amount\": \"number\",\n  \"Charge Total\": \"number\",\n  \"Allowance Total\": \"number\",\n  \"Prepaid Amount\": \"number\",\n  \"Rounding Amount\": \"number\",\n  \"Line Items\": [{\"Description\": \"string\", \"Quantity\": \"number\", \"Net Amount\": \"number\", \"VAT Rate\": \"number\"}]\n}\n\nIf a text field is missing or illegible, return \"not found\". If a number\nfield is missing or illegible, return null.`;\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\nreturn items.map(item => ({\n  json: {\n    localRequest: {\n      model: profile.modelId,\n      temperature: 0,\n      messages: [\n        {\n          role: 'user',\n          content: [\n            { type: 'text', text: EXTRACTION_PROMPT },\n            {\n              type: 'image_url',\n              image_url: { url: `data:image/png;base64,${item.json.pngBase64}` },\n            },\n          ],\n        },\n      ],\n    },\n  },\n}));\n"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "local-has-real-text",
+              "leftValue": "={{ $json.hasText }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       },
-      "id": "b1000019-0000-4000-8000-000000000019",
-      "name": "02.2L Build local OCR/LLM request",
+      "id": "b1000021-0000-4000-8000-000000000021",
+      "name": "02.0LT-b Has real text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1180,
+        340
+      ],
+      "notes": "True (real text layer, >=50 chars after trimming, per the API's own _MIN_REAL_TEXT_CHARS) -> text-only local LLM branch below. False (genuine scan, or an unusual PDF with no real text layer) -> local vision/OCR was dropped entirely 2026-09-04 (real-world testing showed local vision could not reliably identify buyer vs. delivery address, a capability gap confirmed via direct cloud comparison, not a prompt-wording gap); this branch now recovers the original PDF binary and routes into the EXISTING cloud lane (\"02.1 Encode PDF for OCR\" onward), which already handles a genuine scan correctly via Gemini's native PDF ingestion. This is a real, audited escalation from local to cloud, not a silent one -- see \"02.5 Parse OCR/LLM output\"'s fallbackUsed computation."
+    },
+    {
+      "parameters": {
+        "jsCode": "// \"02.0LT Extract PDF text\" is an HTTP Request node -- like every other\n// HTTP node in this workflow (see e.g. \"02.1 Encode PDF for OCR\"'s own\n// notes), it replaces the item's json with the raw response and drops any\n// binary data that was on the item beforehand. Recovers the original PDF\n// binary via itemMatching against \"01.10 Route by AI profile\" -- a genuine\n// common ancestor of both routes into \"02.1 Encode PDF for OCR\" (the\n// direct cloud-gemini path, one hop away, and this escalation path,\n// several hops away), so this is safe per the same reasoning already\n// documented elsewhere in this workflow for itemMatching usage (never\n// reference a node that sits on only one of two branches a later step\n// merges).\nreturn items.map((item, index) => ({\n  json: item.json,\n  binary: $('01.10 Route by AI profile').itemMatching(index).binary,\n}));\n"
+      },
+      "id": "b1000024-0000-4000-8000-000000000024",
+      "name": "02.0LT-c Recover binary for cloud fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1290,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// EXTRACTION_PROMPT is kept in sync by hand with the cloud lane's own copy\n// in \"02.2 Build OCR/LLM request\" (same rules, adapted for a text input\n// instead of a PDF: the intro sentence and the trailing \"Invoice text:\" +\n// the real extracted text take the place of the inline_data content part).\nconst EXTRACTION_PROMPT = `Extract invoice header information from the following invoice text and return JSON only.\n\nExtraction rules:\n1. Distinguish seller (the party issuing/sending the invoice) from buyer\n   (the party the invoice is addressed to) using only the document's own\n   labels and layout -- for example \"Rechnungssteller\"/\"Von\"/\"Lieferant\"\n   typically marks the seller, and \"Rechnungsempfaenger\"/\"An\"/\"Kunde\"/\n   \"Bill To\"/\"Geschaeftsadresse\"/\"Rechnungsadresse\"/\"Invoice Address\"\n   typically marks the buyer. A clearly labeled company/business address\n   block (e.g. \"Geschaeftsadresse\") is the buyer's real billing identity --\n   prefer it over a delivery/shipping address block (labels include\n   \"Lieferadresse\", \"Lieferanschrift\", \"Versandadresse\", \"Delivery\n   Address\", \"Shipping Address\"), which is only where goods are sent and\n   may belong to a different party (e.g. a different company name at a\n   different address). A field like \"Auftraggeber\"/\"Ordered by\"/\"Orderer\"\n   names the individual who placed the order, not necessarily the buyer's\n   legal entity -- never use it as the buyer name when a separate company\n   address block exists. If NO address block is explicitly labeled as the\n   buyer/bill-to party, the buyer is normally the unlabeled recipient\n   address printed near the top of the document, right after or below the\n   seller's own letterhead/address (the conventional \"window\" position for\n   the invoiced party) -- never a block explicitly labeled as a delivery/\n   shipping address, even if that block is positioned more prominently on\n   the page. Do not assume in advance which company is the buyer or\n   seller; read it from the document only.\n2. Assign each VAT ID to whichever party it is printed next to on the\n   document -- as \"VAT-ID (Seller)\" or \"VAT-ID (Buyer)\" accordingly.\n2b. Every \"Country\" field (Country (Seller), Country (Buyer)) must be the\n   2-letter ISO 3166-1 alpha-2 country code (e.g. DE, NL, VN, FR, US),\n   never the full country name in any language -- even if the document\n   itself prints the full name (e.g. \"Deutschland\", \"Germany\",\n   \"Niederlande\", \"Việt Nam\"), convert it to its 2-letter code yourself.\n2c. \"Currency\" must be the 3-letter ISO 4217 currency code (e.g. EUR, USD,\n   GBP, VND), never a currency symbol or word -- even if the document only\n   ever prints a symbol like \"€\" or \"$\", convert it to its 3-letter code\n   yourself (€ -> EUR, $ -> USD, £ -> GBP, ¥ -> JPY, ₫ -> VND).\n3. If a VAT ID's owner (seller or buyer) cannot be determined with\n   confidence from the document alone, return \"not found\" for that field\n   rather than guessing.\n4. All monetary amounts are plain numbers -- no currency symbol, no\n   thousands separator, dot as decimal separator (e.g. 119.00, not\n   \"119,00\" or \"EUR 119,00\").\n5. Dates use YYYY-MM-DD. If the document has no actual date for a date\n   field (Invoice Date, Delivery Date, Period Start, Period End) -- for\n   example a vague delivery term like \"as soon as possible\" instead of a\n   real date -- return null for that field, never the vague phrase itself\n   and never \"not found\" (which is not a valid date either).\n6. \"Line Items\" is an array with one entry per distinct line/position in\n   the invoice's line-item table; an empty array if no such table is\n   visible. Each line item's \"Net Amount\" is that line's EXTENDED total\n   EXCLUDING VAT/tax (quantity multiplied by that line's net unit price),\n   never the per-unit price alone -- for example, quantity 2 at a unit\n   price of 108.00 has Net Amount 216.00, not 108.00. If the document\n   shows both a unit-price column and an extended/line-total column, use\n   the extended/line-total column, not the unit price. If the document\n   shows BOTH a value excluding VAT/tax and a value including VAT/tax for\n   the same line (look for header pairs like \"ohne USt.\"/\"inkl. USt.\",\n   \"exkl. MwSt.\"/\"inkl. MwSt.\", \"net\"/\"gross\", \"excl. VAT\"/\"incl. VAT\"),\n   always use the excluding-VAT (net) value for Net Amount, even if it is\n   the smaller number or appears in a different column position than\n   usual. If a line's amount is shown ONLY including VAT/tax with no net\n   figure anywhere for that line (a document-level Subtotal box does not\n   count as a per-line figure), return null for that line's Net Amount\n   rather than using the gross figure or guessing.\n7. Output JSON only. Do not add explanations or markdown fences.\n\nReturn exactly one JSON object with these fields:\n{\n  \"Invoice No\": \"string\",\n  \"Invoice Date\": \"string\",\n  \"Type Code\": \"string\",\n  \"Currency\": \"string\",\n  \"VAT-ID (Seller)\": \"string\",\n  \"VAT-ID (Buyer)\": \"string\",\n  \"Tax ID (Seller)\": \"string\",\n  \"Tax ID (Buyer)\": \"string\",\n  \"Name (Seller)\": \"string\",\n  \"Address (Seller)\": \"string\",\n  \"Zip (Seller)\": \"string\",\n  \"City (Seller)\": \"string\",\n  \"Country (Seller)\": \"string\",\n  \"Name (Buyer)\": \"string\",\n  \"Address (Buyer)\": \"string\",\n  \"Zip (Buyer)\": \"string\",\n  \"City (Buyer)\": \"string\",\n  \"Country (Buyer)\": \"string\",\n  \"Supply Description\": \"string\",\n  \"Delivery Date\": \"string\",\n  \"Period Start\": \"string\",\n  \"Period End\": \"string\",\n  \"Net Total\": \"number\",\n  \"Tax Basis\": \"number\",\n  \"Tax Amount\": \"number\",\n  \"Gross Total\": \"number\",\n  \"Payable Amount\": \"number\",\n  \"Charge Total\": \"number\",\n  \"Allowance Total\": \"number\",\n  \"Prepaid Amount\": \"number\",\n  \"Rounding Amount\": \"number\",\n  \"Line Items\": [{\"Description\": \"string\", \"Quantity\": \"number\", \"Net Amount\": \"number\", \"VAT Rate\": \"number\"}]\n}\n\nIf a text field is missing or illegible, return \"not found\". If a number\nfield is missing or illegible, return null.\n\nInvoice text:\n`;\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\nconst extractedText = $json.text;\n\nreturn items.map(item => ({\n  json: {\n    localRequest: {\n      model: profile.modelId,\n      temperature: 0,\n      messages: [\n        {\n          role: 'user',\n          content: EXTRACTION_PROMPT + extractedText,\n        },\n      ],\n    },\n  },\n}));\n"
+      },
+      "id": "b1000022-0000-4000-8000-000000000022",
+      "name": "02.2LT Build local text extraction request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         -1070,
-        460
-      ]
+        220
+      ],
+      "notes": "Builds a plain-string chat-completion body (no image_url part) from the real extracted text, sent to the same OpenAI-compatible endpoint local vision used to target before it was dropped 2026-09-04 (LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL). Its success output feeds the EXISTING \"02.5L Parse local OCR/LLM output\" directly -- both produce the identical OpenAI-compatible choices[0].message.content response shape, so no separate parse node is needed. Its failure output reuses the EXISTING \"02.4L Handle local OCR service failure\"."
     },
     {
       "parameters": {
@@ -319,24 +724,24 @@
         "jsonBody": "={{ JSON.stringify($json.localRequest) }}",
         "options": {}
       },
-      "id": "b100001a-0000-4000-8000-00000000001a",
-      "name": "02.3L Run OCR/LLM extraction (local)",
+      "id": "b1000023-0000-4000-8000-000000000023",
+      "name": "02.3LT Run local text extraction",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         -850,
-        460
+        220
       ],
       "executeOnce": false,
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000,
       "onError": "continueErrorOutput",
-      "notes": "No credential/auth by default -- targets a developer-configured local OpenAI-compatible endpoint (LOCAL_LLM_BASE_URL), which is typically unauthenticated in dev. If your local endpoint needs an API key, add an Authorization header sourced from an environment expression here; never hardcode one. Bounded retry is shorter than the cloud lane's (3 tries vs 5) since a local dev endpoint should fail fast rather than mask a real unavailability -- see \"01.9 Resolve AI execution profile\" for the pre-flight configured-availability check that avoids even attempting this call when LOCAL_LLM_BASE_URL is unset."
+      "notes": "Identical call shape and retry policy to \"02.3L Run OCR/LLM extraction (local)\" -- same endpoint, same local model, just a text-only request body. Its success output feeds the EXISTING \"02.5L Parse local OCR/LLM output\" directly: both this node and 02.3L produce the identical OpenAI-compatible choices[0].message.content response shape, so no separate parse node is needed. Its failure output reuses the EXISTING \"02.4L Handle local OCR service failure\"."
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"LOCAL_LLM_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The local OCR/LLM extraction step (PDF encode, request build, or the local endpoint call itself) did not complete successfully. No automatic fallback to cloud AI -- select cloud AI explicitly if needed.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.1L-02.3L Encode/build/run OCR extraction (local)\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"local-openai-compatible\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
+        "jsCode": "const ctx = $('01.2 Build run context').item.json;\nconst ctxErr = $input.first().json;\nconst gateDecisionAt = new Date().toISOString();\nreturn [{\n  json: {\n    processInstanceId: ctx.processInstanceId,\n    correlationId: ctx.correlationId,\n    workflowId: $workflow.id,\n    receivedAt: ctx.receivedAt,\n    outcome: \"PRE_FLIGHT_REJECTED\",\n    report: null,\n    httpErrorCode: null,\n    n8nErrorCode: \"LOCAL_LLM_SERVICE_UNAVAILABLE\",\n    explanation: (ctxErr.error && (ctxErr.error.message || ctxErr.error)) || ctxErr.message || \"The local OCR/LLM extraction step (PDF encode, request build, or the local endpoint call itself) did not complete successfully. No automatic fallback to cloud AI -- select cloud AI explicitly if needed.\",\n    phase1AttemptStartedAt: null,\n    gateDecisionAt,\n    phase1Status: \"nicht_pruefbar\",\n    routing: \"technical_review\",\n    failedStep: \"02.0LT-02.3LT Extract text/build/run text extraction (local)\",\n    invoice: null,\n    document: null,\n    organizationId: ctx.organizationId,\n    processingPath: ctx.processingPath,\n    aiExecutionProfile: ctx.aiExecutionProfile,\n    aiProvider: \"local-openai-compatible\",\n    modelId: null,\n    modelVersion: null,\n    processingLocation: \"local\",\n    promptVersion: null,\n    fallbackUsed: false,\n  },\n}];\n"
       },
       "id": "b100001b-0000-4000-8000-00000000001b",
       "name": "02.4L Handle local OCR service failure",
@@ -346,11 +751,11 @@
         -960,
         680
       ],
-      "notes": "Shared failure handler for the whole local extraction step: reached from \"02.1L Encode PDF for local OCR\"'s error output (added 2026-08-11) as well as \"02.3L Run OCR/LLM extraction (local)\"'s error output (original). Both converge on the same nicht_pruefbar/technical_review/LOCAL_LLM_SERVICE_UNAVAILABLE payload, never an unhandled crash / empty response, and never a fallback to cloud."
+      "notes": "Shared failure handler for the local text-extraction step: reached from \"02.0LT Extract PDF text\"'s and \"02.3LT Run local text extraction\"'s error outputs. Both converge on the same nicht_pruefbar/technical_review/LOCAL_LLM_SERVICE_UNAVAILABLE payload, never an unhandled crash / empty response. (Local vision, which also used to route errors here, was dropped entirely 2026-09-04 -- see \"02.0LT-b Has real text?\"'s notes for where a no-text-layer document goes instead: an explicit, audited escalation to cloud, not a silent fallback.)"
     },
     {
       "parameters": {
-        "jsCode": "function extractTextFromLocalResponse(item) {\n  const j = item.json || {};\n  if (\n    Array.isArray(j.choices) &&\n    j.choices[0] &&\n    j.choices[0].message &&\n    typeof j.choices[0].message.content === 'string'\n  ) {\n    return j.choices[0].message.content;\n  }\n  throw new Error('Could not find local LLM text output in expected choices[0].message.content field.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nfunction ensureLineItems(obj) {\n  const raw = obj['Line Items'];\n  if (!Array.isArray(raw)) return [];\n  return raw.map((li) => ({\n    Description: typeof li['Description'] === 'string' && li['Description'].trim() ? li['Description'].trim() : 'not found',\n    Quantity: li['Quantity'],\n    'Net Amount': li['Net Amount'],\n    'VAT Rate': li['VAT Rate'],\n  }));\n}\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\nreturn items.map(item => {\n  const rawText = extractTextFromLocalResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Local LLM output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'Type Code': ensureField(parsed, 'Type Code'),\n    'Currency': ensureField(parsed, 'Currency'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Tax ID (Seller)': ensureField(parsed, 'Tax ID (Seller)'),\n    'Tax ID (Buyer)': ensureField(parsed, 'Tax ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)'),\n    'Supply Description': ensureField(parsed, 'Supply Description'),\n    'Delivery Date': ensureField(parsed, 'Delivery Date'),\n    'Period Start': ensureField(parsed, 'Period Start'),\n    'Period End': ensureField(parsed, 'Period End'),\n    'Net Total': parsed['Net Total'],\n    'Tax Basis': parsed['Tax Basis'],\n    'Tax Amount': parsed['Tax Amount'],\n    'Gross Total': parsed['Gross Total'],\n    'Payable Amount': parsed['Payable Amount'],\n    'Charge Total': parsed['Charge Total'],\n    'Allowance Total': parsed['Allowance Total'],\n    'Prepaid Amount': parsed['Prepaid Amount'],\n    'Rounding Amount': parsed['Rounding Amount'],\n    'Line Items': ensureLineItems(parsed)\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      raw_text: rawText,\n      aiMeta: {\n        aiProvider: profile.aiProvider,\n        modelId: profile.modelId,\n        modelVersion: profile.modelVersion,\n        processingLocation: profile.processingLocation,\n        promptVersion: profile.promptVersion,\n        fallbackUsed: false,\n      },\n    }\n  };\n});\n"
+        "jsCode": "function extractTextFromLocalResponse(item) {\n  const j = item.json || {};\n  if (\n    Array.isArray(j.choices) &&\n    j.choices[0] &&\n    j.choices[0].message &&\n    typeof j.choices[0].message.content === 'string'\n  ) {\n    return j.choices[0].message.content;\n  }\n  throw new Error('Could not find local LLM text output in expected choices[0].message.content field.');\n}\n\nfunction stripMarkdownFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nfunction ensureField(obj, key) {\n  return typeof obj[key] === 'string' && obj[key].trim()\n    ? obj[key].trim()\n    : 'not found';\n}\n\nfunction ensureLineItems(obj) {\n  const raw = obj['Line Items'];\n  if (!Array.isArray(raw)) return [];\n  return raw.map((li) => ({\n    Description: typeof li['Description'] === 'string' && li['Description'].trim() ? li['Description'].trim() : 'not found',\n    Quantity: li['Quantity'],\n    'Net Amount': li['Net Amount'],\n    'VAT Rate': li['VAT Rate'],\n  }));\n}\n\nconst profile = $('01.9 Resolve AI execution profile').item.json.resolvedProfile;\n\n// Local vision (the only other node that used to feed this parser) was\n// dropped entirely 2026-09-04 -- \"02.3LT Run local text extraction\" is now\n// this parser's only possible caller, so extractionMethod is always\n// 'text_llm' here (no more runtime lane detection needed).\nconst extractionMethod = 'text_llm';\n\nreturn items.map(item => {\n  const rawText = extractTextFromLocalResponse(item);\n  const cleaned = stripMarkdownFences(rawText);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Local LLM output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  const normalized = {\n    'Invoice No': ensureField(parsed, 'Invoice No'),\n    'Invoice Date': ensureField(parsed, 'Invoice Date'),\n    'Type Code': ensureField(parsed, 'Type Code'),\n    'Currency': ensureField(parsed, 'Currency'),\n    'VAT-ID (Seller)': ensureField(parsed, 'VAT-ID (Seller)'),\n    'VAT-ID (Buyer)': ensureField(parsed, 'VAT-ID (Buyer)'),\n    'Tax ID (Seller)': ensureField(parsed, 'Tax ID (Seller)'),\n    'Tax ID (Buyer)': ensureField(parsed, 'Tax ID (Buyer)'),\n    'Name (Seller)': ensureField(parsed, 'Name (Seller)'),\n    'Address (Seller)': ensureField(parsed, 'Address (Seller)'),\n    'Zip (Seller)': ensureField(parsed, 'Zip (Seller)'),\n    'City (Seller)': ensureField(parsed, 'City (Seller)'),\n    'Country (Seller)': ensureField(parsed, 'Country (Seller)'),\n    'Name (Buyer)': ensureField(parsed, 'Name (Buyer)'),\n    'Address (Buyer)': ensureField(parsed, 'Address (Buyer)'),\n    'Zip (Buyer)': ensureField(parsed, 'Zip (Buyer)'),\n    'City (Buyer)': ensureField(parsed, 'City (Buyer)'),\n    'Country (Buyer)': ensureField(parsed, 'Country (Buyer)'),\n    'Supply Description': ensureField(parsed, 'Supply Description'),\n    'Delivery Date': ensureField(parsed, 'Delivery Date'),\n    'Period Start': ensureField(parsed, 'Period Start'),\n    'Period End': ensureField(parsed, 'Period End'),\n    'Net Total': parsed['Net Total'],\n    'Tax Basis': parsed['Tax Basis'],\n    'Tax Amount': parsed['Tax Amount'],\n    'Gross Total': parsed['Gross Total'],\n    'Payable Amount': parsed['Payable Amount'],\n    'Charge Total': parsed['Charge Total'],\n    'Allowance Total': parsed['Allowance Total'],\n    'Prepaid Amount': parsed['Prepaid Amount'],\n    'Rounding Amount': parsed['Rounding Amount'],\n    'Line Items': ensureLineItems(parsed)\n  };\n\n  return {\n    json: {\n      invoice_extracted: normalized,\n      raw_text: rawText,\n      extractionMethod,\n      aiMeta: {\n        aiProvider: profile.aiProvider,\n        modelId: profile.modelId,\n        modelVersion: profile.modelVersion,\n        processingLocation: profile.processingLocation,\n        promptVersion: profile.promptVersion,\n        fallbackUsed: false,\n      },\n    }\n  };\n});\n"
       },
       "id": "b100001c-0000-4000-8000-00000000001c",
       "name": "02.5L Parse local OCR/LLM output",
@@ -378,7 +783,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Assembles the canonical invoice contract in\n// facturx/phase1/schemas/canonical_invoice.schema.json exactly (same\n// document/extraction/invoice/fieldEvidence shape, schemaVersion \"1.0.0\")\n// so this node's output can be submitted directly to the real Phase 1 API's\n// POST /v1/invoices/process-extracted (see \"03.1 Run DigiTax controls\"\n// below) -- this is the API-convergence fix for the A1 review's \"Flow 1b\n// does not use the canonical Phase-1 control API\" finding. Buyer master\n// data is no longer looked up here at all: the real API resolves\n// organization context (and evaluates ORG-001 against it) itself, from\n// organizationId alone, so there is nothing left in n8n to keep in sync by\n// hand.\n//\n// Shared by both provider lanes (2026-08-11, dev-stack/AI-selection round;\n// expanded to the full schema 2026-08-18): \"02.5 Parse OCR/LLM output\"\n// (cloud) and \"02.5L Parse local OCR/LLM output\" (local) both emit the\n// same {invoice_extracted, aiMeta} shape, so this single node produces one\n// identical canonical contract regardless of which lane ran -- per the\n// AI-selection spec's convergence requirement.\nconst PLACEHOLDER_FOUND_CONFIDENCE = 0.85;\nconst parsed = $input.first().json;\nconst g = parsed.invoice_extracted;\n\nfunction emit(rawValue, locator) {\n  const found = typeof rawValue === \"string\" && rawValue.trim() && rawValue.trim().toLowerCase() !== \"not found\";\n  return {\n    value: found ? rawValue.trim() : null,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\n\n// Coerces a model-reported amount (already a JSON number in the happy\n// path, but defensively also accepts a string with German \"1.234,56\" or\n// plain \"1234.56\" formatting) to a JS number, or null if not parseable.\nfunction numOrNull(v) {\n  if (typeof v === \"number\" && Number.isFinite(v)) return v;\n  if (typeof v !== \"string\") return null;\n  const t = v.trim();\n  if (!t || t.toLowerCase() === \"not found\") return null;\n  const cleaned = t.replace(/[^\\d,.-]/g, \"\");\n  const normalized = cleaned.includes(\",\") && cleaned.includes(\".\")\n    ? cleaned.replace(/\\./g, \"\").replace(\",\", \".\")\n    : cleaned.replace(\",\", \".\");\n  const n = parseFloat(normalized);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction emitNum(rawValue, locator) {\n  const n = numOrNull(rawValue);\n  const found = n !== null;\n  return {\n    value: n,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\n\nfunction emitCode(rawValue, locator, validator) {\n  const candidate = typeof rawValue === \"string\" ? rawValue.trim().toUpperCase() : null;\n  const value = candidate && validator(candidate) ? candidate : null;\n  const found = value !== null;\n  return {\n    value,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\nconst isCurrency = (v) => /^[A-Z]{3}$/.test(v);\nconst isCountry = (v) => /^[A-Z]{2}$/.test(v);\n\nconst invoiceNumber = emit(g[\"Invoice No\"], \"invoice.invoiceNumber\");\nconst issueDate = emit(g[\"Invoice Date\"], \"invoice.issueDate\");\nconst typeCode = emit(g[\"Type Code\"], \"invoice.typeCode\");\nconst currency = emitCode(g[\"Currency\"], \"invoice.currency\", isCurrency);\n\nconst supplierName = emit(g[\"Name (Seller)\"], \"invoice.supplier.name\");\nconst supplierVatId = emit(g[\"VAT-ID (Seller)\"], \"invoice.supplier.vatId\");\nconst supplierTaxId = emit(g[\"Tax ID (Seller)\"], \"invoice.supplier.taxId\");\nconst supplierStreet = emit(g[\"Address (Seller)\"], \"invoice.supplier.address.street\");\nconst supplierPostal = emit(g[\"Zip (Seller)\"], \"invoice.supplier.address.postalCode\");\nconst supplierCity = emit(g[\"City (Seller)\"], \"invoice.supplier.address.city\");\nconst supplierCountry = emitCode(g[\"Country (Seller)\"], \"invoice.supplier.address.countryCode\", isCountry);\n\nconst buyerName = emit(g[\"Name (Buyer)\"], \"invoice.buyer.name\");\nconst buyerVatId = emit(g[\"VAT-ID (Buyer)\"], \"invoice.buyer.vatId\");\nconst buyerTaxId = emit(g[\"Tax ID (Buyer)\"], \"invoice.buyer.taxId\");\nconst buyerStreet = emit(g[\"Address (Buyer)\"], \"invoice.buyer.address.street\");\nconst buyerPostal = emit(g[\"Zip (Buyer)\"], \"invoice.buyer.address.postalCode\");\nconst buyerCity = emit(g[\"City (Buyer)\"], \"invoice.buyer.address.city\");\nconst buyerCountry = emitCode(g[\"Country (Buyer)\"], \"invoice.buyer.address.countryCode\", isCountry);\n\nconst supplyDescription = emit(g[\"Supply Description\"], \"invoice.supply.description\");\nconst deliveryDate = emit(g[\"Delivery Date\"], \"invoice.supply.deliveryDate\");\nconst periodStart = emit(g[\"Period Start\"], \"invoice.supply.periodStart\");\nconst periodEnd = emit(g[\"Period End\"], \"invoice.supply.periodEnd\");\n\nconst lineNet = emitNum(g[\"Net Total\"], \"invoice.totals.lineNet\");\nconst taxBasis = emitNum(g[\"Tax Basis\"], \"invoice.totals.taxBasis\");\nconst taxAmount = emitNum(g[\"Tax Amount\"], \"invoice.totals.taxAmount\");\nconst grossAmount = emitNum(g[\"Gross Total\"], \"invoice.totals.grossAmount\");\nconst payableAmount = emitNum(g[\"Payable Amount\"], \"invoice.totals.payableAmount\");\nconst chargeTotal = emitNum(g[\"Charge Total\"], \"invoice.totals.chargeTotal\");\nconst allowanceTotal = emitNum(g[\"Allowance Total\"], \"invoice.totals.allowanceTotal\");\nconst prepaidAmount = emitNum(g[\"Prepaid Amount\"], \"invoice.totals.prepaidAmount\");\nconst roundingAmount = emitNum(g[\"Rounding Amount\"], \"invoice.totals.roundingAmount\");\n\nconst lineItems = Array.isArray(g[\"Line Items\"])\n  ? g[\"Line Items\"].map((li) => ({\n      description: (typeof li[\"Description\"] === \"string\" && li[\"Description\"].trim() && li[\"Description\"].trim().toLowerCase() !== \"not found\")\n        ? li[\"Description\"].trim()\n        : null,\n      quantity: numOrNull(li[\"Quantity\"]),\n      netAmount: numOrNull(li[\"Net Amount\"]),\n      vatRate: numOrNull(li[\"VAT Rate\"]),\n    }))\n  : [];\n\nconst fieldEvidence = {\n  \"invoice.invoiceNumber\": invoiceNumber.evidence,\n  \"invoice.issueDate\": issueDate.evidence,\n  \"invoice.typeCode\": typeCode.evidence,\n  \"invoice.currency\": currency.evidence,\n  \"invoice.supplier.name\": supplierName.evidence,\n  \"invoice.supplier.vatId\": supplierVatId.evidence,\n  \"invoice.supplier.taxId\": supplierTaxId.evidence,\n  \"invoice.supplier.address.street\": supplierStreet.evidence,\n  \"invoice.supplier.address.postalCode\": supplierPostal.evidence,\n  \"invoice.supplier.address.city\": supplierCity.evidence,\n  \"invoice.supplier.address.countryCode\": supplierCountry.evidence,\n  \"invoice.buyer.name\": buyerName.evidence,\n  \"invoice.buyer.vatId\": buyerVatId.evidence,\n  \"invoice.buyer.taxId\": buyerTaxId.evidence,\n  \"invoice.buyer.address.street\": buyerStreet.evidence,\n  \"invoice.buyer.address.postalCode\": buyerPostal.evidence,\n  \"invoice.buyer.address.city\": buyerCity.evidence,\n  \"invoice.buyer.address.countryCode\": buyerCountry.evidence,\n  \"invoice.supply.description\": supplyDescription.evidence,\n  \"invoice.supply.deliveryDate\": deliveryDate.evidence,\n  \"invoice.supply.periodStart\": periodStart.evidence,\n  \"invoice.supply.periodEnd\": periodEnd.evidence,\n  \"invoice.totals.lineNet\": lineNet.evidence,\n  \"invoice.totals.taxBasis\": taxBasis.evidence,\n  \"invoice.totals.taxAmount\": taxAmount.evidence,\n  \"invoice.totals.grossAmount\": grossAmount.evidence,\n  \"invoice.totals.payableAmount\": payableAmount.evidence,\n  \"invoice.totals.chargeTotal\": chargeTotal.evidence,\n  \"invoice.totals.allowanceTotal\": allowanceTotal.evidence,\n  \"invoice.totals.prepaidAmount\": prepaidAmount.evidence,\n  \"invoice.totals.roundingAmount\": roundingAmount.evidence,\n};\n\nconst invoice = {\n  invoiceNumber: invoiceNumber.value,\n  issueDate: issueDate.value,\n  typeCode: typeCode.value,\n  currency: currency.value,\n  supplier: {\n    name: supplierName.value,\n    address: {\n      street: supplierStreet.value,\n      postalCode: supplierPostal.value,\n      city: supplierCity.value,\n      countryCode: supplierCountry.value,\n    },\n    taxId: supplierTaxId.value,\n    vatId: supplierVatId.value,\n  },\n  buyer: {\n    name: buyerName.value,\n    address: {\n      street: buyerStreet.value,\n      postalCode: buyerPostal.value,\n      city: buyerCity.value,\n      countryCode: buyerCountry.value,\n    },\n    taxId: buyerTaxId.value,\n    vatId: buyerVatId.value,\n  },\n  supply: {\n    description: supplyDescription.value,\n    deliveryDate: deliveryDate.value,\n    periodStart: periodStart.value,\n    periodEnd: periodEnd.value,\n  },\n  totals: {\n    lineNet: lineNet.value,\n    taxBasis: taxBasis.value,\n    taxAmount: taxAmount.value,\n    grossAmount: grossAmount.value,\n    payableAmount: payableAmount.value,\n    chargeTotal: chargeTotal.value,\n    allowanceTotal: allowanceTotal.value,\n    prepaidAmount: prepaidAmount.value,\n    roundingAmount: roundingAmount.value,\n  },\n  lineItems,\n};\n\nconst ctx = $('01.2 Build run context').item.json;\n\n// document.sha256 is computed once upstream in \"01.2 Build run context\"\n// from the same uploaded buffer this normalization ultimately describes;\n// this node only ever runs after \"01.4 Has valid upload?\" confirmed a file\n// is present, so ctx.pdfSha256 should always be set here.\nconst document = {\n  filename: ctx.filename || \"unknown.pdf\",\n  mimeType: ctx.mimeType || \"application/pdf\",\n  sha256: ctx.pdfSha256 || \"0\".repeat(64),\n};\n\nconst scalarEvidences = Object.values(fieldEvidence);\nconst extractedCount = scalarEvidences.filter((e) => e.state === \"extracted\").length;\n// Transparent, non-calibrated proxy: fraction of the tracked scalar fields\n// the model actually reported a value for. Not a confidence signal about\n// correctness, only about completeness -- consistent with the placeholder\n// per-field confidences above.\nconst overallConfidence = scalarEvidences.length\n  ? Number((extractedCount / scalarEvidences.length).toFixed(3))\n  : 0;\nconst coreFieldsFound = Boolean(invoiceNumber.value && issueDate.value && grossAmount.value !== null);\n\nconst extraction = {\n  status: coreFieldsFound ? \"completed\" : \"partial\",\n  overallConfidence,\n  adapterVersion: null,\n  warnings: [\n    \"Concept implementation: per-field confidence is a fixed placeholder (0.85 extracted / 0.0 not extracted), not a calibrated signal from the model.\",\n  ],\n};\n\nreturn [\n  {\n    json: {\n      correlationId: ctx.correlationId,\n      processInstanceId: ctx.processInstanceId,\n      organizationId: ctx.organizationId,\n      processingPath: ctx.processingPath,\n      aiExecutionProfile: ctx.aiExecutionProfile,\n      document,\n      extraction,\n      invoice,\n      fieldEvidence,\n      aiMeta: parsed.aiMeta,\n    },\n  },\n];\n"
+        "jsCode": "// Assembles the canonical invoice contract in\n// facturx/phase1/schemas/canonical_invoice.schema.json exactly (same\n// document/extraction/invoice/fieldEvidence shape, schemaVersion \"1.0.0\")\n// so this node's output can be submitted directly to the real Phase 1 API's\n// POST /v1/invoices/process-extracted (see \"03.1 Run DigiTax controls\"\n// below) -- this is the API-convergence fix for the A1 review's \"Flow 1b\n// does not use the canonical Phase-1 control API\" finding. Buyer master\n// data is no longer looked up here at all: the real API resolves\n// organization context (and evaluates ORG-001 against it) itself, from\n// organizationId alone, so there is nothing left in n8n to keep in sync by\n// hand.\n//\n// Shared by both provider lanes (2026-08-11, dev-stack/AI-selection round;\n// expanded to the full schema 2026-08-18): \"02.5 Parse OCR/LLM output\"\n// (cloud) and \"02.5L Parse local OCR/LLM output\" (local) both emit the\n// same {invoice_extracted, aiMeta} shape, so this single node produces one\n// identical canonical contract regardless of which lane ran -- per the\n// AI-selection spec's convergence requirement.\nconst PLACEHOLDER_FOUND_CONFIDENCE = 0.85;\nconst parsed = $input.first().json;\nconst g = parsed.invoice_extracted;\n\nfunction emit(rawValue, locator) {\n  const found = typeof rawValue === \"string\" && rawValue.trim() && rawValue.trim().toLowerCase() !== \"not found\";\n  return {\n    value: found ? rawValue.trim() : null,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\n\n// Coerces a model-reported amount (already a JSON number in the happy\n// path, but defensively also accepts a string with German \"1.234,56\" or\n// plain \"1234.56\" formatting) to a JS number, or null if not parseable.\nfunction numOrNull(v) {\n  if (typeof v === \"number\" && Number.isFinite(v)) return v;\n  if (typeof v !== \"string\") return null;\n  const t = v.trim();\n  if (!t || t.toLowerCase() === \"not found\") return null;\n  const cleaned = t.replace(/[^\\d,.-]/g, \"\");\n  const normalized = cleaned.includes(\",\") && cleaned.includes(\".\")\n    ? cleaned.replace(/\\./g, \"\").replace(\",\", \".\")\n    : cleaned.replace(\",\", \".\");\n  const n = parseFloat(normalized);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction emitNum(rawValue, locator) {\n  const n = numOrNull(rawValue);\n  const found = n !== null;\n  return {\n    value: n,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\n\nfunction emitCode(rawValue, locator, validator) {\n  const candidate = typeof rawValue === \"string\" ? rawValue.trim().toUpperCase() : null;\n  const value = candidate && validator(candidate) ? candidate : null;\n  const found = value !== null;\n  return {\n    value,\n    evidence: {\n      method: \"llm\",\n      confidence: found ? PLACEHOLDER_FOUND_CONFIDENCE : 0.0,\n      locator,\n      rawValue: rawValue,\n      state: found ? \"extracted\" : \"not_extracted\",\n    },\n  };\n}\nconst isCurrency = (v) => /^[A-Z]{3}$/.test(v);\nconst isCountry = (v) => /^[A-Z]{2}$/.test(v);\n\nconst invoiceNumber = emit(g[\"Invoice No\"], \"invoice.invoiceNumber\");\nconst issueDate = emit(g[\"Invoice Date\"], \"invoice.issueDate\");\nconst typeCode = emit(g[\"Type Code\"], \"invoice.typeCode\");\nconst currency = emitCode(g[\"Currency\"], \"invoice.currency\", isCurrency);\n\nconst supplierName = emit(g[\"Name (Seller)\"], \"invoice.supplier.name\");\nconst supplierVatId = emit(g[\"VAT-ID (Seller)\"], \"invoice.supplier.vatId\");\nconst supplierTaxId = emit(g[\"Tax ID (Seller)\"], \"invoice.supplier.taxId\");\nconst supplierStreet = emit(g[\"Address (Seller)\"], \"invoice.supplier.address.street\");\nconst supplierPostal = emit(g[\"Zip (Seller)\"], \"invoice.supplier.address.postalCode\");\nconst supplierCity = emit(g[\"City (Seller)\"], \"invoice.supplier.address.city\");\nconst supplierCountry = emitCode(g[\"Country (Seller)\"], \"invoice.supplier.address.countryCode\", isCountry);\n\nconst buyerName = emit(g[\"Name (Buyer)\"], \"invoice.buyer.name\");\nconst buyerVatId = emit(g[\"VAT-ID (Buyer)\"], \"invoice.buyer.vatId\");\nconst buyerTaxId = emit(g[\"Tax ID (Buyer)\"], \"invoice.buyer.taxId\");\nconst buyerStreet = emit(g[\"Address (Buyer)\"], \"invoice.buyer.address.street\");\nconst buyerPostal = emit(g[\"Zip (Buyer)\"], \"invoice.buyer.address.postalCode\");\nconst buyerCity = emit(g[\"City (Buyer)\"], \"invoice.buyer.address.city\");\nconst buyerCountry = emitCode(g[\"Country (Buyer)\"], \"invoice.buyer.address.countryCode\", isCountry);\n\nconst supplyDescription = emit(g[\"Supply Description\"], \"invoice.supply.description\");\nconst deliveryDate = emit(g[\"Delivery Date\"], \"invoice.supply.deliveryDate\");\nconst periodStart = emit(g[\"Period Start\"], \"invoice.supply.periodStart\");\nconst periodEnd = emit(g[\"Period End\"], \"invoice.supply.periodEnd\");\n\nconst lineNet = emitNum(g[\"Net Total\"], \"invoice.totals.lineNet\");\nconst taxBasis = emitNum(g[\"Tax Basis\"], \"invoice.totals.taxBasis\");\nconst taxAmount = emitNum(g[\"Tax Amount\"], \"invoice.totals.taxAmount\");\nconst grossAmount = emitNum(g[\"Gross Total\"], \"invoice.totals.grossAmount\");\nconst payableAmount = emitNum(g[\"Payable Amount\"], \"invoice.totals.payableAmount\");\nconst chargeTotal = emitNum(g[\"Charge Total\"], \"invoice.totals.chargeTotal\");\nconst allowanceTotal = emitNum(g[\"Allowance Total\"], \"invoice.totals.allowanceTotal\");\nconst prepaidAmount = emitNum(g[\"Prepaid Amount\"], \"invoice.totals.prepaidAmount\");\nconst roundingAmount = emitNum(g[\"Rounding Amount\"], \"invoice.totals.roundingAmount\");\n\nconst lineItems = Array.isArray(g[\"Line Items\"])\n  ? g[\"Line Items\"].map((li) => ({\n      description: (typeof li[\"Description\"] === \"string\" && li[\"Description\"].trim() && li[\"Description\"].trim().toLowerCase() !== \"not found\")\n        ? li[\"Description\"].trim()\n        : null,\n      quantity: numOrNull(li[\"Quantity\"]),\n      netAmount: numOrNull(li[\"Net Amount\"]),\n      vatRate: numOrNull(li[\"VAT Rate\"]),\n    }))\n  : [];\n\nconst fieldEvidence = {\n  \"invoice.invoiceNumber\": invoiceNumber.evidence,\n  \"invoice.issueDate\": issueDate.evidence,\n  \"invoice.typeCode\": typeCode.evidence,\n  \"invoice.currency\": currency.evidence,\n  \"invoice.supplier.name\": supplierName.evidence,\n  \"invoice.supplier.vatId\": supplierVatId.evidence,\n  \"invoice.supplier.taxId\": supplierTaxId.evidence,\n  \"invoice.supplier.address.street\": supplierStreet.evidence,\n  \"invoice.supplier.address.postalCode\": supplierPostal.evidence,\n  \"invoice.supplier.address.city\": supplierCity.evidence,\n  \"invoice.supplier.address.countryCode\": supplierCountry.evidence,\n  \"invoice.buyer.name\": buyerName.evidence,\n  \"invoice.buyer.vatId\": buyerVatId.evidence,\n  \"invoice.buyer.taxId\": buyerTaxId.evidence,\n  \"invoice.buyer.address.street\": buyerStreet.evidence,\n  \"invoice.buyer.address.postalCode\": buyerPostal.evidence,\n  \"invoice.buyer.address.city\": buyerCity.evidence,\n  \"invoice.buyer.address.countryCode\": buyerCountry.evidence,\n  \"invoice.supply.description\": supplyDescription.evidence,\n  \"invoice.supply.deliveryDate\": deliveryDate.evidence,\n  \"invoice.supply.periodStart\": periodStart.evidence,\n  \"invoice.supply.periodEnd\": periodEnd.evidence,\n  \"invoice.totals.lineNet\": lineNet.evidence,\n  \"invoice.totals.taxBasis\": taxBasis.evidence,\n  \"invoice.totals.taxAmount\": taxAmount.evidence,\n  \"invoice.totals.grossAmount\": grossAmount.evidence,\n  \"invoice.totals.payableAmount\": payableAmount.evidence,\n  \"invoice.totals.chargeTotal\": chargeTotal.evidence,\n  \"invoice.totals.allowanceTotal\": allowanceTotal.evidence,\n  \"invoice.totals.prepaidAmount\": prepaidAmount.evidence,\n  \"invoice.totals.roundingAmount\": roundingAmount.evidence,\n};\n\nconst invoice = {\n  invoiceNumber: invoiceNumber.value,\n  issueDate: issueDate.value,\n  typeCode: typeCode.value,\n  currency: currency.value,\n  supplier: {\n    name: supplierName.value,\n    address: {\n      street: supplierStreet.value,\n      postalCode: supplierPostal.value,\n      city: supplierCity.value,\n      countryCode: supplierCountry.value,\n    },\n    taxId: supplierTaxId.value,\n    vatId: supplierVatId.value,\n  },\n  buyer: {\n    name: buyerName.value,\n    address: {\n      street: buyerStreet.value,\n      postalCode: buyerPostal.value,\n      city: buyerCity.value,\n      countryCode: buyerCountry.value,\n    },\n    taxId: buyerTaxId.value,\n    vatId: buyerVatId.value,\n  },\n  supply: {\n    description: supplyDescription.value,\n    deliveryDate: deliveryDate.value,\n    periodStart: periodStart.value,\n    periodEnd: periodEnd.value,\n  },\n  totals: {\n    lineNet: lineNet.value,\n    taxBasis: taxBasis.value,\n    taxAmount: taxAmount.value,\n    grossAmount: grossAmount.value,\n    payableAmount: payableAmount.value,\n    chargeTotal: chargeTotal.value,\n    allowanceTotal: allowanceTotal.value,\n    prepaidAmount: prepaidAmount.value,\n    roundingAmount: roundingAmount.value,\n  },\n  lineItems,\n};\n\nconst ctx = $('01.2 Build run context').item.json;\n\n// document.sha256 is computed once upstream in \"01.2 Build run context\"\n// from the same uploaded buffer this normalization ultimately describes;\n// this node only ever runs after \"01.4 Has valid upload?\" confirmed a file\n// is present, so ctx.pdfSha256 should always be set here.\nconst document = {\n  filename: ctx.filename || \"unknown.pdf\",\n  mimeType: ctx.mimeType || \"application/pdf\",\n  sha256: ctx.pdfSha256 || \"0\".repeat(64),\n};\n\nconst scalarEvidences = Object.values(fieldEvidence);\nconst extractedCount = scalarEvidences.filter((e) => e.state === \"extracted\").length;\n// Transparent, non-calibrated proxy: fraction of the tracked scalar fields\n// the model actually reported a value for. Not a confidence signal about\n// correctness, only about completeness -- consistent with the placeholder\n// per-field confidences above.\nconst overallConfidence = scalarEvidences.length\n  ? Number((extractedCount / scalarEvidences.length).toFixed(3))\n  : 0;\nconst coreFieldsFound = Boolean(invoiceNumber.value && issueDate.value && grossAmount.value !== null);\n\nconst extraction = {\n  // parsed.extractionMethod is set only by \"02.5L Parse local OCR/LLM\n  // output\" (added 2026-09-04, to distinguish its text-only sub-lane from\n  // its image/vision sub-lane) -- absent entirely for the cloud lane's\n  // \"02.5 Parse OCR/LLM output\", which is correctly always \"ocr_llm\"\n  // regardless: Gemini's inline_data content part ingests the PDF\n  // natively, never through this workflow's own text-extraction step.\n  method: parsed.extractionMethod || \"ocr_llm\",\n  status: coreFieldsFound ? \"completed\" : \"partial\",\n  overallConfidence,\n  adapterVersion: null,\n  warnings: [\n    \"Concept implementation: per-field confidence is a fixed placeholder (0.85 extracted / 0.0 not extracted), not a calibrated signal from the model.\",\n  ],\n};\n\nreturn [\n  {\n    json: {\n      correlationId: ctx.correlationId,\n      processInstanceId: ctx.processInstanceId,\n      organizationId: ctx.organizationId,\n      processingPath: ctx.processingPath,\n      aiExecutionProfile: ctx.aiExecutionProfile,\n      document,\n      extraction,\n      invoice,\n      fieldEvidence,\n      aiMeta: parsed.aiMeta,\n    },\n  },\n];\n"
       },
       "id": "b100000b-0000-4000-8000-00000000000b",
       "name": "02.7 Normalize invoice",
@@ -661,28 +1066,6 @@
       "name": "Version Info"
     },
     {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ $env.LOCAL_PDF_RENDER_URL }}/render",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ pdfBase64: $json.pdfBase64, page: 0 }) }}",
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "id": "b1000031-0000-4000-8000-000000000031",
-      "name": "02.1L-b Render PDF page as PNG (local render helper)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        -1290,
-        460
-      ],
-      "onError": "continueErrorOutput",
-      "notes": "CONCEPT, added for the local AI lane only: most local OpenAI-compatible vision endpoints (verified against LM Studio) reject a raw PDF passed as image_url and require an actual rendered image -- unlike Gemini's cloud API, which accepts the PDF directly in the cloud lane (unchanged). Calls a small dev-only render helper (examples/n8n/scripts/pdf_render_service.py) over LOCAL_PDF_RENDER_URL, resolved purely from environment settings -- never a hardcoded deployment host. Not bundled or auto-started; must already be running. onError: continueErrorOutput routes to the existing 02.4L failure handler, same as the other local-lane HTTP call."
-    },
-    {
       "id": "c1000030-0000-4000-8000-000000000030",
       "name": "02.8 Mark phase1 attempt start",
       "type": "n8n-nodes-base.code",
@@ -791,7 +1174,7 @@
         110
       ],
       "parameters": {
-        "jsCode": "// Reconciles the shared subworkflow's minimal { activityExecution } return\n// with the branch's own normalized envelope (phase1Status/routing/report/\n// AI-selection audit fields/...) that \"04.1 Build control report\" still\n// expects -- the shared subworkflow's contract stays reusable/minimal on\n// purpose (see examples/n8n/README.md), so this node does the reconciling,\n// same pattern as every Flow 1a workflow.\nfunction tryGetBranchEnvelope(nodeName) {\n  try {\n    const item = $(nodeName).item;\n    return item ? item.json : undefined;\n  } catch (e) {\n    return undefined;\n  }\n}\n\nconst BRANCH_NODE_NAMES = [\n  \"01.5 Handle invalid upload\",\n  \"01.11 Handle unresolved AI profile\",\n  \"02.4 Handle OCR service failure\",\n  \"02.6 Handle OCR parse failure\",\n  \"02.4L Handle local OCR service failure\",\n  \"02.6L Handle local OCR parse failure\",\n  \"03.2 Classify controls response\",\n  \"03.3 Handle controls-call failure\",\n];\n\nlet envelope;\nfor (const name of BRANCH_NODE_NAMES) {\n  const candidate = tryGetBranchEnvelope(name);\n  if (candidate !== undefined) {\n    envelope = candidate;\n    break;\n  }\n}\nif (!envelope) {\n  throw new Error(\"ACTIVITY_EXECUTION_MERGE_NO_BRANCH_ENVELOPE: could not locate the originating branch node's output.\");\n}\n\nconst { activityExecution } = $input.first().json;\n\nreturn [{\n  json: {\n    correlationId: envelope.correlationId,\n    processInstanceId: envelope.processInstanceId,\n    status: envelope.phase1Status,\n    routing: envelope.routing,\n    failedStep: envelope.failedStep,\n    errorCode: envelope.httpErrorCode || envelope.n8nErrorCode,\n    explanation: envelope.explanation,\n    invoice: envelope.invoice,\n    document: envelope.document,\n    report: envelope.report,\n    organizationId: envelope.organizationId,\n    tcmsOrganizationId: envelope.tcmsOrganizationId,\n    processingPath: envelope.processingPath,\n    aiExecutionProfile: envelope.aiExecutionProfile,\n    aiProvider: envelope.aiProvider,\n    modelId: envelope.modelId,\n    modelVersion: envelope.modelVersion,\n    processingLocation: envelope.processingLocation,\n    promptVersion: envelope.promptVersion,\n    fallbackUsed: envelope.fallbackUsed,\n    activityExecution,\n  },\n}];\n"
+        "jsCode": "// Reconciles the shared subworkflow's minimal { activityExecution } return\n// with the branch's own normalized envelope (phase1Status/routing/report/\n// AI-selection audit fields/...) that \"04.1 Build control report\" still\n// expects -- the shared subworkflow's contract stays reusable/minimal on\n// purpose (see examples/n8n/README.md), so this node does the reconciling,\n// same pattern as every Flow 1a workflow.\nfunction tryGetBranchEnvelope(nodeName) {\n  try {\n    const item = $(nodeName).item;\n    return item ? item.json : undefined;\n  } catch (e) {\n    return undefined;\n  }\n}\n\nconst BRANCH_NODE_NAMES = [\n  \"01.4f Build XML result envelope\",\n  \"01.4g Handle document format check failure\",\n  \"01.5 Handle invalid upload\",\n  \"01.11 Handle unresolved AI profile\",\n  \"02.4 Handle OCR service failure\",\n  \"02.6 Handle OCR parse failure\",\n  \"02.4L Handle local OCR service failure\",\n  \"02.6L Handle local OCR parse failure\",\n  \"03.2 Classify controls response\",\n  \"03.3 Handle controls-call failure\",\n];\n\nlet envelope;\nfor (const name of BRANCH_NODE_NAMES) {\n  const candidate = tryGetBranchEnvelope(name);\n  if (candidate !== undefined) {\n    envelope = candidate;\n    break;\n  }\n}\nif (!envelope) {\n  throw new Error(\"ACTIVITY_EXECUTION_MERGE_NO_BRANCH_ENVELOPE: could not locate the originating branch node's output.\");\n}\n\nconst { activityExecution } = $input.first().json;\n\nreturn [{\n  json: {\n    correlationId: envelope.correlationId,\n    processInstanceId: envelope.processInstanceId,\n    status: envelope.phase1Status,\n    routing: envelope.routing,\n    failedStep: envelope.failedStep,\n    errorCode: envelope.httpErrorCode || envelope.n8nErrorCode,\n    explanation: envelope.explanation,\n    invoice: envelope.invoice,\n    document: envelope.document,\n    report: envelope.report,\n    organizationId: envelope.organizationId,\n    tcmsOrganizationId: envelope.tcmsOrganizationId,\n    processingPath: envelope.processingPath,\n    aiExecutionProfile: envelope.aiExecutionProfile,\n    aiProvider: envelope.aiProvider,\n    modelId: envelope.modelId,\n    modelVersion: envelope.modelVersion,\n    processingLocation: envelope.processingLocation,\n    promptVersion: envelope.promptVersion,\n    fallbackUsed: envelope.fallbackUsed,\n    activityExecution,\n  },\n}];\n"
       }
     },
     {
@@ -879,6 +1262,19 @@
       }
     },
     {
+      "id": "c100003a-0000-4000-8000-00000000003a",
+      "name": "03.6-err Handle risk review submission failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// Added 2026-09-04: \"03.6 Run DigiTax Risk Review\" has onError:\n// \"continueErrorOutput\" but, until this fix, no error-output connection at\n// all -- a genuine transport failure (confirmed live: the configured\n// FACTURX_RISK_REVIEW_API_BASE_URL had nothing listening) left the error\n// output with nowhere to go, silently ending the whole execution right\n// there. n8n itself still marked the run \"finished\"/\"success\" (a captured\n// node error is not a workflow-level failure), so the caller's webhook\n// response fell back to n8n's own empty default -- \"04.6 Respond with\n// result bundle\" never ran, even though the entire Phase 1 result\n// (phase1ControlReport, invoice, routing) had already been computed\n// successfully before this advisory sub-call was ever attempted.\n//\n// Fix: recover the exact context \"03.4 Evaluate risk review gate\" already\n// produced (same pattern as e.g. \"02.4 Handle OCR service failure\"\n// recovering \"01.2 Build run context\"), and continue to 04.1 regardless --\n// an advisory Risk Review submission failing must never block or corrupt\n// the already-authoritative Phase 1 result. riskReviewReport stays null\n// (unchanged from before this attempt); nothing here fabricates a\n// DigiTax Risk Review disposition that was never actually produced.\nconst ctx = $('03.4 Evaluate risk review gate').item.json;\nconst ctxErr = $input.first().json;\nconst errObj = ctxErr.error || {};\nconst errMessage = (errObj.message || errObj || ctxErr.message || '').toString();\n\nreturn [{\n  json: {\n    ...ctx,\n    riskReviewReport: null,\n    // 03.4's finding-bearing branch (the only branch that ever leads here)\n    // never itself sets routingStatus -- it only exists for its OTHER\n    // branches (NO_RISK_REVIEW_REQUIRED, RISK_REVIEW_MISSING_TCMS_..., the\n    // upstream-report-missing TECHNICAL_FAILURE). Confirmed live\n    // 2026-09-04: leaving it unset here (or null) fails the result-bundle\n    // schema's routingStatus enum, which has no null option -- this IS a\n    // technical failure of the advisory submission, so the same existing\n    // TECHNICAL_FAILURE value applies, reused rather than inventing a new\n    // enum member for what is semantically the same situation.\n    routingStatus: 'TECHNICAL_FAILURE',\n    riskReviewSubmissionFailed: true,\n    riskReviewSubmissionError: errMessage || 'DigiTax Risk Review submission failed (service unreachable or returned an error). The underlying Phase 1 control report is unaffected and remains authoritative.',\n  },\n}];\n"
+      }
+    },
+    {
       "id": "c1000039-0000-4000-8000-000000000039",
       "name": "03.7 Handle risk review response",
       "type": "n8n-nodes-base.code",
@@ -918,6 +1314,22 @@
               {
                 "name": "Cache-Control",
                 "value": "no-store"
+              },
+              {
+                "name": "X-AI-Provider",
+                "value": "={{ $('04.1 Build control report').item.json.aiProvider || 'none' }}"
+              },
+              {
+                "name": "X-AI-Model",
+                "value": "={{ $('04.1 Build control report').item.json.modelId || 'none' }}"
+              },
+              {
+                "name": "X-AI-Processing-Location",
+                "value": "={{ $('04.1 Build control report').item.json.processingLocation || 'none' }}"
+              },
+              {
+                "name": "X-AI-Fallback-Used",
+                "value": "={{ $('04.1 Build control report').item.json.fallbackUsed }}"
               }
             ]
           }
@@ -971,7 +1383,7 @@
       "main": [
         [
           {
-            "node": "01.9 Resolve AI execution profile",
+            "node": "01.4b Inspect document format",
             "type": "main",
             "index": 0
           }
@@ -979,6 +1391,93 @@
         [
           {
             "node": "01.5 Handle invalid upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4b Inspect document format": {
+      "main": [
+        [
+          {
+            "node": "01.4c Recover binary after inspect",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "01.4g Handle document format check failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4g Handle document format check failure": {
+      "main": [
+        [
+          {
+            "node": "Call Assemble ActivityExecution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4c Recover binary after inspect": {
+      "main": [
+        [
+          {
+            "node": "01.4d Is structured document?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4d Is structured document?": {
+      "main": [
+        [
+          {
+            "node": "01.4e Run XML extraction (structured)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "01.9 Resolve AI execution profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4e Run XML extraction (structured)": {
+      "main": [
+        [
+          {
+            "node": "01.4f Build XML result envelope",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "01.4g Handle document format check failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.4f Build XML result envelope": {
+      "main": [
+        [
+          {
+            "node": "Call Assemble ActivityExecution",
             "type": "main",
             "index": 0
           }
@@ -1011,7 +1510,7 @@
       "main": [
         [
           {
-            "node": "02.1L Encode PDF for local OCR",
+            "node": "02.0LT Extract PDF text",
             "type": "main",
             "index": 0
           }
@@ -1076,7 +1575,7 @@
       "main": [
         [
           {
-            "node": "02.5 Parse OCR/LLM output",
+            "node": "02.3a Tier 1 quota exceeded?",
             "type": "main",
             "index": 0
           }
@@ -1084,6 +1583,111 @@
         [
           {
             "node": "02.4 Handle OCR service failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3a Tier 1 quota exceeded?": {
+      "main": [
+        [
+          {
+            "node": "02.3b Run OCR/LLM extraction (Gemini, tier 2)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.3e Tag model (tier 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3b Run OCR/LLM extraction (Gemini, tier 2)": {
+      "main": [
+        [
+          {
+            "node": "02.3c Tier 2 quota exceeded?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.4 Handle OCR service failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3c Tier 2 quota exceeded?": {
+      "main": [
+        [
+          {
+            "node": "02.3d Run OCR/LLM extraction (Gemini, tier 3)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.3f Tag model (tier 2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3d Run OCR/LLM extraction (Gemini, tier 3)": {
+      "main": [
+        [
+          {
+            "node": "02.3g Tag model (tier 3)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.4 Handle OCR service failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3e Tag model (tier 1)": {
+      "main": [
+        [
+          {
+            "node": "02.5 Parse OCR/LLM output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3f Tag model (tier 2)": {
+      "main": [
+        [
+          {
+            "node": "02.5 Parse OCR/LLM output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3g Tag model (tier 3)": {
+      "main": [
+        [
+          {
+            "node": "02.5 Parse OCR/LLM output",
             "type": "main",
             "index": 0
           }
@@ -1130,11 +1734,11 @@
         ]
       ]
     },
-    "02.1L Encode PDF for local OCR": {
+    "02.0LT Extract PDF text": {
       "main": [
         [
           {
-            "node": "02.1L-b Render PDF page as PNG (local render helper)",
+            "node": "02.0LT-b Has real text?",
             "type": "main",
             "index": 0
           }
@@ -1148,18 +1752,47 @@
         ]
       ]
     },
-    "02.2L Build local OCR/LLM request": {
+    "02.0LT-b Has real text?": {
       "main": [
         [
           {
-            "node": "02.3L Run OCR/LLM extraction (local)",
+            "node": "02.2LT Build local text extraction request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "02.0LT-c Recover binary for cloud fallback",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "02.3L Run OCR/LLM extraction (local)": {
+    "02.0LT-c Recover binary for cloud fallback": {
+      "main": [
+        [
+          {
+            "node": "02.1 Encode PDF for OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.2LT Build local text extraction request": {
+      "main": [
+        [
+          {
+            "node": "02.3LT Run local text extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.3LT Run local text extraction": {
       "main": [
         [
           {
@@ -1254,24 +1887,6 @@
         [
           {
             "node": "05.4 Human review - unknown",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "02.1L-b Render PDF page as PNG (local render helper)": {
-      "main": [
-        [
-          {
-            "node": "02.2L Build local OCR/LLM request",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "02.4L Handle local OCR service failure",
             "type": "main",
             "index": 0
           }
@@ -1396,6 +2011,24 @@
         [
           {
             "node": "03.7 Handle risk review response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "03.6-err Handle risk review submission failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03.6-err Handle risk review submission failure": {
+      "main": [
+        [
+          {
+            "node": "04.1 Build control report",
             "type": "main",
             "index": 0
           }

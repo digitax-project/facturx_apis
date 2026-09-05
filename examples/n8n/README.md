@@ -25,6 +25,7 @@ DigiTax | Invoice Phase 1 | Flow 1b | <Workflow> | v<major>.<minor>.<patch>
 | `DigiTax \| Invoice Phase 1 \| Flow 1a \| Batch Item \| v1.1.0` | `digitax_invoice_phase1_flow1a_batch_item_v1_1_0.json` | `digitax-invoice-phase1-batch-item` | demo-ready (active, subworkflow for Batch Demo AND the A6a synthetic TCMS demo caller) |
 | `DigiTax \| Invoice Phase 1 \| Flow 1b \| PDF OCR/LLM Concept \| v0.3.0` | `digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json` | `digitax-invoice-phase1-flow1b-pdf-ocr` | working, live-verified both AI lanes (exported inactive/credential-free by design, same as every other workflow here -- see "Import status" below) |
 | `DigiTax \| Invoice Phase 1 \| Shared \| Assemble ActivityExecution \| v1.0.0` | `digitax_invoice_phase1_shared_assemble_activity_execution_v1_0_0.json` | `digitax-invoice-phase1-shared-assemble-activity-execution` | demo-ready (active/published -- no webhook, never externally reachable, but n8n 2.33.7's WorkflowPublicationService refuses to let Execute Workflow invoke an unpublished target at all) |
+| `DigiTax \| Invoice Phase 1 \| Flow 0 \| Mailbox Intake \| v0.1.0` | `digitax_invoice_phase1_flow0_mailbox_intake_v0_1_0.json` | `digitax-invoice-phase1-flow0-mailbox-intake` | imported inactive, not yet live-verified end to end -- calls Flow 1a's and Flow 1b's own webhooks directly (never Execute Workflow, since both are webhook-triggered) and ingests into TCMS's dedicated service-to-service endpoint; single-tenant (Unternehmen X only) by design, not a reusable template -- see "Flow 0" below |
 
 Workflow **ids are deterministic and never change** across a rename --
 `n8n import:workflow` upserts by id, so re-importing an updated export
@@ -646,7 +647,7 @@ this subworkflow's.
 
 ### A6a synthetic TCMS demo extension (v1.1.0, 2026-08-27; identity contract corrected 2026-08-28)
 
-Per `coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md`,
+Per `coordination/control-plane/runs/2026-08-25-unternehmen-x-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md`,
 n8n never authenticates to TCMS directly. Instead, Batch Item v1.1.0 adds a
 gated advisory step and returns a **bounded result bundle** alongside its
 existing dashboard-facing fields, for an authenticated TCMS backend action
@@ -1039,6 +1040,68 @@ Flow 1b now responds with the same JSON `resultBundle` contract Flow 1a
 does (see "04.5 Assemble result bundle" / "04.6 Respond with result
 bundle") -- not a standalone HTML report -- so both flows render through
 the same TCMS Nachweisakte page.
+
+### Flow 0 (Mailbox Intake): single-tenant, imported inactive, awaiting real credentials + a published baseline
+
+Flow 0 watches one Outlook mail folder, reuses the legacy prototype's
+proven two-stage invoice classification gate unchanged (body-level
+`textClassifier` + per-attachment Gemini vision check for
+`is_invoice`/`is_issued_to_company`), then for each confirmed invoice:
+detects its format via `/v1/invoices/inspect`, fetches this organization's
+real buyer master data from its own published TCMS `OrganizationBaseline`
+(GET `/organizations/:id/evidence/n8n-invoice-context` -- never hardcoded
+here or duplicated into this repo's own config), calls Flow 1a's or Flow
+1b's existing webhook directly by HTTP (the identical webhooks TCMS's own
+browser-triggered routes call -- never n8n's Execute Workflow node, since
+both are webhook-, not Execute-Workflow-, triggered), and finally POSTs the
+resulting `resultBundle` into TCMS's dedicated service-to-service
+ingestion endpoint (`POST /organizations/:id/evidence/n8n-inbound-runs`,
+Bearer-authenticated -- an email arriving on its own has no browser session
+to authenticate the existing routes with).
+
+This workflow is deliberately **single-tenant**, unlike every other
+workflow in this file: it targets exactly one real TCMS organization (set
+via `UNTERNEHMEN_X_TCMS_ORGANIZATION_ID`), not a reusable multi-company template
+-- see the project's own phased plan for why (Flow 0/2 are built directly
+against one real company's tools first, generalized later only if that
+proves out).
+
+Before activating, all of the following must be true (Flow 0 fails closed,
+branch by branch, on whichever of these is missing):
+
+1. A real **Microsoft Outlook** credential selected on `Get All Messages
+   from one specific Mail-Folder` / `Download Attachments`, and a real
+   **Google Gemini (PaLM) API** credential on `Model` / `Invoice Classifier
+   With Gemini 2.5` (both carry `REPLACE_WITH_YOUR_CREDENTIAL_ID` on
+   import, same convention as every other workflow here). The underlying
+   Azure AD app registration (Outlook `Mail.Read`) is a manual, operator-side
+   step against the real Microsoft 365 tenant -- not something this
+   repository can do for you.
+2. `REPLACE_WITH_YOUR_INVOICE_FOLDER` resolved to a real mail folder on the
+   `Get All Messages...` node.
+3. `N8N_INGEST_SHARED_SECRET`, `TCMS_BASE_URL`, and
+   `UNTERNEHMEN_X_TCMS_ORGANIZATION_ID` set (see `.env.example`) --
+   `N8N_INGEST_SHARED_SECRET` must match TCMS's own
+   `NUXT_N8N_INGEST_SHARED_SECRET` exactly.
+4. A real `OrganizationBaseline` (with a real address) published for that
+   organization in TCMS -- `Fetch Unternehmen X Buyer Master Data` fails closed
+   otherwise (`400`, live-verified 2026-09-02).
+5. `UNTERNEHMEN_X_AI_EXECUTION_PROFILE` set to `local-default` or `cloud-gemini`
+   (no default -- `Check AI Execution Profile Configured` fails closed
+   otherwise) if any invoice is expected to route through Flow 1b.
+
+Live-verified so far (2026-09-02, real running containers, not just static
+review): `n8n import:workflow` accepts the exported file with no schema
+errors, alongside the other five workflows, through the same `n8n-init`
+path used for the demo-ready ones; `N8N_SELF_BASE_URL` correctly reaches
+Flow 1a's real webhook from inside the same container and gets back the
+documented `resultBundle` envelope; `TCMS_BASE_URL`
+(`http://host.docker.internal:3000`) correctly reaches TCMS's new
+`n8n-invoice-context` endpoint from inside the container, with the Bearer
+check and the fail-closed "no baseline" gate both behaving exactly as
+designed. Not yet live-verified: a real mailbox message flowing all the
+way through to a TCMS Nachweisakte entry -- blocked on items 1, 2, and 4
+above, none of which this repository can supply on its own.
 
 ### Verification
 

@@ -1,4 +1,4 @@
-# DigiTax Phase 1 developer stack: API + n8n UI + the five versioned DigiTax
+# DigiTax Phase 1 developer stack: API + n8n UI + the seven versioned DigiTax
 # workflows, importable and (for Flow 1a) runnable with a single,
 # platform-independent command:
 #
@@ -16,14 +16,14 @@
 # See README.md ("Developer stack") and examples/n8n/README.md for the full
 # walkthrough, including how to reset the dedicated dev volume and how to
 # opt into local or cloud AI for Flow 1b.
-name: digitax-phase1-devstack
+name: unternehmen-x-phase1-devstack
 
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: digitax-devstack-api
+    container_name: unternehmen-x-devstack-api
     ports:
       - "6970:6969"
     environment:
@@ -48,7 +48,7 @@ services:
   # commands and for the empirical verification notes (n8nio/n8n:2.33.7).
   n8n-init:
     image: n8nio/n8n:2.33.7
-    container_name: digitax-devstack-n8n-init
+    container_name: unternehmen-x-devstack-n8n-init
     entrypoint: ["sh", "/data/scripts/n8n-init.sh"]
     environment:
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
@@ -57,7 +57,7 @@ services:
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
       - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
-      - digitax_devstack_n8n_data:/home/node/.n8n
+      - unternehmen_x_devstack_n8n_data:/home/node/.n8n
       - ./examples/n8n:/data/workflows:ro
       - ./examples/n8n/scripts:/data/scripts:ro
     networks:
@@ -65,10 +65,17 @@ services:
 
   n8n:
     image: n8nio/n8n:2.33.7
-    container_name: digitax-devstack-n8n
+    container_name: unternehmen-x-devstack-n8n
     ports:
       - "5679:5678"
     environment:
+      # Without this, n8n generates OAuth callback URLs (shown in the
+      # credential UI) using its own internal port (5678) instead of the
+      # host-mapped port (5679) the browser and any external OAuth provider
+      # actually reach it on -- confirmed empirically 2026-09-02 while
+      # setting up Flow 0's real Microsoft Outlook credential. Must match
+      # whatever redirect URI is registered on the Azure AD app.
+      - N8N_EDITOR_BASE_URL=http://localhost:5679/
       - FACTURX_API_BASE_URL=http://api:6969
       # A6a synthetic TCMS demo (Batch Item v1.1.0): points the gated
       # DigiTax Risk Review call at a locally-run reqeli API (separate
@@ -87,6 +94,28 @@ services:
       # container only imports/publishes workflow JSON via CLI, it never
       # executes a Code node.
       - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      # Flow 0 (mailbox intake) calls Flow 1a/1b's own webhooks by HTTP,
+      # from within this same n8n instance -- always true regardless of
+      # deployment, since all three flows run in one container.
+      - N8N_SELF_BASE_URL=http://localhost:5678
+      # Flow 0's two calls into TCMS (fetching this organization's real
+      # buyer master data, then ingesting the finished resultBundle): TCMS
+      # runs as a host process (`npm run dev`), not in this compose file,
+      # so host.docker.internal is required from inside this container.
+      - TCMS_BASE_URL=${TCMS_BASE_URL:-http://host.docker.internal:3000}
+      # Must match TCMS's own NUXT_N8N_INGEST_SHARED_SECRET -- both sides
+      # fail closed (never "any caller is trusted") when this is empty.
+      - N8N_INGEST_SHARED_SECRET=${N8N_INGEST_SHARED_SECRET:-}
+      # This instance is single-tenant: one mailbox, one real TCMS
+      # organization. Set to Unternehmen X's actual organization id once it
+      # exists in TCMS (the seed script prints it).
+      - UNTERNEHMEN_X_TCMS_ORGANIZATION_ID=${UNTERNEHMEN_X_TCMS_ORGANIZATION_ID:-}
+      # No default: must be explicitly "local-default" or "cloud-gemini"
+      # before Flow 0 will submit any PDF/OCR invoice to Flow 1b -- H1's
+      # local-AI-only decision (2026-09-02) means this should be
+      # local-default in practice; Flow 0's own "Check AI Execution Profile
+      # Configured" node fails closed if this is unset or unrecognized.
+      - UNTERNEHMEN_X_AI_EXECUTION_PROFILE=${UNTERNEHMEN_X_AI_EXECUTION_PROFILE:-}
       # Empty by default: the stack must start without AI credentials. Flow
       # 1b stays visible but inactive/unconfigured until you set these (see
       # .env.example) and select a real Google Gemini credential in the n8n
@@ -104,7 +133,7 @@ services:
       # here starts it.
       - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
-      - digitax_devstack_n8n_data:/home/node/.n8n
+      - unternehmen_x_devstack_n8n_data:/home/node/.n8n
     networks:
       - devstack
     depends_on:
@@ -121,8 +150,8 @@ services:
 
 networks:
   devstack:
-    name: digitax-phase1-devstack-net
+    name: unternehmen-x-phase1-devstack-net
 
 volumes:
-  digitax_devstack_n8n_data:
-    name: digitax_devstack_n8n_data
+  unternehmen_x_devstack_n8n_data:
+    name: unternehmen_x_devstack_n8n_data

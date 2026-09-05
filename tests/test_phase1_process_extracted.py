@@ -147,7 +147,7 @@ def test_buyer_master_data_evaluates_against_the_supplied_buyer_not_a_fixture(cl
     "Unternehmen X" / Leipzig (which would pass against the real fixture)."""
     body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
     body["buyerMasterData"] = {
-        "name": "VN-IMPEX GmbH",
+        "name": "Unternehmen X GmbH",
         "street": "Hafenstrasse 5",
         "postalCode": "20457",
         "city": "Hamburg",
@@ -164,7 +164,7 @@ def test_buyer_master_data_evaluates_against_the_supplied_buyer_not_a_fixture(cl
 def test_buyer_master_data_without_control_profile_id_is_rejected(client):
     body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
     body["buyerMasterData"] = {
-        "name": "VN-IMPEX GmbH", "street": "Hafenstrasse 5",
+        "name": "Unternehmen X GmbH", "street": "Hafenstrasse 5",
         "postalCode": "20457", "city": "Hamburg", "countryCode": "DE",
     }
     response = client.post("/v1/invoices/process-extracted", json=body)
@@ -174,7 +174,7 @@ def test_buyer_master_data_without_control_profile_id_is_rejected(client):
 
 def test_incomplete_buyer_master_data_is_422_not_500(client):
     body = _request_body(organization_id="a-real-organization-not-in-any-fixture")
-    body["buyerMasterData"] = {"name": "VN-IMPEX GmbH"}  # missing street/postalCode/city/countryCode
+    body["buyerMasterData"] = {"name": "Unternehmen X GmbH"}  # missing street/postalCode/city/countryCode
     body["controlProfileId"] = "inbound-starter-de-v1"
     response = client.post("/v1/invoices/process-extracted", json=body)
     assert response.status_code == 422
@@ -326,23 +326,42 @@ def test_caller_supplied_control_results_are_never_trusted():
     assert org001["outcome"] == "failed"
 
 
-def test_source_type_and_extraction_method_are_never_taken_from_caller(client):
+def test_source_type_is_never_taken_from_caller(client):
     """A caller cannot claim e.g. an embedded-XML/structured source to route
-    around STR-003/STR-004 -- sourceType/detectedFormat/extraction.method
-    are always hardcoded server-side for this endpoint, regardless of what
-    the request body contains (this endpoint accepts no such fields at all,
-    but a caller stuffing them into document/extraction must still be
-    ignored, not echoed back)."""
+    around STR-003/STR-004 -- sourceType/detectedFormat are always
+    hardcoded server-side for this endpoint, regardless of what the request
+    body contains (this endpoint accepts no such fields at all, but a
+    caller stuffing them into document must still be ignored, not echoed
+    back)."""
     body = _request_body()
     body["document"]["sourceType"] = "xml"
     body["document"]["detectedFormat"] = "factur-x"
-    body["extraction"]["method"] = "direct_xml"
     response = client.post("/v1/invoices/process-extracted", json=body)
     assert response.status_code == 200
     canonical_invoice = response.json()["canonicalInvoice"]
     assert canonical_invoice["document"]["sourceType"] == "plain_pdf"
     assert canonical_invoice["document"]["detectedFormat"] == "pdf"
-    assert canonical_invoice["extraction"]["method"] == "ocr_llm"
     control_ids = {c["controlId"]: c["outcome"] for c in response.json()["phase1ControlReport"]["controls"]}
     assert control_ids["STR-003"] == "not_applicable"
     assert control_ids["STR-004"] == "not_applicable"
+
+
+def test_extraction_method_accepts_only_plain_pdf_methods(client):
+    """extraction.method has two legitimate values for this endpoint since
+    2026-09-04's text-extraction-first architecture (a caller now genuinely
+    did either a vision/OCR read or a real-text-layer + text-only-LLM read
+    of the same plain PDF) -- both are accepted and echoed back verbatim.
+    A structured-document method (direct_xml/embedded_xml) is rejected
+    outright (422), never silently coerced: this endpoint only ever exists
+    for the plain-PDF case, so a caller cannot get it to process anything
+    under a structured-document method, not even by mistake."""
+    body = _request_body()
+    body["extraction"]["method"] = "text_llm"
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 200
+    assert response.json()["canonicalInvoice"]["extraction"]["method"] == "text_llm"
+
+    body = _request_body()
+    body["extraction"]["method"] = "direct_xml"
+    response = client.post("/v1/invoices/process-extracted", json=body)
+    assert response.status_code == 422

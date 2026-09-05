@@ -1,0 +1,228 @@
+{
+  "id": "digitax-invoice-phase1-flow2-teams-review-notify",
+  "name": "DigiTax | Invoice Phase 1 | Flow 2 | Teams Review Notify | v0.1.0",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "flow2-review-notify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f2-receive-notification",
+      "name": "01.1 Receive review case notification",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        0
+      ],
+      "webhookId": "digitax-flow2-review-notify"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TCMS's flow2Notify.ts posts one JSON object per genuinely-new\n// RISK_REVIEW_PROPOSED review case (never on an idempotent-replay attach).\n// Fail visibly rather than post a broken/blank Teams card on a malformed\n// or partial notification.\nconst body = $input.first().json.body || {};\nconst required = [\n  \"organizationId\",\n  \"reviewCaseId\",\n  \"processInstanceId\",\n  \"disposition\",\n  \"documentRef\",\n  \"deepLinkUrl\",\n];\nfor (const field of required) {\n  const value = body[field];\n  if (value === undefined || value === null || value === \"\") {\n    throw new Error(`FLOW2_NOTIFICATION_MISSING_FIELD: ${field}`);\n  }\n}\n\nconst evidenceBasisList = Array.isArray(body.evidenceBasisList)\n  ? body.evidenceBasisList\n  : [];\nconst evidenceBasisLine =\n  evidenceBasisList.length > 0 ? evidenceBasisList.join(\", \") : \"n/a\";\n\n// v.do (four-eyes FYI-only) and d.do (operational reviewer) both see this\n// same card in the same channel -- Flow 2 never DMs one without the other,\n// and never requires v.do to act (see HANDOVER_FLOW2.md's role assumption).\nconst messageHtml =\n  \"<p><strong>Rechnungspr\\u00fcfung: menschliche Pr\\u00fcfung angefordert</strong></p>\" +\n  `<p>Organisation: ${body.organizationId}<br/>` +\n  `Vorgang: ${body.processInstanceId}<br/>` +\n  `Dokument: ${body.documentRef}<br/>` +\n  `Status: ${body.disposition}<br/>` +\n  `Evidenzgrundlage: ${evidenceBasisLine}</p>` +\n  `<p><a href=\"${body.deepLinkUrl}\">In TCMS \\u00f6ffnen</a></p>`;\n\nreturn [\n  {\n    json: {\n      ...body,\n      evidenceBasisList,\n      evidenceBasisLine,\n      messageHtml,\n    },\n  },\n];\n"
+      },
+      "id": "f2-build-message",
+      "name": "01.2 Build Teams message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "channelMessage",
+        "teamId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "channelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "messageType": "html",
+        "message": "={{ $json.messageHtml }}",
+        "options": {}
+      },
+      "id": "f2-post-teams",
+      "name": "02.1 Post Teams review notification",
+      "type": "n8n-nodes-base.microsoftTeams",
+      "typeVersion": 2,
+      "onError": "continueErrorOutput",
+      "position": [
+        -420,
+        0
+      ],
+      "credentials": {
+        "microsoftTeamsOAuth2Api": {
+          "id": "",
+          "name": "REPLACE ME: pick the \"Tax CMS\" Teams credential live in the n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, reviewCaseId: $('01.2 Build Teams message').item.json.reviewCaseId } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "f2-respond-ok",
+      "name": "03.1 Respond to TCMS",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -180,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 502,
+        "responseBody": "={{ { ok: false, reviewCaseId: $('01.2 Build Teams message').item.json.reviewCaseId, error: $json.error?.message || \"Microsoft Teams post failed\" } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "f2-respond-error",
+      "name": "03.2 Respond with Teams failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -180,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 01 Receive + build card\nTCMS's flow2Notify.ts posts here after a\ngenuinely-new RISK_REVIEW_PROPOSED case\n(never on an idempotent-replay attach).",
+        "height": 120,
+        "width": 300,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -180
+      ],
+      "id": "note-f2-00",
+      "name": "Sticky Note 0"
+    },
+    {
+      "parameters": {
+        "content": "## 02 Post to Teams\nTeamId/channelId and the Teams OAuth2\ncredential are placeholders -- pick them\nlive in the n8n UI (same reset-on-restart\ngotcha as Flow 0's mail folder ID; see\nHANDOVER_FLOW2.md). Uses the same \"Tax CMS\"\nAzure AD app as Flow 0, with Teams Graph\npermissions added.",
+        "height": 160,
+        "width": 320,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -440,
+        -180
+      ],
+      "id": "note-f2-01",
+      "name": "Sticky Note 1"
+    },
+    {
+      "parameters": {
+        "content": "## 03 Respond to TCMS\nTCMS's notifyFlow2ReviewCase() already\ntreats a non-2xx/timeout as best-effort\n(logged, never fails the ingestion\nresponse) -- this branch exists so a Teams\noutage is still visible in n8n's own\nexecution log, not just swallowed twice.",
+        "height": 160,
+        "width": 320,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        -260
+      ],
+      "id": "note-f2-02",
+      "name": "Sticky Note 2"
+    },
+    {
+      "parameters": {
+        "content": "## VERSION INFO\nWorkflow: DigiTax | Invoice Phase 1 | Flow 2 | Teams Review Notify | v0.1.0\nStatus: draft, INACTIVE by default -- needs a live Teams credential +\nteamId/channelId picked in the n8n UI, and Teams Graph permissions\n(ChannelMessage.Send at minimum) added to whichever Azure AD app your\nOutlook/Flow 0 credential already uses (reuse it, do not register a new\none) before activating.\nTrigger: TCMS's flow2Notify.ts (server/utils/n8n/flow2Notify.ts), called\nfrom all three ingestion routes (n8n-inbound-runs, n8n-batch-item-runs,\nn8n-flow1b-runs) exactly once per genuinely-new RISK_REVIEW_PROPOSED\nReviewCase. Option A design (HANDOVER_FLOW2.md): notify + deep link only --\nthis workflow never calls TCMS's decision endpoint itself; the human\nclicks through and decides inside TCMS's own session-authenticated UI.\nSource: digitax_invoice_phase1_flow2_teams_review_notify_v0_1_0.json",
+        "height": 260,
+        "width": 520,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -460
+      ],
+      "id": "note-f2-version",
+      "name": "Version Info"
+    }
+  ],
+  "connections": {
+    "01.1 Receive review case notification": {
+      "main": [
+        [
+          {
+            "node": "01.2 Build Teams message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.2 Build Teams message": {
+      "main": [
+        [
+          {
+            "node": "02.1 Post Teams review notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02.1 Post Teams review notification": {
+      "main": [
+        [
+          {
+            "node": "03.1 Respond to TCMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "03.2 Respond with Teams failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
