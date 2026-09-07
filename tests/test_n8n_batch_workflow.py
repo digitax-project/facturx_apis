@@ -105,7 +105,7 @@ def test_both_controls_outputs_feed_call_assemble_via_build_control_report():
 # A6a synthetic TCMS demo extension (v1.1.0): gated DigiTax Risk Review call
 # and bounded result bundle. See examples/n8n/README.md's "A6a synthetic
 # TCMS demo extension" section and
-# coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md.
+# coordination/control-plane/runs/2026-08-25-unternehmen-x-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md.
 # ---------------------------------------------------------------------------
 
 RISK_REVIEW_GATE_NODE = "04.3 Evaluate risk review gate"

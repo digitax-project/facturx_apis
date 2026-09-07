@@ -646,7 +646,7 @@ this subworkflow's.
 
 ### A6a synthetic TCMS demo extension (v1.1.0, 2026-08-27; identity contract corrected 2026-08-28)
 
-Per `coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md`,
+Per `coordination/control-plane/runs/2026-08-25-unternehmen-x-pilot-integration/A6-n8n-integration/A6a-auth-boundary-amendment.md`,
 n8n never authenticates to TCMS directly. Instead, Batch Item v1.1.0 adds a
 gated advisory step and returns a **bounded result bundle** alongside its
 existing dashboard-facing fields, for an authenticated TCMS backend action

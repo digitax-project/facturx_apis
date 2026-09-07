@@ -1,5 +1,5 @@
 """Regression guard for A1 review round 2
-(coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A1/
+(coordination/control-plane/runs/2026-08-25-unternehmen-x-pilot-integration/A1/
 a3-invoice-review-round2.md): active documentation and workflow metadata
 must describe Flow 1b's current architecture (extraction in n8n, every
 control evaluated by the authoritative Phase-1 API), not the removed
@@ -81,7 +81,7 @@ def test_n8n_readme_verification_inventory_reports_five_workflows():
 
 def test_active_docs_and_manager_script_reject_stale_four_workflow_counts():
     """A1 review round 3
-    (coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/A1/
+    (coordination/control-plane/runs/2026-08-25-unternehmen-x-pilot-integration/A1/
     a3-invoice-review-round3.md): the active inventory is five workflows,
     including the shared Assemble ActivityExecution subworkflow. Numeric
     ("4 workflows") and spelled-out ("four workflows") stale counts must not
