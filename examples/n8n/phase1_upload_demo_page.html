@@ -22,7 +22,7 @@
   organization ID -- never a provider URL, model name, or credential. Which
   provider/model a profile ID resolves to is decided entirely server-side
   (n8n), per "01.9 Resolve AI execution profile" in
-  digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json.
+  digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json.
 
   Why a static page instead of n8n's own Form Trigger: see the notes on the
   "01.1 Receive invoice upload" node in digitax_invoice_phase1_flow1a_upload_v1_0_0.json.
@@ -106,6 +106,7 @@
     <input type="hidden" id="processingPath" name="processingPath" value="structured">
 
     <button type="submit" id="submitButton" disabled>Rechnung strukturiert prüfen</button>
+    <div id="submitWait" class="status-box hidden" style="margin-top: 0.75rem;"></div>
   </form>
 
   <div class="boundary">
@@ -151,6 +152,16 @@
   var aiExecutionProfileField = document.getElementById("aiExecutionProfile");
   var processingPathField = document.getElementById("processingPath");
   var submitButton = document.getElementById("submitButton");
+  var submitWait = document.getElementById("submitWait");
+  // Purely local UX text, based on real measured runs during development --
+  // not a guarantee, and not sent anywhere. Local AI genuinely takes
+  // 1-2+ minutes on a 27B-class vision model; without this, a viewer just
+  // sees a frozen tab with no explanation, which reads as broken.
+  var WAIT_TEXT = {
+    structured: "Wird verarbeitet ...",
+    "local-default": "Wird lokal verarbeitet -- bei einem 27B-Modell dauert das typischerweise 1-2 Minuten. Bitte warten, die Seite laedt danach automatisch das Ergebnis.",
+    "cloud-gemini": "Wird von der Cloud-KI verarbeitet ..."
+  };
 
   var webhookUrlManuallyEdited = false;
   webhookUrlInput.addEventListener("input", function () {
@@ -214,6 +225,19 @@
   for (var j = 0; j < aiRadios.length; j++) {
     aiRadios[j].addEventListener("change", render);
   }
+
+  // Does not intercept or delay the actual submission -- the form still
+  // navigates natively to the webhook URL exactly as before (same
+  // mechanism the earlier curl-based verification used). This only shows
+  // feedback in the instant before that navigation starts, so a long local
+  // AI run doesn't look like a frozen/broken page.
+  form.addEventListener("submit", function () {
+    var path = currentPath();
+    var key = path === "pdf_ocr" ? (currentAiChoice() || "local-default") : "structured";
+    submitWait.textContent = WAIT_TEXT[key];
+    submitWait.classList.remove("hidden");
+    submitButton.disabled = true;
+  });
 
   render();
 })();

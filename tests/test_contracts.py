@@ -3,6 +3,7 @@
 (docs/invoice_phase1/contracts/), and exercises contracts.py's loader
 directly (independent of any pipeline behavior)."""
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,24 @@ def test_packaged_schema_matches_docs_copy(filename):
     assert json.loads(docs_copy) == json.loads(packaged_copy), (
         f"{filename} in facturx/phase1/schemas/ has drifted from "
         f"docs/invoice_phase1/contracts/ -- keep both in sync"
+    )
+
+
+@pytest.mark.parametrize("filename", SCHEMA_FILENAMES)
+def test_schema_id_version_matches_schema_version_const(filename):
+    """A stale $id (e.g. still ...-1.0.0.json while schemaVersion.const is
+    "1.1.0") lets a consumer that registers/caches schemas by canonical URI
+    misidentify the new contract as the old one. $id's trailing version
+    segment must always match schemaVersion's own const value."""
+    schema = json.loads((DOCS_CONTRACTS_DIR / filename).read_text(encoding="utf-8"))
+    schema_id = schema["$id"]
+    schema_version_const = schema["properties"]["schemaVersion"]["const"]
+
+    match = re.search(r"-(\d+\.\d+\.\d+)\.json$", schema_id)
+    assert match, f"{filename}: $id {schema_id!r} does not end in -<version>.json"
+    assert match.group(1) == schema_version_const, (
+        f"{filename}: $id declares version {match.group(1)!r} but "
+        f"schemaVersion.const is {schema_version_const!r} -- keep them aligned"
     )
 
 

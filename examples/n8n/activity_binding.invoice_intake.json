@@ -1,0 +1,45 @@
+{
+  "bindingSchemaVersion": "1.0.0",
+  "status": "PUBLISHED",
+  "generatedBy": "examples/n8n/scripts/Sync-ActivityBinding.ps1 -- do not hand-edit",
+  "provenance": {
+    "sourceRef": "verfahren-builder@10849bdfaf985d27c751006089b87da8508196b4:bindings/invoice-intake/1.1.1-draft/digitax.invoice-intake.phase1.structured-control.binding.json",
+    "sourceSha256": "0fb5ba349a739e0d43cab8ef8b00541ecd6728a8a8e1806c4c662eb104256844",
+    "generatorVersion": "1.0.0"
+  },
+  "processDefinition": {
+    "processId": "digitax.invoice-intake",
+    "processVersion": "1.1.1-draft"
+  },
+  "activityDefinition": {
+    "activityId": "digitax.invoice-intake.phase1.structured-control",
+    "activityVersion": "1.0.0"
+  },
+  "executor": {
+    "type": "DETERMINISTIC_SERVICE",
+    "logicalId": "digitax.invoice.phase1-controls",
+    "version": "1.1.0"
+  },
+  "workflowBindings": [
+    {
+      "workflowId": "digitax-invoice-phase1-upload-demo",
+      "workflowVersion": "1.0.0",
+      "nodeId": "03.1 Run DigiTax controls"
+    },
+    {
+      "workflowId": "digitax-invoice-phase1-batch-item",
+      "workflowVersion": "1.1.0",
+      "nodeId": "03.1 Run DigiTax controls"
+    },
+    {
+      "workflowId": "digitax-invoice-phase1-structured-demo",
+      "workflowVersion": "1.0.0",
+      "nodeId": "03.1 Run DigiTax controls"
+    },
+    {
+      "workflowId": "digitax-invoice-phase1-flow1b-pdf-ocr",
+      "workflowVersion": "0.3.0",
+      "nodeId": "03.1 Run DigiTax controls"
+    }
+  ]
+}

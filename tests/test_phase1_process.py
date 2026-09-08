@@ -5,21 +5,27 @@ schema-valid, catalog/profile identified, source hash matches, and no
 booking/approval/payment action anywhere in the response.
 """
 import hashlib
+import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from facturx.api import app
+from facturx.phase1 import api as api_module
 from facturx.phase1 import pipeline as pipeline_module
 from facturx.phase1.api import get_pdf_extraction_adapter
 from facturx.phase1.contracts import validate_canonical_invoice, validate_phase1_control_report
+from facturx.phase1.controls.executor import not_run_result
+from facturx.phase1.controls.profiles import get_control_profile
 from facturx.phase1.normalize.pdf_adapter import (
     FieldState,
     MockPdfExtractionAdapter,
     PdfExtractionResult,
     PdfFieldValue,
 )
+from facturx.phase1.report import build_report
 
 DISALLOWED_ACTION_KEYWORDS = ("approve", "book", "pay", "reject", "contact_supplier")
 
@@ -36,6 +42,11 @@ def _assert_contract(body: dict, source_bytes: bytes):
     assert report["catalogVersion"]
     assert report["controlProfileId"] == "inbound-starter-de-v1"
     assert report["controlProfileVersion"] == "0.2.0"
+
+    assert report["startedAt"]
+    started_at = datetime.fromisoformat(report["startedAt"])
+    created_at = datetime.fromisoformat(report["createdAt"])
+    assert started_at <= created_at
 
     dumped = str(body).lower()
     for keyword in DISALLOWED_ACTION_KEYWORDS:
@@ -110,6 +121,221 @@ def test_fx01_valid_zugferd_hybrid_pdf_is_unauffaellig(client, valid_hybrid_pdf_
     assert str_004["outcome"] == "passed"
 
 
+def test_buyer_master_data_works_for_an_organization_with_no_demo_fixture(
+    client, valid_hybrid_pdf_bytes
+):
+    """Same proof as the process-extracted endpoint's equivalent test, for
+    the multipart /v1/invoices/process endpoint: a real organization not in
+    the hardcoded ORGANIZATION_CONTEXTS dict still gets a meaningful ORG-001
+    result by sending its own identity directly, as a JSON-encoded form
+    field (multipart has no native nested-object type)."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Musterweg 10",
+                    "postalCode": "04109",
+                    "city": "Leipzig",
+                    "countryCode": "DE",
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    control_ids = {c["controlId"]: c["outcome"] for c in report["controls"]}
+    assert control_ids["ORG-001"] == "passed"
+
+
+def test_org001_passes_on_alternate_delivery_address_despite_name_mismatch(
+    client, valid_hybrid_pdf_bytes
+):
+    """A legitimate secondary delivery/forwarding address is expected to
+    carry a DIFFERENT name on the invoice than the buyer's own legal name
+    (e.g. a logistics partner plus a goods-identification marking) --
+    confirmed live for a real pilot organization's own real delivery
+    arrangement with a logistics partner, 2026-09-05. ORG-001 must accept
+    a match on address alone against any approved alternate, without also
+    requiring the name to match."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Registered Office Str. 1",
+                    "postalCode": "99999",
+                    "city": "Registeredcity",
+                    "countryCode": "DE",
+                    "alternateAddresses": [
+                        {
+                            "label": "Delivery via a logistics partner, goods-identification marking on the name line",
+                            "street": "Musterweg 10",
+                            "postalCode": "04109",
+                            "city": "Leipzig",
+                            "countryCode": "DE",
+                        }
+                    ],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    control_ids = {c["controlId"]: c["outcome"] for c in report["controls"]}
+    assert control_ids["ORG-001"] == "passed"
+
+
+def test_org001_treats_strasse_and_str_abbreviation_as_equivalent(
+    client, blank_pdf_bytes
+):
+    """Real gap caught live 2026-09-05 by a genuine-random-sample stress
+    test against a real pilot organization's invoices: a real invoice's
+    extracted street spelled the suffix out in full ("...-Straße") while
+    the matching master-data record on file used the abbreviation
+    ("...-Str."), an identical address that still produced a false
+    ORG-001 mismatch. Reproduced here with a synthetic address (not the
+    real one) -- the extracted street spells the suffix out in full while
+    the recorded alternate uses the abbreviation, so this only passes if
+    the normalization actually folds them together (not just a
+    coincidentally-matching fixture string)."""
+    fields = _happy_path_fields()
+    fields["invoice.buyer.address.street"] = _f("Musterhahn-Straße 5", confidence=0.95)
+    fields["invoice.buyer.address.postalCode"] = _f("54321", confidence=0.95)
+    fields["invoice.buyer.address.city"] = _f("Musterstadt (Beispielland)", confidence=0.95)
+    result = PdfExtractionResult(
+        status="completed", overall_confidence=0.9, fields=fields, line_item_count=1
+    )
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Registered Office Str. 1",
+                    "postalCode": "99999",
+                    "city": "Registeredcity",
+                    "countryCode": "DE",
+                    "alternateAddresses": [
+                        {
+                            "label": "Recorded with the abbreviation",
+                            "street": "Musterhahn-Str. 5",
+                            "postalCode": "54321",
+                            "city": "Musterstadt (Beispielland)",
+                            "countryCode": "DE",
+                        }
+                    ],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    org_001 = next(c for c in report["controls"] if c["controlId"] == "ORG-001")
+    assert org_001["outcome"] == "passed"
+
+
+def test_org001_fails_when_address_matches_neither_primary_nor_any_alternate(
+    client, valid_hybrid_pdf_bytes
+):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X",
+                    "street": "Registered Office Str. 1",
+                    "postalCode": "99999",
+                    "city": "Registeredcity",
+                    "countryCode": "DE",
+                    "alternateAddresses": [
+                        {
+                            "label": "A real but unrelated alternate address",
+                            "street": "Some Other Str. 5",
+                            "postalCode": "12345",
+                            "city": "Elsewhere",
+                            "countryCode": "DE",
+                        }
+                    ],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    org_001 = next(c for c in report["controls"] if c["controlId"] == "ORG-001")
+    assert org_001["outcome"] == "failed"
+    assert "MASTER_DATA_MISMATCH" in org_001["reasonCodes"]
+
+
+def test_malformed_alternate_address_entry_is_422_not_500(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X", "street": "Musterweg 10",
+                    "postalCode": "04109", "city": "Leipzig", "countryCode": "DE",
+                    "alternateAddresses": [{"label": "missing every other field"}],
+                }
+            ),
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_buyer_master_data_without_control_profile_id_is_rejected(
+    client, valid_hybrid_pdf_bytes
+):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": json.dumps(
+                {
+                    "name": "Unternehmen X", "street": "Musterweg 10",
+                    "postalCode": "04109", "city": "Leipzig", "countryCode": "DE",
+                }
+            ),
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "CONTROL_PROFILE_ID_REQUIRED"
+
+
+def test_malformed_buyer_master_data_json_is_422_not_500(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={
+            "organizationId": "a-real-organization-not-in-any-fixture",
+            "buyerMasterData": "{not valid json",
+            "controlProfileId": "inbound-starter-de-v1",
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_fx04_xsd_invalid_xml_is_klaerung_erforderlich(client, invalid_xsd_xml_bytes):
     response = client.post(
         "/v1/invoices/process",
@@ -130,6 +356,43 @@ def test_fx04_xsd_invalid_xml_is_klaerung_erforderlich(client, invalid_xsd_xml_b
     str_004 = next(c for c in report["controls"] if c["controlId"] == "STR-004")
     assert str_004["outcome"] == "not_applicable"
     assert "BLOCKED_BY_XSD_INVALID" in str_004["reasonCodes"]
+
+
+def test_damaged_xml_is_never_turned_green_by_secondary_pdf_evidence(
+    client, invalid_xsd_hybrid_pdf_bytes
+):
+    """Pilot routing rule 3 (contracts/README.md): invalid existing XML is
+    never replaced by OCR, and an optional PDF extraction may only ever be
+    secondary evidence -- it must never turn the result green. Seeds the PDF
+    extraction adapter with a flawless, would-be-unauffaellig OCR result for
+    this exact PDF's bytes; if the pipeline ever consulted it for a
+    hybrid_pdf document, the report would come back unauffaellig. It must
+    stay klaerung_erforderlich instead, proving the seeded PDF result was
+    never consulted at all -- the embedded (invalid) XML is the only
+    evidence source for a hybrid_pdf document, matching STR-003/004's own
+    non-mixing design."""
+    _seed_pdf_adapter(
+        invalid_xsd_hybrid_pdf_bytes,
+        PdfExtractionResult(
+            status="completed", overall_confidence=0.99, fields=_happy_path_fields(), line_item_count=1
+        ),
+    )
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", invalid_xsd_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, invalid_xsd_hybrid_pdf_bytes)
+
+    report = body["phase1ControlReport"]
+    assert report["status"] == "klaerung_erforderlich"
+    assert report["routing"] == "prioritized_review"
+    assert body["canonicalInvoice"]["extraction"]["method"] == "embedded_xml"
+    str_003 = next(c for c in report["controls"] if c["controlId"] == "STR-003")
+    assert str_003["outcome"] == "failed"
+    assert "XSD_INVALID" in str_003["reasonCodes"]
 
 
 def test_pdf01_readable_pdf_all_fields_is_unauffaellig(client, blank_pdf_bytes):
@@ -740,3 +1003,157 @@ def test_capabilities_distinguishes_recognized_from_processable_profiles(client)
         "minimum", "basicwl", "basic", "en16931", "extended",
     }
     assert set(factur_x["processableLevels"]).issubset(set(factur_x["recognizedLevels"]))
+
+
+# ---------------------------------------------------------------------------
+# X-Correlation-ID / startedAt (P2.1 A4 contract, schemaVersion 1.1.0).
+# ---------------------------------------------------------------------------
+
+def test_correlation_id_header_echoed_verbatim_on_happy_path(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "CORR-Test-001"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_contract(body, valid_hybrid_pdf_bytes)
+    assert body["phase1ControlReport"]["correlationId"] == "CORR-Test-001"
+
+
+def test_correlation_id_header_echoed_on_doc001_blocked_path(client):
+    """DOC-001-blocked (nicht_pruefbar) path -- correlationId must still be
+    present and correct, not only on the happy path."""
+    xml_bytes = (Path(__file__).parent / "fixtures" / "facturx_minimum_profile.xml").read_bytes()
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.xml", xml_bytes, "application/xml")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "CORR-Test-002"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    assert report["correlationId"] == "CORR-Test-002"
+
+
+def test_correlation_id_header_echoed_on_extraction_failed_path(client, blank_pdf_bytes):
+    """Extraction-failed path (PDF adapter itself reports status="failed")
+    -- correlationId must still be present and correct."""
+    result = PdfExtractionResult(status="failed", overall_confidence=0.0, fields={}, line_item_count=0)
+    _seed_pdf_adapter(blank_pdf_bytes, result)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", blank_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "CORR-Test-003"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert report["status"] == "nicht_pruefbar"
+    assert report["correlationId"] == "CORR-Test-003"
+
+
+def test_correlation_id_omitted_is_key_absent_not_null(client, valid_hybrid_pdf_bytes):
+    """Byte-identical-for-existing-callers per field: correlationId itself
+    is absent from the report, not present-and-null, when the caller never
+    sends X-Correlation-ID."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+    )
+    assert response.status_code == 200
+    report = response.json()["phase1ControlReport"]
+    assert "correlationId" not in report
+
+
+def test_invalid_correlation_id_is_rejected_before_any_processing(client, valid_hybrid_pdf_bytes):
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "has a space"},
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error_code"] == "INVALID_CORRELATION_ID"
+    assert "canonicalInvoice" not in body
+    assert "phase1ControlReport" not in body
+
+
+def test_invalid_correlation_id_never_reads_the_upload(client, valid_hybrid_pdf_bytes, monkeypatch):
+    """The spy: an invalid X-Correlation-ID header must be rejected inside
+    the route's try block before _read_upload_bounded() ever runs, since
+    that call now happens after header validation, not before it."""
+    async def _fail_if_called(*args, **kwargs):
+        raise AssertionError("_read_upload_bounded must not be called for an invalid header")
+
+    monkeypatch.setattr(api_module, "_read_upload_bounded", _fail_if_called)
+
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        data={"organizationId": "unternehmen-x-demo"},
+        headers={"X-Correlation-ID": "has a space"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "INVALID_CORRELATION_ID"
+
+
+def test_valid_correlation_id_echoed_in_pre_report_error_body(client, valid_hybrid_pdf_bytes):
+    """A valid correlationId survives a later, pre-report rejection
+    (ORGANIZATION_CONTEXT_REQUIRED) and is echoed in the error body --
+    exactly the failure case where a caller most needs to correlate."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        headers={"X-Correlation-ID": "CORR-Test-004"},
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error_code"] == "ORGANIZATION_CONTEXT_REQUIRED"
+    assert body["detail"]["correlationId"] == "CORR-Test-004"
+
+
+def test_invalid_correlation_id_takes_precedence_over_invalid_organization_id(
+    client, valid_hybrid_pdf_bytes
+):
+    """Correlation-id validation happens first, before organization-context
+    resolution; an invalid value is never echoed back as if trustworthy."""
+    response = client.post(
+        "/v1/invoices/process",
+        files={"file": ("invoice.pdf", valid_hybrid_pdf_bytes, "application/pdf")},
+        headers={"X-Correlation-ID": "has a space"},
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error_code"] == "INVALID_CORRELATION_ID"
+    assert "correlationId" not in body["detail"]
+
+
+def test_build_report_started_at_and_created_at_are_independently_threaded():
+    """Deterministic, non-timing-dependent proof that startedAt and
+    createdAt are separately threaded parameters, not aliases of a single
+    call: an explicit, clearly-in-the-past started_at value is threaded
+    through unchanged while createdAt is computed independently inside
+    build_report() itself."""
+    control_profile = get_control_profile("inbound-starter-de-v1")
+    controls = [not_run_result("DOC-001", "deterministic unit test")]
+    fixed_started_at = "2020-01-01T00:00:00+00:00"
+
+    report = build_report(
+        "a" * 64,
+        control_profile,
+        controls,
+        "nicht_pruefbar",
+        "prioritized_review",
+        started_at=fixed_started_at,
+    )
+
+    assert report["startedAt"] == fixed_started_at
+    assert report["createdAt"] != fixed_started_at
+    created_at = datetime.fromisoformat(report["createdAt"])
+    assert created_at.year >= 2026

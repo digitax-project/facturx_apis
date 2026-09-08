@@ -2,14 +2,18 @@
 
 API for Factur-X PDF generation, XML extraction and validation.
 
-## DigiTax Phase 1 API v1.0.1
+## DigiTax Phase 1 API v1.1.0
 
 `v1.0.0` introduced the first stable DigiTax Phase 1 invoice-preprocessing API
 and its n8n demonstration. `v1.0.1` corrects the dated official-standard
-baseline and adds the complete generated Schematron assertion inventory. The
-service release is independent of the embedded upstream `factur-x` Python
-library version `3.6` and the invoice validation baseline
-`Factur-X 1.09 EN16931`.
+baseline and adds the complete generated Schematron assertion inventory.
+`v1.1.0` adds an optional, caller-supplied `X-Correlation-ID` request header
+on `POST /v1/invoices/process` (echoed verbatim into the report's
+`correlationId` when supplied) and a new required, server-generated
+`startedAt` timestamp on every report, bumping `phase1_control_report`'s
+`schemaVersion` to `1.1.0`. The service release is independent of the
+embedded upstream `factur-x` Python library version `3.6` and the invoice
+validation baseline `Factur-X 1.09 EN16931`.
 
 ### What is new
 
@@ -108,6 +112,17 @@ curl -X POST "http://localhost:6969/v1/invoices/process" \
   -F "organizationId=unternehmen-x-demo"
 ```
 
+- `POST /v1/invoices/process-extracted` - runs the same control catalog/
+  executor as `/v1/invoices/process`, but for canonical invoice fields plus
+  field evidence an external caller already extracted (e.g. `examples/n8n`'s
+  Flow 1b OCR/LLM extraction), instead of a file upload. `document.mimeType`
+  must be exactly `application/pdf`; any other or missing value is rejected
+  with 422 `INVALID_REQUEST_BODY` before a canonical document is
+  constructed. The caller supplies extraction primitives only (document
+  identity/hash, extraction status/confidence, invoice fields, field
+  evidence) -- a status, routing, or controls list in the request body is
+  never trusted; those are always computed here.
+
 ### Embedded starter controls
 
 The API currently selects either `inbound-starter-de-v1` version `0.2.0` or
@@ -147,13 +162,16 @@ docker compose -f compose.dev.yml up --build
 - Batch UI: http://localhost:6970/demo/batch
 - n8n UI: http://localhost:5679 (no login by default)
 
-On first start, a one-shot `n8n-init` container imports all four versioned
+On first start, a one-shot `n8n-init` container imports all five versioned
 DigiTax workflows into the shared `digitax_devstack_n8n_data` volume and
-publishes only `Flow 1a | Upload Demo` and `Flow 1a | Batch Item`;
-`Flow 1a | Structured Regression` and `Flow 1b | PDF OCR/LLM Concept` stay
-inactive. `n8n-init` runs to completion, successfully, before the `n8n`
-service starts -- there is no `docker exec`-then-restart step, and the whole
-`up` fails if import or publication fails.
+publishes `Flow 1a | Upload Demo`, `Flow 1a | Batch Item`, and the shared
+`Flow 1a | Shared | Assemble ActivityExecution` subworkflow (published
+because n8n requires it to be, not because it has a webhook -- it has none
+and is never externally reachable); `Flow 1a | Structured Regression` and
+`Flow 1b | PDF OCR/LLM Concept` stay inactive. `n8n-init` runs to
+completion, successfully, before the `n8n` service starts -- there is no
+`docker exec`-then-restart step, and the whole `up` fails if import or
+publication fails.
 
 Flow 1a works with zero external credentials: generate a synthetic invoice
 (`python examples/demo/generate_demo_invoices.py --output-dir .demo-output`,
@@ -174,8 +192,9 @@ workflows, any credentials you add) lives in the named Docker volume
 plain `down` never touches it.
 
 > **Warning:** this permanently deletes every workflow edit and credential
-> in the dev n8n instance. The next `up` re-imports the four versioned
-> workflows from a clean state.
+> in the dev n8n instance. The next `up` re-imports the five versioned
+> workflows (including the shared `Assemble ActivityExecution` subworkflow)
+> from a clean state.
 
 ```bash
 docker compose -f compose.dev.yml down -v   # removes the shared dev volume
@@ -210,8 +229,9 @@ credential inside the n8n UI (the "02.3 Run OCR/LLM extraction (Gemini)"
 node) and activate the workflow. This is never configured via an
 environment variable or the browser -- the credential lives only in n8n's
 own credential store. See [`examples/n8n/README.md`](examples/n8n/README.md)
-for the exact steps, and for why Flow 1b's ORG-001 evaluation is a
-temporary, n8n-side-only mirror rather than the real API.
+for the exact steps. n8n performs only OCR/LLM extraction; the
+authoritative Phase-1 API evaluates every control (ORG-001 included) via
+`POST /v1/invoices/process-extracted`.
 
 ### Run the batch and profile-comparison demo (presentation stack)
 
@@ -315,16 +335,18 @@ German documentation is available in
   it reports `not_applicable`/`UNSUPPORTED_PROFILE` rather than running
   unreviewed. A Saxon/resource failure, timeout, or unparseable output
   reports `not_reliable` (forcing `nicht_pruefbar`), never `passed`.
-- **Plain-PDF extraction uses a mock adapter**, not real OCR/LLM. It exists
-  to prove the field-evidence/confidence contract a real adapter must
-  satisfy (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via
-  FastAPI dependency injection. There is still no endpoint that accepts
-  externally-extracted canonical OCR fields (`POST /v1/invoices/process`
-  only accepts a file upload), so Flow 1b's local/cloud AI extraction
-  (`examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_2_0.json`)
-  remains a temporary, n8n-side-only mirror of `ORG-001`, not a real API
-  integration -- see `examples/n8n/README.md`'s "Missing API contract"
-  section for the smallest endpoint that would close this gap.
+- **Plain-PDF extraction via `POST /v1/invoices/process` uses a mock
+  adapter**, not real OCR/LLM. It exists to prove the field-evidence/
+  confidence contract a real adapter must satisfy
+  (`facturx/phase1/normalize/pdf_adapter.py`), and is swappable via FastAPI
+  dependency injection. A real, external OCR/LLM extraction is instead
+  submitted via `POST /v1/invoices/process-extracted` (see above), which
+  Flow 1b's local/cloud AI extraction
+  (`examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json`)
+  calls -- the authoritative Phase 1 API evaluates all controls there, not
+  an n8n-side mirror. Only the OCR/LLM extraction step itself (not control
+  evaluation) remains n8n-side and, for the local lane, a concept -- see
+  `examples/n8n/README.md`.
 - **CAL-002/CAL-003 (arithmetic controls) assume a simple invoice.**
   `CAL-002`'s tax-consistency formula does not account for document-level
   charges/allowances. When a reliable non-zero charge or allowance is

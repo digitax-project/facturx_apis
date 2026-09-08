@@ -1,14 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://digitax.example/schemas/phase1-control-report-1.0.0.json",
+  "$id": "https://digitax.example/schemas/phase1-control-report-1.1.0.json",
   "title": "DigiTax Phase 1 control report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "reportId", "runId", "sourceSha256", "catalogVersion", "controlProfileId", "controlProfileVersion", "status", "routing", "controls", "createdAt"],
+  "required": ["schemaVersion", "reportId", "runId", "sourceSha256", "catalogVersion", "controlProfileId", "controlProfileVersion", "status", "routing", "controls", "startedAt", "createdAt"],
   "properties": {
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "1.1.0" },
     "reportId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
+    "correlationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9._:-]{1,200}$"
+    },
     "sourceSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
     "catalogVersion": { "type": "string", "minLength": 1 },
     "controlProfileId": { "type": "string", "minLength": 1 },
@@ -75,6 +81,8 @@
     "suggestions": { "type": "array", "items": { "type": "string" }, "default": [] },
     "reqeli": {
       "type": "object",
+      "deprecated": true,
+      "$comment": "DEPRECATED as of schema 1.1.0 (recorded, not removed/renamed, per the A1 P2.1 review: a versioned schema must not silently change shape). The canonical service is DigiTax Risk Review, a separate advisory output produced after this deterministic report (see docs/invoice_phase1/README.md and coordination/control-plane/runs/2026-08-25-vnimpex-pilot-integration/data-model.md's RiskReviewReport), not part of this report. This field is kept only for backward compatibility with existing consumers and always carries {invoked: false, status: 'disabled', analysisRef: null} -- no reqeli/legacy analysis is invoked by this codebase. It will be removed or migrated in the next explicitly versioned (2.x) contract change, not silently in a 1.x patch.",
       "additionalProperties": false,
       "required": ["invoked", "status"],
       "properties": {
@@ -83,6 +91,7 @@
         "analysisRef": { "type": ["string", "null"] }
       }
     },
+    "startedAt": { "type": "string", "format": "date-time" },
     "createdAt": { "type": "string", "format": "date-time" }
   }
 }

@@ -4,10 +4,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
 from facturx.api import app
 from facturx.facturx import generate_from_binary
-from facturx.phase1.api import get_pdf_extraction_adapter
+from facturx.phase1.api import get_pdf_extraction_adapter, get_text_extraction_adapter
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -26,12 +29,82 @@ def make_blank_pdf_bytes(encrypted: bool = False) -> bytes:
     return buf.getvalue()
 
 
+# A real, meaningful invoice-shaped text layer -- real drawString text
+# objects, not an image -- for the "digitally-born plain PDF" test case
+# (facturx/phase1/document_intake.py's inspect_text_layer() must find a
+# usable text layer here, routing pipeline.py to the `text_llm` path).
+# "Unternehmen X" is this project's standard non-real placeholder buyer
+# name, matching every other test fixture in this suite -- never a real
+# pilot customer name.
+DIGITALLY_BORN_PDF_TEXT_LINES = (
+    "RECHNUNG / INVOICE",
+    "Invoice No.: DIGITAL-PDF-001",
+    "Issue date: 2026-08-20",
+    "Currency: EUR",
+    "Seller: Beispiel Lieferant GmbH",
+    "Lieferweg 1, 10115 Berlin, DE",
+    "Buyer: Unternehmen X",
+    "Musterweg 10, 04109 Leipzig, DE",
+    "Supply: Synthetic consulting service",
+    "Net Total: 100.00 EUR",
+    "Tax Amount: 19.00 EUR",
+    "Gross Total: 119.00 EUR",
+)
+
+
+def make_digitally_born_pdf_bytes() -> bytes:
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    y = 800
+    for text_line in DIGITALLY_BORN_PDF_TEXT_LINES:
+        c.drawString(72, y, text_line)
+        y -= 18
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def make_scanned_pdf_bytes() -> bytes:
+    """A plain PDF whose only page content is a rasterized image -- no text
+    objects at all -- for the "genuinely scanned / no usable text layer"
+    test case. pypdf's extract_text() only reads real text-showing content-
+    stream operators, so this always extracts to "", exactly like a real
+    scanned invoice with no embedded OCR text layer."""
+    # A small solid-color bitmap built directly with Pillow (a transitive
+    # dependency of reportlab>=4.0.0, already required by this project --
+    # see requirements.txt) rather than a hand-rolled PNG byte literal.
+    from PIL import Image
+
+    image = Image.new("RGB", (50, 50), color=(120, 120, 120))
+    png_buf = BytesIO()
+    image.save(png_buf, format="PNG")
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.drawImage(ImageReader(BytesIO(png_buf.getvalue())), 100, 100, width=200, height=200)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@pytest.fixture
+def digitally_born_pdf_bytes() -> bytes:
+    return make_digitally_born_pdf_bytes()
+
+
+@pytest.fixture
+def scanned_pdf_bytes() -> bytes:
+    return make_scanned_pdf_bytes()
+
+
 @pytest.fixture
 def client():
     app.dependency_overrides.pop(get_pdf_extraction_adapter, None)
+    app.dependency_overrides.pop(get_text_extraction_adapter, None)
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.pop(get_pdf_extraction_adapter, None)
+    app.dependency_overrides.pop(get_text_extraction_adapter, None)
 
 
 @pytest.fixture
@@ -70,6 +143,18 @@ def incorrect_payable_xml_bytes() -> bytes:
 @pytest.fixture
 def minimum_profile_xml_bytes() -> bytes:
     return load_fixture_bytes("facturx_minimum_profile.xml")
+
+
+@pytest.fixture
+def invalid_xsd_hybrid_pdf_bytes(invalid_xsd_xml_bytes) -> bytes:
+    """A hybrid PDF whose embedded XML is the same XSD-invalid fixture as
+    invalid_xsd_xml_bytes -- used to prove that invalid *structured* XML is
+    never silently replaced or supplemented by OCR/PDF extraction (pilot
+    routing rule 3: "Invalid existing XML is never replaced by OCR")."""
+    blank_pdf = make_blank_pdf_bytes()
+    return generate_from_binary(
+        blank_pdf, invalid_xsd_xml_bytes, flavor="factur-x", level="en16931", check_xsd=False
+    )
 
 
 @pytest.fixture

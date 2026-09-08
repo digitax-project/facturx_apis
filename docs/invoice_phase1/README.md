@@ -17,6 +17,38 @@ Both paths then run the same selected deterministic control profile. The
 candidate catalog is intentionally broader than the first implementation and
 can be expanded control by control. Human oversight starts after Phase 1.
 
+## Execution traceability (`phase1_control_report` schema `1.1.0`)
+
+`POST /v1/invoices/process` accepts an optional `X-Correlation-ID` request
+header (1-200 characters, `[A-Za-z0-9._:-]`), validated before the
+application-level bounded upload read (`_read_upload_bounded()`) and
+before any Phase-1 pipeline processing. This is an application-level
+ordering guarantee, not a transport-level one: FastAPI/Starlette has
+already received and parsed the incoming multipart request before the
+route handler runs, as it must for any endpoint; the header is validated
+at the first opportunity the application code has, ahead of the
+application's own upload-reading and processing steps. When supplied and
+valid, it is echoed verbatim into the report's `correlationId` field, and
+into the JSON error body of any later, pre-report rejection (e.g.
+`ORGANIZATION_CONTEXT_REQUIRED`); when omitted, `correlationId` is
+entirely absent from the report (never `null`). An invalid value is
+rejected with `400 INVALID_CORRELATION_ID` before the bounded upload read
+or any pipeline processing runs, and is never echoed back.
+
+Every report also carries a required, server-generated `startedAt`
+timestamp (the moment pipeline execution began), alongside the existing
+`createdAt` (report construction time).
+
+Process, activity, workflow, and orchestration identifiers
+(`processId`/`processVersion`/`activityId`/`activityVersion`,
+`workflowId`/`workflowVersion`/`nodeId`) are **deliberately not part of
+this contract**. They are owned by the orchestration layer (n8n) and the
+Process Generator that defines them, not by this deterministic control
+API — adding them here would collapse the separation between "what was
+defined," "what a deterministic service executed," and "what an
+orchestrator's workflow instance did," which this API's contract is
+designed to keep distinct.
+
 ## Files
 
 - `automation_boundary.md`: what n8n automates and what remains human.
