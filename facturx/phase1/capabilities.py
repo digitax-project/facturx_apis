@@ -94,10 +94,20 @@ CAPABILITIES = {
     "pdfExtraction": {
         "status": "mock_adapter",
         "note": (
-            "Plain-PDF field extraction uses a pluggable, dependency-injected "
-            "adapter. The shipped default is a deterministic mock, not a real "
-            "OCR/LLM service. It exists to prove the field-evidence/confidence "
-            "contract a real adapter must satisfy."
+            "A plain PDF is routed to one of two extraction methods based on "
+            "whether it has a usable embedded text layer (see "
+            "document_intake.inspect_text_layer): a digitally-born PDF "
+            "(real, meaningful text) uses `text_llm` -- the real text is "
+            "structured by a text-only LLM call, never a vision/OCR model; "
+            "a genuine scan with no usable text layer uses `ocr_llm` -- a "
+            "vision/OCR model call. Both are pluggable, dependency-injected "
+            "adapters (see normalize/pdf_adapter.py and "
+            "normalize/text_llm_adapter.py). The shipped defaults for BOTH "
+            "are deterministic mocks, not real model calls -- they exist to "
+            "prove the field-evidence/confidence contract a real adapter "
+            "must satisfy. The one real, working implementation of either "
+            "call in this project today lives in the external n8n Flow 1b "
+            "workflow (examples/n8n/), not in this Python service."
         ),
     },
     "externalExtraction": {

@@ -122,12 +122,20 @@ def _get(result: PdfExtractionResult, key: str) -> PdfFieldValue:
 
 def normalize_pdf_extraction(
     result: PdfExtractionResult,
+    field_evidence_method: str = "ocr",
 ) -> tuple[dict, dict, list[str]]:
     """Returns (invoice_dict, field_evidence, warnings) matching the
     `invoice`/`fieldEvidence` parts of canonical_invoice.schema.json.
-    Every present field is recorded with method="ocr" and its own confidence
-    -- normalize never drops or filters by confidence, that's the control
-    executor's job.
+    Every present field is recorded with its own confidence -- normalize
+    never drops or filters by confidence, that's the control executor's job.
+
+    `field_evidence_method` is the per-field `evidence.method` value (see
+    canonical_invoice.schema.json's `evidence.method` enum: "xml", "ocr",
+    "llm", "derived", "master_data"). Defaults to "ocr" for the vision/OCR
+    extraction path (pipeline.py's `ocr_llm` method); the text-structuring
+    path for a digitally-born PDF (`text_llm`) passes "llm" instead -- that
+    field never went through OCR at all, it was read from the PDF's own
+    embedded text layer and only structured by an LLM call.
     """
     warnings = list(result.warnings)
     evidence: dict = {}
@@ -135,7 +143,7 @@ def normalize_pdf_extraction(
     def emit(key: str, locator: str):
         field_value = _get(result, key)
         evidence[key] = {
-            "method": "ocr",
+            "method": field_evidence_method,
             "confidence": field_value.confidence,
             "locator": locator,
             "rawValue": field_value.value,

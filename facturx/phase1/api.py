@@ -11,19 +11,18 @@ import json
 import logging
 import os
 import re
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from pypdf import PdfReader
 
 from .capabilities import CAPABILITIES
-from .document_intake import MAX_UPLOAD_BYTES, inspect_document
+from .document_intake import MAX_UPLOAD_BYTES, inspect_document, inspect_text_layer
 from .demo_support import build_results_xlsx
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import MockPdfExtractionAdapter, PdfExtractionAdapter
+from .normalize.text_llm_adapter import MockTextExtractionAdapter, TextExtractionAdapter
 from .pipeline import (
     normalize_invoice,
     process_extracted_invoice,
@@ -36,13 +35,28 @@ logger = logging.getLogger("facturx-phase1-api")
 router = APIRouter(tags=["phase1"])
 
 _default_pdf_extraction_adapter = MockPdfExtractionAdapter()
+_default_text_extraction_adapter = MockTextExtractionAdapter()
 
 
 def get_pdf_extraction_adapter() -> PdfExtractionAdapter:
     """FastAPI dependency seam. Overridden in tests with adapters seeded for
     specific scenarios; the production default is the mock adapter until a
-    real OCR/LLM adapter is integrated (see capabilities.py)."""
+    real OCR/LLM adapter is integrated (see capabilities.py). Only reached
+    for a genuine scan / no-usable-text-layer plain PDF -- see
+    get_text_extraction_adapter() below for the digitally-born counterpart."""
     return _default_pdf_extraction_adapter
+
+
+def get_text_extraction_adapter() -> TextExtractionAdapter:
+    """FastAPI dependency seam for the `text_llm` path (a digitally-born
+    plain PDF's already-extracted real text, structured by an LLM call --
+    see normalize/text_llm_adapter.py). Overridden in tests the same way as
+    get_pdf_extraction_adapter(); the production default is likewise a mock
+    until a real text-structuring LLM adapter is integrated in this Python
+    service (today, the one real implementation of that call lives in the
+    external n8n Flow 1b workflow, not here -- see
+    normalize/text_llm_adapter.py's module docstring)."""
+    return _default_text_extraction_adapter
 
 
 _READ_CHUNK_BYTES = 64 * 1024
@@ -207,9 +221,6 @@ async def inspect(file: UploadFile):
     }
 
 
-_MIN_REAL_TEXT_CHARS = 50
-
-
 @router.post("/v1/invoices/extract-text")
 async def extract_text(file: UploadFile):
     """Deterministic, free, instant first step for the text-extraction-
@@ -220,20 +231,20 @@ async def extract_text(file: UploadFile):
     unnecessary lossy work for the majority of real documents. A caller
     (Flow 1b's local lane) uses `hasText` to decide whether to send the
     returned `text` to a text-only LLM instead of rendering the page to an
-    image and using a vision model. `_MIN_REAL_TEXT_CHARS` matches the
-    threshold used throughout this session's own testing to distinguish a
-    real text layer from a near-empty one (e.g. a scanned PDF with only a
-    handful of stray characters from a corrupted/partial layer)."""
+    image and using a vision model.
+
+    document_intake.inspect_text_layer() is the single implementation of
+    this heuristic (MIN_REAL_TEXT_CHARS matches the threshold this route
+    already validated) -- pipeline.py's own `text_llm`/`ocr_llm` extraction
+    method selection for POST /v1/invoices/process and /normalize reuses the
+    exact same function, so this route and that internal decision can never
+    disagree about what counts as a usable text layer."""
     content = await _read_upload_bounded(file)
-    try:
-        reader = PdfReader(BytesIO(content))
-        text = "".join(page.extract_text() or "" for page in reader.pages)
-    except Exception:
-        text = ""
+    text_layer = inspect_text_layer(content)
     return {
-        "text": text,
-        "charCount": len(text),
-        "hasText": len(text.strip()) >= _MIN_REAL_TEXT_CHARS,
+        "text": text_layer.text,
+        "charCount": text_layer.char_count,
+        "hasText": text_layer.has_text,
     }
 
 
@@ -241,6 +252,7 @@ async def extract_text(file: UploadFile):
 async def normalize(
     file: UploadFile,
     adapter: PdfExtractionAdapter = Depends(get_pdf_extraction_adapter),
+    text_adapter: TextExtractionAdapter = Depends(get_text_extraction_adapter),
 ):
     content = await _read_upload_bounded(file)
     try:
@@ -249,6 +261,7 @@ async def normalize(
             filename=file.filename or "upload",
             content_type=file.content_type or "",
             pdf_extraction_adapter=adapter,
+            text_extraction_adapter=text_adapter,
         )
     except (UnsupportedInputError, TechnicalProcessingError) as exc:
         logger.warning("Phase 1 normalize request rejected: %s %s", exc.error_code, exc.detail)
@@ -329,6 +342,7 @@ async def process(
         },
     ),
     adapter: PdfExtractionAdapter = Depends(get_pdf_extraction_adapter),
+    text_adapter: TextExtractionAdapter = Depends(get_text_extraction_adapter),
 ):
     correlation_id = None
     try:
@@ -354,6 +368,7 @@ async def process(
             demo_mode=demoMode,
             correlation_id=correlation_id,
             pdf_extraction_adapter=adapter,
+            text_extraction_adapter=text_adapter,
             buyer_master_data=buyer_master_data,
             control_profile_id=control_profile_id,
         )

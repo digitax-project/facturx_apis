@@ -34,10 +34,11 @@ from .controls.executor import (
     not_run_result,
 )
 from .controls.profiles import ControlProfile, get_control_profile
-from .document_intake import DocumentInspection, inspect_document
+from .document_intake import DocumentInspection, inspect_document, inspect_text_layer
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import PdfExtractionAdapter, normalize_pdf_extraction
 from .normalize.structured import normalize_structured_invoice
+from .normalize.text_llm_adapter import TextExtractionAdapter
 from .organization_master_data import build_buyer_master_data_context, resolve_master_data
 from .report import build_report
 from .validate.schematron import SchematronValidationResult, validate_schematron
@@ -196,12 +197,25 @@ def _extract_and_normalize(
     inspection: DocumentInspection,
     file_bytes: bytes,
     pdf_extraction_adapter: PdfExtractionAdapter,
+    text_extraction_adapter: TextExtractionAdapter,
 ) -> _ExtractionOutcome:
     """Shared by /process, /normalize, and /validate: turns an already-
     classified, already-DOC-001-passed document into a canonical invoice.
     Raises TechnicalProcessingError for an unclassified extraction failure;
     an anticipated extraction failure (e.g. the PDF adapter returning
-    status="failed") is returned normally with extraction_status="failed"."""
+    status="failed") is returned normally with extraction_status="failed".
+
+    A `plain_pdf` first goes through document_intake.inspect_text_layer() to
+    decide which of the two mutually exclusive extraction paths applies:
+    - A usable embedded text layer (digitally-born PDF): the real text is
+      structured by `text_extraction_adapter` (method "text_llm"). This
+      NEVER calls `pdf_extraction_adapter` -- a digitally-born PDF has
+      nothing for a vision/OCR step to add, since the real text is already
+      in hand losslessly.
+    - No usable text layer (a genuine scan): unchanged, calls
+      `pdf_extraction_adapter` (method "ocr_llm"), exactly as before this
+      distinction existed.
+    """
     if inspection.source_type in ("hybrid_pdf", "xml"):
         try:
             # inspection.xml_etree was already parsed once, through
@@ -234,22 +248,45 @@ def _extract_and_normalize(
             canonical_invoice, invoice, field_evidence, structured_validation, "completed"
         )
 
-    try:
-        extraction_result = pdf_extraction_adapter.extract(file_bytes)
-    except Exception as exc:
-        raise TechnicalProcessingError(
-            "PDF_EXTRACTION_UNAVAILABLE", f"PDF extraction adapter failed unexpectedly: {exc}"
-        ) from exc
-    invoice, field_evidence, warnings = normalize_pdf_extraction(extraction_result)
+    text_layer = inspect_text_layer(file_bytes)
+    if text_layer.has_text:
+        # Digitally-born: structure the real, already-extracted text via an
+        # LLM call. Deliberately does not touch pdf_extraction_adapter at
+        # all -- see the module-level docstring above.
+        try:
+            extraction_result = text_extraction_adapter.extract(text_layer.text)
+        except Exception as exc:
+            raise TechnicalProcessingError(
+                "TEXT_EXTRACTION_UNAVAILABLE",
+                f"Text-structuring LLM adapter failed unexpectedly: {exc}",
+            ) from exc
+        method = "text_llm"
+        adapter_version = "mock-text-adapter-0.1.0"
+        field_evidence_method = "llm"
+    else:
+        # Genuine scan / no usable text layer: unchanged vision/OCR path.
+        try:
+            extraction_result = pdf_extraction_adapter.extract(file_bytes)
+        except Exception as exc:
+            raise TechnicalProcessingError(
+                "PDF_EXTRACTION_UNAVAILABLE", f"PDF extraction adapter failed unexpectedly: {exc}"
+            ) from exc
+        method = "ocr_llm"
+        adapter_version = "mock-adapter-0.1.0"
+        field_evidence_method = "ocr"
+
+    invoice, field_evidence, warnings = normalize_pdf_extraction(
+        extraction_result, field_evidence_method=field_evidence_method
+    )
     invoice = _normalize_turkish_locale_characters(invoice)
     invoice = _normalize_extracted_dates(invoice)
     invoice = _normalize_country_codes(invoice)
     invoice = _normalize_currency_code(invoice)
     extraction = {
-        "method": "ocr_llm",
+        "method": method,
         "status": extraction_result.status,
         "overallConfidence": extraction_result.overall_confidence,
-        "adapterVersion": "mock-adapter-0.1.0",
+        "adapterVersion": adapter_version,
         "warnings": warnings + inspection.warnings,
     }
     canonical_invoice = _build_canonical_invoice(inspection, extraction, invoice, field_evidence)
@@ -265,6 +302,7 @@ def process_invoice(
     organization_id: Optional[str],
     demo_mode: bool,
     pdf_extraction_adapter: PdfExtractionAdapter,
+    text_extraction_adapter: TextExtractionAdapter,
     correlation_id: Optional[str] = None,
     buyer_master_data: Optional[dict] = None,
     control_profile_id: Optional[str] = None,
@@ -288,14 +326,18 @@ def process_invoice(
     )
 
     if doc_001.outcome != "passed":
-        canonical_invoice, controls = _blocked_by_doc_001(inspection, doc_001, control_profile)
+        canonical_invoice, controls = _blocked_by_doc_001(
+            inspection, doc_001, control_profile, file_bytes
+        )
         report = _finalize_report(
             inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review",
             started_at=started_at, correlation_id=correlation_id,
         )
         return canonical_invoice, report
 
-    outcome = _extract_and_normalize(inspection, file_bytes, pdf_extraction_adapter)
+    outcome = _extract_and_normalize(
+        inspection, file_bytes, pdf_extraction_adapter, text_extraction_adapter
+    )
 
     if outcome.extraction_status == "failed":
         controls = [doc_001, evaluate_str_003(outcome.structured_validation)] + [
@@ -676,6 +718,7 @@ def normalize_invoice(
     filename: str,
     content_type: str,
     pdf_extraction_adapter: PdfExtractionAdapter,
+    text_extraction_adapter: TextExtractionAdapter,
 ) -> dict:
     """Returns a schema-valid canonical_invoice only -- no controls, no
     organization context required (POST /v1/invoices/normalize)."""
@@ -695,10 +738,12 @@ def normalize_invoice(
     if doc_001.outcome != "passed":
         # Normalization has no organization context or report profile. The
         # blocked canonical invoice is profile-independent.
-        canonical_invoice, _controls = _blocked_by_doc_001(inspection, doc_001, None)
+        canonical_invoice, _controls = _blocked_by_doc_001(inspection, doc_001, None, file_bytes)
         return canonical_invoice
 
-    outcome = _extract_and_normalize(inspection, file_bytes, pdf_extraction_adapter)
+    outcome = _extract_and_normalize(
+        inspection, file_bytes, pdf_extraction_adapter, text_extraction_adapter
+    )
     return outcome.canonical_invoice
 
 
@@ -779,9 +824,22 @@ def _blocked_by_doc_001(
     inspection: DocumentInspection,
     doc_001: ControlResult,
     control_profile: ControlProfile | None,
+    file_bytes: bytes,
 ) -> tuple[dict, list[ControlResult]]:
+    # A plain_pdf only ever reaches DOC-001-failure with unreadable=True or
+    # encrypted=True (see _is_format_supported/_is_profile_supported: both
+    # trivially pass for source_type="plain_pdf", so neither can be why
+    # DOC-001 failed here). inspect_text_layer() degrades to has_text=False
+    # on exactly that kind of input (it can't open the file either), so this
+    # still reports "ocr_llm" in practice for every real case today -- but
+    # it is a real check, not a hardcoded assumption, and stays correct if a
+    # future DOC-001 rule ever blocks a plain_pdf for a different reason.
+    if inspection.source_type == "plain_pdf":
+        extraction_method = "text_llm" if inspect_text_layer(file_bytes).has_text else "ocr_llm"
+    else:
+        extraction_method = "embedded_xml"
     extraction = {
-        "method": "ocr_llm" if inspection.source_type == "plain_pdf" else "embedded_xml",
+        "method": extraction_method,
         "status": "failed",
         "overallConfidence": 0.0,
         "adapterVersion": None,

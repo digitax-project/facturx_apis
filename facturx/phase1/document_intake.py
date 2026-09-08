@@ -87,6 +87,58 @@ class DocumentInspection:
     warnings: list[str] = field(default_factory=list)
 
 
+# Validated 2026-09-03/04 across multiple random-sample accuracy rounds
+# against a real pilot organization's invoices (see the n8n Flow 1b
+# "text-extraction-first" lane, examples/n8n/digitax_invoice_phase1_flow1b_pdf_ocr_concept_v0_3_0.json):
+# most real invoices are born-digital PDFs with a fully extractable, lossless
+# text layer, and 50 characters is enough to separate that from a near-empty
+# layer (a scanned PDF with only a handful of stray characters from a
+# corrupted/partial embedded OCR layer, or none at all). This is the exact
+# threshold POST /v1/invoices/extract-text already validated and exposed to
+# that n8n workflow -- reused here verbatim, not re-derived, so both callers
+# agree on what counts as "usable".
+MIN_REAL_TEXT_CHARS = 50
+
+
+@dataclass
+class TextLayerInspection:
+    text: str
+    char_count: int
+    has_text: bool  # True: usable/meaningful embedded text (digitally-born).
+    # False: empty, whitespace-only, or too thin to be meaningful (e.g. a
+    # scanned image with no OCR text layer, or only a corrupted stray-
+    # character remnant of one) -- this PDF needs OCR/vision extraction.
+
+
+def inspect_text_layer(file_bytes: bytes) -> TextLayerInspection:
+    """Determines whether a plain PDF has a usable embedded text layer.
+
+    "Usable" is deliberately a low bar (>= MIN_REAL_TEXT_CHARS of non-
+    whitespace extracted text, no further quality/language/garbage check):
+    a real digitally-born invoice reliably clears it by a wide margin (real
+    invoices carry far more than 50 characters of header/party/total text),
+    while a genuine scan with no text layer at all reliably extracts to ""
+    -- pypdf's extract_text() only reads real text-showing operators from
+    the content stream, never OCRs image content, so there is no ambiguous
+    middle ground to tune against in practice. A PDF this can't even open
+    (corrupt/encrypted) is treated as "no usable text" rather than raising --
+    the caller (pipeline.py) only ever reaches this for a PDF DOC-001 has
+    already accepted as readable/unencrypted, but this function is also
+    used by the standalone POST /v1/invoices/extract-text endpoint against
+    arbitrary caller input, so it must degrade gracefully on its own.
+    """
+    try:
+        reader = PdfReader(BytesIO(file_bytes))
+        text = "".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        text = ""
+    return TextLayerInspection(
+        text=text,
+        char_count=len(text),
+        has_text=len(text.strip()) >= MIN_REAL_TEXT_CHARS,
+    )
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
