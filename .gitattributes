@@ -28,3 +28,10 @@ examples/n8n/vendor/**/*.json text eol=lf
 examples/n8n/activity_binding.invoice_intake.json text eol=lf
 examples/n8n/generated/*.js text eol=lf
 examples/n8n/generated/*.json text eol=lf
+
+# Same gap, found the same way: examples/n8n/schemas/ is also hashed into
+# validator_provenance.json's sourceSha256 (result-bundle-v1.0.0.schema.json)
+# but wasn't covered by the rule above, so a Windows checkout still silently
+# CRLF-corrupted it and produced a sourceSha256 that only matched a Windows
+# author's own local regeneration -- not the LF bytes CI actually hashes.
+examples/n8n/schemas/*.json text eol=lf
