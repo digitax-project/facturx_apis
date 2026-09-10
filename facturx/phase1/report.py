@@ -20,10 +20,13 @@ def build_report(
     routing: str,
     run_id: Optional[str] = None,
     reqeli: Optional[dict] = None,
+    *,
+    started_at: str,
+    correlation_id: Optional[str] = None,
 ) -> dict:
     run_id = run_id or f"RUN-{uuid.uuid4().hex[:12].upper()}"
     report = {
-        "schemaVersion": "1.0.0",
+        "schemaVersion": "1.1.0",
         "reportId": f"REP-{uuid.uuid4().hex[:12].upper()}",
         "runId": run_id,
         "sourceSha256": source_sha256,
@@ -48,7 +51,10 @@ def build_report(
         ],
         "suggestions": [],
         "reqeli": reqeli or {"invoked": False, "status": "disabled", "analysisRef": None},
+        "startedAt": started_at,
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
+    if correlation_id is not None:
+        report["correlationId"] = correlation_id
     validate_phase1_control_report(report)
     return report

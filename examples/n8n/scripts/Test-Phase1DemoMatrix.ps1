@@ -25,11 +25,18 @@ $failures = @()
 foreach ($entry in $manifest.entries) {
     $invoicePath = Join-Path $OutputDir $entry.generatedPdf
     $responsePath = Join-Path $ResultDir "$($entry.scenarioId).json"
-    Write-Host "Testing $($entry.scenarioId) with $($entry.organizationId) ..."
+    Write-Host "Testing $($entry.scenarioId) with $($entry.organizationId) / $($entry.tcmsOrganizationId) ..."
 
+    # A6a correction round 1 (section 3): the Batch Item webhook's request
+    # contract now expects phase1ProfileKey (n8n forwards it to the Phase-1
+    # API under that API's own unchanged "organizationId" field name) and a
+    # separate, explicit tcmsOrganizationId -- the manifest's legacy
+    # "organizationId" value becomes phase1ProfileKey here, never
+    # tcmsOrganizationId.
     $httpCode = & curl.exe -s -o $responsePath -w "%{http_code}" $WebhookUrl `
         -F "invoiceFile=@$invoicePath;type=application/pdf" `
-        -F "organizationId=$($entry.organizationId)"
+        -F "phase1ProfileKey=$($entry.organizationId)" `
+        -F "tcmsOrganizationId=$($entry.tcmsOrganizationId)"
     if ($LASTEXITCODE -ne 0) {
         $failures += "$($entry.scenarioId): curl exit $LASTEXITCODE"
         continue

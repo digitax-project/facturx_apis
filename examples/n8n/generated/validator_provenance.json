@@ -1,0 +1,22 @@
+{
+  "activity-execution": {
+    "sourceSha256": "244f8bc2dbd08b453ea9abbd38fa1095f548ef76e4c251dfddb2f7484960b7a3",
+    "generatorVersion": "1.0.0",
+    "status": "GENERATED"
+  },
+  "human-review-decision": {
+    "sourceSha256": "3d80c0e58424e014261de4e1fb09d8fdab430f24df4d08b47053c95917ae963c",
+    "generatorVersion": "1.0.0",
+    "status": "DEFERRED_NOT_GENERATED_FLOW_2_OUT_OF_SCOPE"
+  },
+  "risk-review-report": {
+    "sourceSha256": "ac69c61b8550ca34e29de54f50051879a1825eb2f0aa753173717173e8060afe",
+    "generatorVersion": "1.0.0",
+    "status": "GENERATED"
+  },
+  "result-bundle": {
+    "sourceSha256": "a276190388bbcea4ea8fc921d3e7182712e3ef1c976700110ae5b94219f9ecc0",
+    "generatorVersion": "1.0.0",
+    "status": "GENERATED"
+  }
+}

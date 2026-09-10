@@ -21,6 +21,7 @@ arithmetic/master-data findings, a structured `details` object (expected/
 actual/difference/tolerance/formula, or a per-field `mismatches` list) --
 reason codes alone don't tell a reviewer what was actually wrong.
 """
+import re
 from dataclasses import dataclass, field as dc_field
 from typing import Optional
 
@@ -535,8 +536,49 @@ def _evaluate_cal_003(invoice: dict, field_evidence: dict, threshold: float) -> 
     return _build("CAL-003", "passed", [], combined[2])
 
 
+# Confirmed live 2026-09-03 (fresh random acceptance draw): a real
+# supplier invoice (a Turkish company) has the buyer's city/street in
+# ALL-CAPS with a Turkish-locale dotted capital I in its own PDF text
+# layer (e.g. "LEİPZİG" for "LEIPZIG") -- Turkish-locale dotted capital I
+# (U+0130) baked into the
+# source document itself, not an extraction error by either the local or
+# cloud model (both faithfully reported it). Python's str.lower() does not
+# fold U+0130 to plain "i" -- it produces "i" followed by a combining dot
+# above (U+0307), so a plain .lower() comparison against "Leipzig" still
+# fails. Scoped narrowly to the two Turkish dotted-I codepoints actually
+# observed (not a general diacritic strip, e.g. via NFKD) so a genuinely
+# different address with real umlauts (ae/oe/ue) is never silently treated
+# as a match.
+_TURKISH_DOTTED_I_TRANSLATION = str.maketrans({"İ": "i", "ı": "i"})
+_COMBINING_DOT_ABOVE = "̇"
+
+
+# German street-suffix spelling varies freely between "Straße" (with
+# eszett), "Strasse" (ASCII transliteration, common in extracted/OCR'd
+# text), and the abbreviation "Str." -- all three name the identical
+# street. Confirmed live 2026-09-05 in a genuine-random-sample stress test
+# against a real pilot organization's invoices: a real invoice's extracted
+# address spelled the suffix out in full while the matching master-data
+# record on file used the abbreviation, a false ORG-001 mismatch on an
+# address that was actually identical. Applied after lowercasing, so the
+# pattern only needs the lowercase forms.
+_STREET_SUFFIX_PATTERN = re.compile(r"stra(?:ß|ss)e\b")
+_STREET_ABBREVIATION_PATTERN = re.compile(r"\bstr\.")
+
+
 def _normalize_for_match(value: str | None) -> str:
-    return " ".join((value or "").strip().lower().split())
+    folded = (value or "").translate(_TURKISH_DOTTED_I_TRANSLATION).lower()
+    folded = folded.replace(_COMBINING_DOT_ABOVE, "")
+    folded = _STREET_SUFFIX_PATTERN.sub("str", folded)
+    folded = _STREET_ABBREVIATION_PATTERN.sub("str", folded)
+    return " ".join(folded.strip().split())
+
+
+_ALTERNATE_ADDRESS_MATCH_FIELDS = ("street", "postalCode", "city", "countryCode")
+
+
+def _address_fields_match(actual: dict, expected: dict, fields: tuple[str, ...]) -> bool:
+    return all(_normalize_for_match(actual.get(field)) == _normalize_for_match(expected.get(field)) for field in fields)
 
 
 def evaluate_org_001(invoice: dict, field_evidence: dict, master_data: dict, threshold: float = DEFAULT_CONFIDENCE_THRESHOLD) -> ControlResult:
@@ -550,6 +592,25 @@ def evaluate_org_001(invoice: dict, field_evidence: dict, master_data: dict, thr
     combined = _combine([buyer_name, buyer_street, buyer_postal, buyer_city, buyer_country])
     if combined[0] != "passed":
         return _build("ORG-001", *combined)
+
+    # A legitimate secondary address (e.g. a real delivery/forwarding
+    # address distinct from the registered office -- confirmed live
+    # 2026-09-05 for a real pilot organization's own delivery arrangement
+    # with a logistics partner) is expected to carry a DIFFERENT name on
+    # the invoice: a logistics partner's name plus a goods-identification
+    # marking, never the buyer's own legal name. Matching one of these
+    # approved alternates on address alone is sufficient -- name is
+    # deliberately not checked against them, unlike the primary
+    # master-data match below.
+    invoice_address = {
+        "street": address["street"],
+        "postalCode": address["postalCode"],
+        "city": address["city"],
+        "countryCode": address["countryCode"],
+    }
+    for alternate in master_data.get("alternateAddresses", []):
+        if _address_fields_match(invoice_address, alternate, _ALTERNATE_ADDRESS_MATCH_FIELDS):
+            return _build("ORG-001", "passed", [], combined[2])
 
     field_pairs = (
         ("invoice.buyer.name", buyer["name"], master_data["name"]),

@@ -12,4 +12,5 @@ from .facturx import generate_from_file, \
     get_facturx_xml_from_pdf, \
     get_orderx_xml_from_pdf, \
     get_xml_from_pdf, \
-    get_orderx_type
+    get_orderx_type, \
+    ALL_FILENAMES

@@ -1,0 +1,106 @@
+{
+  "bindingExportSchemaVersion": "1.0.0",
+  "status": "PUBLISHED",
+  "displayName": "Strukturierte Eingangsrechnung automatisiert vorpruefen",
+  "processDefinition": {
+    "processId": "digitax.invoice-intake",
+    "processVersion": "1.1.1-draft"
+  },
+  "activityDefinition": {
+    "activityId": "digitax.invoice-intake.phase1.structured-control",
+    "activityVersion": "1.0.0",
+    "businessRole": "Rechnungsbearbeitung",
+    "controlIds": [
+      "DOC-001",
+      "DOC-007",
+      "STR-003",
+      "STR-004",
+      "FRM-001",
+      "FRM-002",
+      "FRM-003",
+      "FRM-004",
+      "FRM-005",
+      "FRM-006",
+      "FRM-007",
+      "CAL-001",
+      "CAL-002",
+      "CAL-003",
+      "CAL-004",
+      "ORG-001",
+      "ORG-002"
+    ],
+    "riskIds": [],
+    "executorPolicy": {
+      "allowedTypes": [
+        "DETERMINISTIC_SERVICE"
+      ]
+    },
+    "oversightPolicy": {
+      "mode": "HUMAN_REVIEW_REQUIRED"
+    },
+    "requiredInputTypes": [
+      "STRUCTURED_INVOICE_DOCUMENT",
+      "ORGANIZATION_MASTER_DATA",
+      "CONTROL_PROFILE"
+    ],
+    "requiredOutputTypes": [
+      "CANONICAL_INVOICE",
+      "PHASE1_CONTROL_REPORT",
+      "PHASE1_ROUTING_STATUS"
+    ],
+    "requiredEvidenceTypes": [
+      "SOURCE_DOCUMENT_SHA256",
+      "FIELD_EVIDENCE",
+      "CONTROL_RESULT_EVIDENCE",
+      "CONTROL_RULE_VERSION",
+      "CONTROL_PROFILE_VERSION"
+    ]
+  },
+  "executor": {
+    "type": "DETERMINISTIC_SERVICE",
+    "logicalId": "digitax.invoice.phase1-controls",
+    "version": "1.1.0"
+  },
+  "boundary": {
+    "flow": "1a",
+    "inputFormatScope": "STRUCTURED_INVOICE_ONLY",
+    "beginsWith": "Structured invoice and approved organization/control context are available to the Phase-1 service.",
+    "endsWith": "Canonical invoice, Phase-1 control report and routing status are available for mandatory human review.",
+    "excludes": [
+      "FLOW_1B_PDF_OCR_LLM",
+      "DIGITAX_RISK_REVIEW",
+      "HUMAN_REVIEW_DECISION",
+      "SUPPLIER_OR_TAX_ADVISOR_COMMUNICATION",
+      "APPROVAL_REJECTION_BOOKING_PAYMENT",
+      "EVIDENCE_STORE_PERSISTENCE"
+    ]
+  },
+  "provenance": {
+    "generator": "@digitax/process-diagram-generator/activity-binding-export",
+    "generatorVersion": "1.0.0",
+    "definitionSourceRef": "digitax.invoice-intake.phase1.structured-control.definition.json",
+    "definitionSourceSha256": "3d12db5a7a34f5ace6e2dabfc56d7cbef249675239c9901b178bd87281db5446",
+    "sourceReferences": [
+      {
+        "id": "BPMN_END_TO_END_PROCESS",
+        "sha256": "1563d231f7c9a2965dcc159b164e2ccb9b7af583646d35bdfcb061c7ea318d03"
+      },
+      {
+        "id": "BPMN_PHASE1_PROCESS",
+        "sha256": "1ca3322e258de473a69620be94033ed54c7e78f41e7de62a482f85f44e473b9f"
+      },
+      {
+        "id": "PHASE1_STATUS_CONTRACT",
+        "sha256": "15528c6ef33d9e884db3e29b0337312bf42244a08168271aa084603b787eee30"
+      },
+      {
+        "id": "A4_CONTROL_PROFILES",
+        "sha256": "359673c28196ec96466e0092ffdbe6b25b31aac54c9581e4c66c75552650e637"
+      },
+      {
+        "id": "A4_CONTROL_REPORT_SCHEMA",
+        "sha256": "b0aec50d2226a6ed70e325d6c26aded71c28f0cb16c86d391bcd53b657e542e2"
+      }
+    ]
+  }
+}

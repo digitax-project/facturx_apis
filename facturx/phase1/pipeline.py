@@ -14,7 +14,9 @@ exceptions raised here):
   -- for /process that's a report whose status may itself be
   nicht_pruefbar/klaerung_erforderlich/hinweis/unauffaellig -- HTTP 200.
 """
+import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 from .. import facturx as facturx_lib
@@ -36,7 +38,7 @@ from .document_intake import DocumentInspection, inspect_document
 from .errors import TechnicalProcessingError, UnsupportedInputError
 from .normalize.pdf_adapter import PdfExtractionAdapter, normalize_pdf_extraction
 from .normalize.structured import normalize_structured_invoice
-from .organization_master_data import resolve_master_data
+from .organization_master_data import build_buyer_master_data_context, resolve_master_data
 from .report import build_report
 from .validate.schematron import SchematronValidationResult, validate_schematron
 from .validate.structured import StructuredValidationResult, validate_structured_xml
@@ -88,15 +90,35 @@ def _document_block(inspection: DocumentInspection) -> dict:
     }
 
 
-def resolve_organization_context(organization_id: Optional[str], demo_mode: bool) -> dict:
+def resolve_organization_context(
+    organization_id: Optional[str],
+    demo_mode: bool,
+    buyer_master_data: Optional[dict] = None,
+    control_profile_id: Optional[str] = None,
+) -> dict:
+    # A real (non-demo) caller sends its own buyer master data directly --
+    # no fixture lookup, no hardcoded organization list. This always wins
+    # over organizationId/demoMode when present, since a real caller has no
+    # reason to also want the demo fixture path.
+    if buyer_master_data is not None:
+        if not control_profile_id:
+            raise UnsupportedInputError(
+                "CONTROL_PROFILE_ID_REQUIRED",
+                "controlProfileId is required whenever buyerMasterData is supplied.",
+                status_code=400,
+            )
+        return build_buyer_master_data_context(
+            organization_id, control_profile_id, buyer_master_data
+        )
+
     master_data = resolve_master_data(organization_id, demo_mode)
     if master_data is None:
         raise UnsupportedInputError(
             "ORGANIZATION_CONTEXT_REQUIRED",
             "This run requires an explicit organization context. Pass "
             "organizationId=unternehmen-x-demo, organizationId=unternehmen-y-demo, "
-            "or demoMode=true; there is no "
-            "silent fallback to demo master data.",
+            "demoMode=true, or a real buyerMasterData object with a "
+            "controlProfileId; there is no silent fallback to demo master data.",
             status_code=400,
         )
     return master_data
@@ -127,9 +149,15 @@ def _finalize_report(
     controls: list[ControlResult],
     status: str,
     routing: str,
+    *,
+    started_at: str,
+    correlation_id: Optional[str] = None,
 ) -> dict:
     try:
-        return build_report(source_sha256, control_profile, controls, status, routing)
+        return build_report(
+            source_sha256, control_profile, controls, status, routing,
+            started_at=started_at, correlation_id=correlation_id,
+        )
     except Exception as exc:
         raise TechnicalProcessingError(
             "CONTRACT_VALIDATION_FAILED", f"Internal control report was not schema-valid: {exc}"
@@ -213,6 +241,10 @@ def _extract_and_normalize(
             "PDF_EXTRACTION_UNAVAILABLE", f"PDF extraction adapter failed unexpectedly: {exc}"
         ) from exc
     invoice, field_evidence, warnings = normalize_pdf_extraction(extraction_result)
+    invoice = _normalize_turkish_locale_characters(invoice)
+    invoice = _normalize_extracted_dates(invoice)
+    invoice = _normalize_country_codes(invoice)
+    invoice = _normalize_currency_code(invoice)
     extraction = {
         "method": "ocr_llm",
         "status": extraction_result.status,
@@ -233,10 +265,16 @@ def process_invoice(
     organization_id: Optional[str],
     demo_mode: bool,
     pdf_extraction_adapter: PdfExtractionAdapter,
+    correlation_id: Optional[str] = None,
+    buyer_master_data: Optional[dict] = None,
+    control_profile_id: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Returns (canonical_invoice, phase1_control_report), both already
     validated against their own contract schemas."""
-    organization_context = resolve_organization_context(organization_id, demo_mode)
+    started_at = datetime.now(timezone.utc).isoformat()
+    organization_context = resolve_organization_context(
+        organization_id, demo_mode, buyer_master_data, control_profile_id
+    )
     control_profile = get_control_profile(organization_context["controlProfileId"])
     inspection = inspect_document(file_bytes, filename, content_type)
 
@@ -252,7 +290,8 @@ def process_invoice(
     if doc_001.outcome != "passed":
         canonical_invoice, controls = _blocked_by_doc_001(inspection, doc_001, control_profile)
         report = _finalize_report(
-            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review"
+            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review",
+            started_at=started_at, correlation_id=correlation_id,
         )
         return canonical_invoice, report
 
@@ -265,7 +304,8 @@ def process_invoice(
             if cid not in ("DOC-001", "STR-003")
         ]
         report = _finalize_report(
-            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review"
+            inspection.sha256, control_profile, controls, "nicht_pruefbar", "prioritized_review",
+            started_at=started_at, correlation_id=correlation_id,
         )
         return outcome.canonical_invoice, report
 
@@ -318,8 +358,317 @@ def process_invoice(
         )
 
     status, routing = aggregate(controls)
-    report = _finalize_report(inspection.sha256, control_profile, controls, status, routing)
+    report = _finalize_report(
+        inspection.sha256, control_profile, controls, status, routing,
+        started_at=started_at, correlation_id=correlation_id,
+    )
     return outcome.canonical_invoice, report
+
+
+_NON_ISO_DATE_RE = re.compile(r"^(\d{1,2})[./](\d{1,2})[./](\d{4})$")
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_EXTRACTED_INVOICE_DATE_PATHS = (
+    ("issueDate",),
+    ("supply", "deliveryDate"),
+    ("supply", "periodStart"),
+    ("supply", "periodEnd"),
+)
+
+
+def _normalize_extracted_dates(invoice: dict) -> dict:
+    """Converts DD.MM.YYYY/DD/MM/YYYY date strings to ISO 8601 (YYYY-MM-DD)
+    before schema validation.
+
+    Confirmed live 2026-09-03: Flow 1b's own local-AI extraction prompt
+    already explicitly instructs "Dates use YYYY-MM-DD" -- the model still
+    returned "10.05.2025" verbatim from the source document, causing a hard
+    CANONICAL_INVOICE_INVALID (422) that blocked the invoice from reaching
+    controls at all, not even a nicht_pruefbar review routing. Relying on
+    prompt compliance alone was not sufficient; this is a defensive
+    normalization at the actual validation boundary, so it protects the
+    cloud lane the same way if the same non-compliance ever happens there.
+    Only DD.MM.YYYY / DD/MM/YYYY (dot or slash, day-first) is converted --
+    the two real-world variants observed in German invoices so far. A date
+    already in ISO form is left untouched.
+
+    Confirmed live again 2026-09-03 (text-extraction-first prototype): the
+    same prompt instruction not to echo a vague delivery term ("soon as
+    possible") into a date field, and to return null instead, was itself
+    not reliably followed on every run -- one run returned the phrase
+    verbatim, again causing a hard CANONICAL_INVOICE_INVALID instead of a
+    review-routed result. Any value that is still not ISO-shaped after the
+    DD.MM.YYYY conversion attempt above is therefore nulled here rather
+    than left to fail schema validation -- prompt compliance alone was not
+    sufficient for this case either.
+    """
+    for path in _EXTRACTED_INVOICE_DATE_PATHS:
+        node = invoice
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+            if node is None:
+                break
+        else:
+            leaf_key = path[-1]
+            value = node.get(leaf_key) if isinstance(node, dict) else None
+            if isinstance(value, str):
+                stripped = value.strip()
+                match = _NON_ISO_DATE_RE.match(stripped)
+                if match:
+                    day, month, year = match.groups()
+                    node[leaf_key] = f"{year}-{int(month):02d}-{int(day):02d}"
+                elif not _ISO_DATE_RE.match(stripped):
+                    node[leaf_key] = None
+    return invoice
+
+
+_TURKISH_LOCALE_CHAR_MAP = str.maketrans({"İ": "I", "ı": "i"})
+
+
+def _normalize_turkish_locale_characters(invoice: dict) -> dict:
+    """Folds Turkish-locale dotted/dotless I variants (U+0130 'İ', U+0131 'ı')
+    to plain ASCII I/i, recursively across every string value in the
+    invoice dict.
+
+    Confirmed live 2026-09-03 (acceptance-test round 3, seed 99): a real
+    supplier invoice typeset with a Turkish-locale font produced extracted
+    text like "LEİPZİG" and a Turkish-dotted-I-corrupted street name
+    instead of the buyer's real city/street -- present in the PDF's own
+    text layer, before either
+    the local or cloud model ever sees it, so both extracted it faithfully
+    and ORG-001's buyer-address string comparison then failed on a
+    visually-identical-looking but codepoint-different city name. This is
+    a source-document character-encoding artifact, not an extraction
+    error, so it is folded here (broadly, across all string fields, since
+    the corruption showed up in the buyer's name, street, AND city on that
+    one document -- not confined to a single enum-like field the way the
+    country/currency fixes above are) rather than fixed per-field or
+    relied upon to never recur. This does NOT fix an actual wrong
+    character in the source document itself (the same invoice separately
+    had "GMBG" printed instead of "GmbH" -- a genuine typo, not a
+    Turkish-locale substitution -- which no normalization can recover)."""
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, str):
+                    node[key] = value.translate(_TURKISH_LOCALE_CHAR_MAP)
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                if isinstance(item, str):
+                    node[i] = item.translate(_TURKISH_LOCALE_CHAR_MAP)
+                else:
+                    walk(item)
+
+    walk(invoice)
+    return invoice
+
+
+_ISO_COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
+# Confirmed live 2026-09-03 (first genuinely random 10-invoice acceptance
+# draw from a real supplier archive, not the hand-picked tuning set): 6/10
+# files hard-crashed on this exact validation, none of the earlier curated
+# tuning files ever exercised it -- the tuning set was all-domestic (German)
+# invoices, so the countryCode field was never actually stress-tested there.
+# The extraction prompt already asks for header info generally but never
+# states the countryCode fields specifically need an ISO 3166-1 alpha-2
+# code; the model reasonably returns whatever the document itself prints
+# (often the full country name, in German or English). As with dates,
+# prompt compliance alone was not sufficient -- this is the same defensive
+# normalization pattern at the actual validation boundary. Deliberately a
+# bounded lookup (not a full ISO-3166 library dependency) covering the
+# trading-partner countries actually seen in Unternehmen X's real supplier base
+# so far; an unrecognized name is left as-is and still fails validation
+# visibly rather than being guessed at.
+_COUNTRY_NAME_TO_ISO2 = {
+    "germany": "DE", "deutschland": "DE", "allemagne": "DE",
+    "netherlands": "NL", "niederlande": "NL", "the netherlands": "NL", "holland": "NL",
+    "vietnam": "VN", "việt nam": "VN", "viet nam": "VN",
+    "france": "FR", "frankreich": "FR",
+    "italy": "IT", "italien": "IT", "italia": "IT",
+    "spain": "ES", "spanien": "ES", "espana": "ES", "españa": "ES",
+    "austria": "AT", "oesterreich": "AT", "österreich": "AT",
+    "switzerland": "CH", "schweiz": "CH", "suisse": "CH",
+    "belgium": "BE", "belgien": "BE",
+    "poland": "PL", "polen": "PL",
+    "czech republic": "CZ", "tschechien": "CZ", "czechia": "CZ",
+    "china": "CN", "china (mainland)": "CN",
+    "united states": "US", "usa": "US", "u.s.a.": "US", "united states of america": "US",
+    "united kingdom": "GB", "uk": "GB", "great britain": "GB",
+    "denmark": "DK", "daenemark": "DK", "dänemark": "DK",
+    "sweden": "SE", "schweden": "SE",
+    "portugal": "PT",
+    "luxembourg": "LU", "luxemburg": "LU",
+    "hungary": "HU", "ungarn": "HU",
+    "slovakia": "SK", "slowakei": "SK",
+    "turkey": "TR", "tuerkei": "TR", "türkei": "TR",
+    "india": "IN", "indien": "IN",
+    "hong kong": "HK",
+    "taiwan": "TW",
+    "south korea": "KR", "korea": "KR",
+    "japan": "JP",
+}
+_COUNTRY_CODE_PATHS = (
+    ("supplier", "address", "countryCode"),
+    ("buyer", "address", "countryCode"),
+)
+
+
+def _normalize_country_codes(invoice: dict) -> dict:
+    """Maps a known full country name (English or German, the two languages
+    seen in practice) to its ISO 3166-1 alpha-2 code before schema
+    validation. See the module comment above _COUNTRY_NAME_TO_ISO2 for why
+    this exists. A value already ISO-shaped is left untouched; an
+    unrecognized name is left as-is and still fails validation visibly."""
+    for path in _COUNTRY_CODE_PATHS:
+        node = invoice
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+            if node is None:
+                break
+        else:
+            leaf_key = path[-1]
+            value = node.get(leaf_key) if isinstance(node, dict) else None
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not _ISO_COUNTRY_CODE_RE.match(stripped):
+                    mapped = _COUNTRY_NAME_TO_ISO2.get(stripped.lower())
+                    if mapped:
+                        node[leaf_key] = mapped
+    return invoice
+
+
+_ISO_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
+# Same category and same evidence source as _COUNTRY_NAME_TO_ISO2 above: the
+# very same round-1 random draw that surfaced the country-name bug also
+# produced a currency field of '€' (the euro glyph itself, as printed on
+# the invoice) instead of the 3-letter ISO 4217 code, with an identical
+# root cause -- the prompt never states currency must be an ISO code either.
+_CURRENCY_SYMBOL_TO_ISO = {
+    "€": "EUR", "eur": "EUR", "euro": "EUR", "euros": "EUR",
+    "$": "USD", "us$": "USD", "usd": "USD", "dollar": "USD",
+    "£": "GBP", "gbp": "GBP", "pound": "GBP",
+    "¥": "JPY", "jpy": "JPY", "yen": "JPY",
+    "chf": "CHF", "sfr": "CHF",
+    "₫": "VND", "vnd": "VND", "dong": "VND",
+    "¥ (cny)": "CNY", "cny": "CNY", "rmb": "CNY",
+}
+
+
+def _normalize_currency_code(invoice: dict) -> dict:
+    """Maps a known currency symbol/name to its ISO 4217 code before schema
+    validation. See the module comment above _CURRENCY_SYMBOL_TO_ISO for why
+    this exists. A value already ISO-shaped is left untouched; an
+    unrecognized value is left as-is and still fails validation visibly."""
+    value = invoice.get("currency")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not _ISO_CURRENCY_CODE_RE.match(stripped):
+            mapped = _CURRENCY_SYMBOL_TO_ISO.get(stripped.lower())
+            if mapped:
+                invoice["currency"] = mapped
+    return invoice
+
+
+def process_extracted_invoice(
+    document: dict,
+    extraction: dict,
+    invoice: dict,
+    field_evidence: dict,
+    organization_id: Optional[str],
+    demo_mode: bool,
+    correlation_id: Optional[str] = None,
+    buyer_master_data: Optional[dict] = None,
+    control_profile_id: Optional[str] = None,
+) -> tuple[dict, dict]:
+    """Runs the same catalog/executor as process_invoice() against canonical
+    invoice fields and field evidence an external caller (Flow 1b's n8n
+    OCR/LLM extraction) already produced, instead of extracting them from
+    raw bytes itself. This is the seam examples/n8n/README.md's "Missing API
+    contract" section asked for: a narrower endpoint accepting pre-extracted
+    fields plus their evidence, so Flow 1b can stop mirroring ORG-001 (and
+    every other control) in n8n-side JavaScript.
+
+    `document`/`extraction` are already-normalized dicts (sourceType/method
+    hardcoded by the caller, e.g. facturx/phase1/api.py -- never taken from
+    the external request body) so a caller cannot claim e.g. sourceType=xml
+    to route around the structured-document controls. `invoice`/
+    `field_evidence` are exactly the caller-supplied, untrusted extraction
+    result; this function never accepts a pre-computed status/routing/
+    controls list from the caller -- every control outcome is (re)computed
+    here, from the same functions process_invoice() uses, so the caller
+    cannot inject a fabricated control result.
+    """
+    started_at = datetime.now(timezone.utc).isoformat()
+    organization_context = resolve_organization_context(
+        organization_id, demo_mode, buyer_master_data, control_profile_id
+    )
+    control_profile = get_control_profile(organization_context["controlProfileId"])
+
+    invoice = _normalize_turkish_locale_characters(invoice)
+    invoice = _normalize_extracted_dates(invoice)
+    invoice = _normalize_country_codes(invoice)
+    invoice = _normalize_currency_code(invoice)
+
+    canonical_invoice = {
+        "schemaVersion": "1.0.0",
+        "document": document,
+        "extraction": extraction,
+        "invoice": invoice,
+        "fieldEvidence": field_evidence,
+    }
+    try:
+        validate_canonical_invoice(canonical_invoice)
+    except Exception as exc:
+        raise UnsupportedInputError(
+            "CANONICAL_INVOICE_INVALID",
+            f"The submitted document/extraction/invoice/fieldEvidence did not match the "
+            f"canonical invoice contract: {exc}",
+            status_code=422,
+        ) from exc
+
+    # The document was already read and extracted by the external caller --
+    # there is nothing left for DOC-001 to classify (readable/encrypted/
+    # format-supported all trivially hold for an externally-supplied plain
+    # PDF extraction), so it always evaluates to "passed" here. It still
+    # runs through the real evaluate_doc_001() function, not a hand-built
+    # ControlResult, so this stays the exact same executor Flow 1a uses.
+    doc_001 = evaluate_doc_001(
+        readable=True, encrypted=False, format_supported=True,
+        detected_format=document["detectedFormat"], profile_supported=True, profile=None,
+    )
+
+    if extraction["status"] == "failed":
+        controls = [doc_001, evaluate_str_003(None)] + [
+            not_run_result(cid, "Blocked because extraction failed.")
+            for cid in control_profile.control_ids
+            if cid not in ("DOC-001", "STR-003")
+        ]
+        report = _finalize_report(
+            document["sha256"], control_profile, controls, "nicht_pruefbar", "prioritized_review",
+            started_at=started_at, correlation_id=correlation_id,
+        )
+        return canonical_invoice, report
+
+    controls = [
+        doc_001,
+        evaluate_str_003(None),
+        evaluate_str_004(None, xsd_valid=True),
+        evaluate_extraction_confidence(extraction["overallConfidence"]),
+    ]
+    controls += evaluate_content_controls(invoice, field_evidence)
+    controls.append(evaluate_org_001(invoice, field_evidence, organization_context["buyer"]))
+    if "ORG-002" in control_profile.control_ids:
+        controls.append(
+            evaluate_org_002(invoice, field_evidence, organization_context["approvedSuppliers"])
+        )
+
+    status, routing = aggregate(controls)
+    report = _finalize_report(
+        document["sha256"], control_profile, controls, status, routing,
+        started_at=started_at, correlation_id=correlation_id,
+    )
+    return canonical_invoice, report
 
 
 def normalize_invoice(

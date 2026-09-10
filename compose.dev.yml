@@ -1,4 +1,4 @@
-# DigiTax Phase 1 developer stack: API + n8n UI + the four versioned DigiTax
+# DigiTax Phase 1 developer stack: API + n8n UI + the seven versioned DigiTax
 # workflows, importable and (for Flow 1a) runnable with a single,
 # platform-independent command:
 #
@@ -16,14 +16,14 @@
 # See README.md ("Developer stack") and examples/n8n/README.md for the full
 # walkthrough, including how to reset the dedicated dev volume and how to
 # opt into local or cloud AI for Flow 1b.
-name: digitax-phase1-devstack
+name: unternehmen-x-phase1-devstack
 
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: digitax-devstack-api
+    container_name: unternehmen-x-devstack-api
     ports:
       - "6970:6969"
     environment:
@@ -48,15 +48,16 @@ services:
   # commands and for the empirical verification notes (n8nio/n8n:2.33.7).
   n8n-init:
     image: n8nio/n8n:2.33.7
-    container_name: digitax-devstack-n8n-init
+    container_name: unternehmen-x-devstack-n8n-init
     entrypoint: ["sh", "/data/scripts/n8n-init.sh"]
     environment:
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_DIAG_ENABLED=false
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
-      - digitax_devstack_n8n_data:/home/node/.n8n
+      - unternehmen_x_devstack_n8n_data:/home/node/.n8n
       - ./examples/n8n:/data/workflows:ro
       - ./examples/n8n/scripts:/data/scripts:ro
     networks:
@@ -64,13 +65,78 @@ services:
 
   n8n:
     image: n8nio/n8n:2.33.7
-    container_name: digitax-devstack-n8n
+    container_name: unternehmen-x-devstack-n8n
     ports:
       - "5679:5678"
     environment:
+      # Without this, n8n generates OAuth callback URLs (shown in the
+      # credential UI) using its own internal port (5678) instead of the
+      # host-mapped port (5679) the browser and any external OAuth provider
+      # actually reach it on -- confirmed empirically 2026-09-02 while
+      # setting up Flow 0's real Microsoft Outlook credential. Must match
+      # whatever redirect URI is registered on the Azure AD app.
+      - N8N_EDITOR_BASE_URL=http://localhost:5679/
       - FACTURX_API_BASE_URL=http://api:6969
+      # A6a synthetic TCMS demo (Batch Item v1.1.0): points the gated
+      # DigiTax Risk Review call at a locally-run reqeli API (separate
+      # repository, not started by this compose file) -- see
+      # examples/n8n/docker-compose.phase1-upload-demo.yml for the same
+      # variable and its full rationale. Override if you run it elsewhere.
+      - FACTURX_RISK_REVIEW_API_BASE_URL=${FACTURX_RISK_REVIEW_API_BASE_URL:-http://host.docker.internal:8090}
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - N8N_DIAG_ENABLED=false
+      # P2.1 Wave 1 A5 Stage 1: Code nodes generate secure correlationId/
+      # processInstanceId identities via require("crypto").randomUUID() --
+      # the JS Task Runner sandbox does not expose a bare `crypto` global,
+      # and require() itself is denied by default -- see
+      # examples/n8n/docker-compose.phase1-upload-demo.yml for the same
+      # setting and its full rationale. Not needed on n8n-init above: that
+      # container only imports/publishes workflow JSON via CLI, it never
+      # executes a Code node.
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      # Flow 0 (mailbox intake) calls Flow 1a/1b's own webhooks by HTTP,
+      # from within this same n8n instance -- always true regardless of
+      # deployment, since all three flows run in one container.
+      - N8N_SELF_BASE_URL=http://localhost:5678
+      # Flow 0's two calls into TCMS (fetching this organization's real
+      # buyer master data, then ingesting the finished resultBundle): TCMS
+      # runs as a host process (`npm run dev`), not in this compose file,
+      # so host.docker.internal is required from inside this container.
+      - TCMS_BASE_URL=${TCMS_BASE_URL:-http://host.docker.internal:3000}
+      # Must match TCMS's own NUXT_N8N_INGEST_SHARED_SECRET -- both sides
+      # fail closed (never "any caller is trusted") when this is empty.
+      - N8N_INGEST_SHARED_SECRET=${N8N_INGEST_SHARED_SECRET:-}
+      # This instance is single-tenant: one mailbox, one real TCMS
+      # organization. Set to Unternehmen X's actual organization id once it
+      # exists in TCMS (the seed script prints it).
+      - UNTERNEHMEN_X_TCMS_ORGANIZATION_ID=${UNTERNEHMEN_X_TCMS_ORGANIZATION_ID:-}
+      # No default: must be explicitly "local-default" or "cloud-gemini"
+      # before Flow 0 will submit any PDF/OCR invoice to Flow 1b. H1's
+      # original 2026-09-02 local-AI-only decision was superseded 2026-09-09
+      # -- Unternehmen X's real deployment now sets cloud-gemini (grounded in
+      # a real capacity study and a real local-vs-cloud accuracy comparison,
+      # see the project decision log); Flow 0's own "Check AI Execution
+      # Profile Configured" node still fails closed if this is unset.
+      - UNTERNEHMEN_X_AI_EXECUTION_PROFILE=${UNTERNEHMEN_X_AI_EXECUTION_PROFILE:-}
+      # Same no-default, fail-closed pattern, for Flow 0's own two
+      # classification steps (body-level "has invoice?" and per-attachment
+      # is_invoice/is_issued_to_company) -- previously hardcoded
+      # local-AI-only with no cloud path at all; now explicitly
+      # "local-default" or "cloud-gemini" via "Check Flow 0 Classification
+      # Profile (Message/Attachment)". Unternehmen X's real deployment sets
+      # cloud-gemini (2026-09-09 decision, see the project decision log).
+      - UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE=${UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE:-}
+      # Which real Gemini model every cloud-gemini call in this stack uses
+      # (Flow 0's two classifiers + Flow 1b's own extraction node -- all
+      # three read this same var). Defaults to gemini-3.6-flash if unset
+      # (unchanged prior behavior). Real live-tested fallback pair, both
+      # confirmed working against Unternehmen X's real API key the same day:
+      # gemini-3.6-flash (primary) and gemini-3.5-flash (confirmed working
+      # fallback when 3.6 hits its free-tier quota). gemini-2.5-flash/
+      # gemini-2.5-pro were tried and confirmed REJECTED ("no longer
+      # available to new users") despite being listed by the provider's own
+      # ListModels call -- listing is not sufficient evidence a model works.
+      - UNTERNEHMEN_X_GEMINI_MODEL=${UNTERNEHMEN_X_GEMINI_MODEL:-}
       # Empty by default: the stack must start without AI credentials. Flow
       # 1b stays visible but inactive/unconfigured until you set these (see
       # .env.example) and select a real Google Gemini credential in the n8n
@@ -79,8 +145,16 @@ services:
       # model is bundled or downloaded by this compose file.
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      # Points the local lane's PDF-to-image step at a small dev-only render
+      # helper (examples/n8n/scripts/pdf_render_service.py), required
+      # because most local OpenAI-compatible vision endpoints (verified
+      # against LM Studio) reject a raw PDF passed as image_url and need an
+      # actual rendered image. Not needed for the cloud lane (Gemini
+      # accepts the PDF directly). Must already be running yourself; nothing
+      # here starts it.
+      - LOCAL_PDF_RENDER_URL=${LOCAL_PDF_RENDER_URL:-}
     volumes:
-      - digitax_devstack_n8n_data:/home/node/.n8n
+      - unternehmen_x_devstack_n8n_data:/home/node/.n8n
     networks:
       - devstack
     depends_on:
@@ -97,8 +171,8 @@ services:
 
 networks:
   devstack:
-    name: digitax-phase1-devstack-net
+    name: unternehmen-x-phase1-devstack-net
 
 volumes:
-  digitax_devstack_n8n_data:
-    name: digitax_devstack_n8n_data
+  unternehmen_x_devstack_n8n_data:
+    name: unternehmen_x_devstack_n8n_data

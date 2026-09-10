@@ -137,20 +137,40 @@ def test_api_failure_nodes_build_nicht_pruefbar_technical_review_payload():
         code = nodes[failure_name]["parameters"]["jsCode"]
         assert '"nicht_pruefbar"' in code, f"{failure_name!r} must report status nicht_pruefbar"
         assert '"technical_review"' in code, f"{failure_name!r} must use a routing value distinct from the known review routes"
-        assert "failedStep" in code and "errorCode" in code and "correlationId" in code, (
+        assert "failedStep" in code and "n8nErrorCode" in code and "correlationId" in code, (
             f"{failure_name!r} must retain failed step, error code, and correlation ID"
         )
 
 
+CALL_ASSEMBLE_NODE = "Call Assemble ActivityExecution"
+
+
 def test_api_failure_nodes_feed_into_status_routing():
+    """Every failure node now feeds the shared Assemble ActivityExecution
+    call (which feeds Merge, which feeds the existing Status Routing switch)
+    instead of Status Routing directly -- see
+    test_status_routing_reached_via_merge_activity_execution below for the
+    rest of that chain."""
     data = _load_workflow()
     for failure_name in FAILURE_NODE_NAMES.values():
         branches = data["connections"][failure_name]["main"]
         targets = {edge["node"] for branch in branches for edge in branch}
-        assert targets == {STATUS_ROUTING_NODE}, (
-            f"{failure_name!r} must route through the existing Status Routing switch, "
-            "not duplicate its logic"
+        assert targets == {CALL_ASSEMBLE_NODE}, (
+            f"{failure_name!r} must route through the shared Assemble ActivityExecution call, "
+            "not duplicate control-report logic"
         )
+
+
+def test_status_routing_reached_via_merge_activity_execution():
+    data = _load_workflow()
+    assert (
+        data["connections"][CALL_ASSEMBLE_NODE]["main"][0][0]["node"]
+        == "Merge ActivityExecution into outcome"
+    )
+    assert (
+        data["connections"]["Merge ActivityExecution into outcome"]["main"][0][0]["node"]
+        == STATUS_ROUTING_NODE
+    )
 
 
 def test_technical_review_routing_value_falls_through_to_fallback():
@@ -193,3 +213,83 @@ def test_workflow_never_reaches_approval_booking_payment_or_supplier_nodes():
         )
     terminal_types = {n["type"] for n in data["nodes"] if n["name"] in REVIEW_NODES}
     assert terminal_types == {"n8n-nodes-base.noOp"}, "human-review endpoints must be no-ops"
+
+
+# ---------------------------------------------------------------------------
+# P2.1 Wave 1 A5 Stage 1: identity propagation + shared ActivityExecution
+# assembly. Named 01.3/02.9 (not 01.2/02.3) since those names are already
+# taken by "01.2 Load demo fixture" and "02.3 Handle capabilities failure"
+# in this workflow.
+# ---------------------------------------------------------------------------
+
+RUN_CONTEXT_NODE = "01.3 Build run context"
+MARK_ATTEMPT_START_NODE = "02.9 Mark phase1 attempt start"
+BUILD_REPORT_NODE = "04.1 Build control report"
+CALL_ASSEMBLE_NODE = "Call Assemble ActivityExecution"
+MERGE_NODE = "Merge ActivityExecution into outcome"
+
+
+def test_run_context_inserted_between_fixture_and_capabilities_read():
+    data = _load_workflow()
+    assert data["connections"]["01.2 Load demo fixture"]["main"][0][0]["node"] == RUN_CONTEXT_NODE
+    assert data["connections"][RUN_CONTEXT_NODE]["main"][0][0]["node"] == "02.1 Read API capabilities"
+
+
+def test_mark_attempt_start_inserted_between_profile_check_and_controls_call():
+    data = _load_workflow()
+    assert data["connections"]["02.2 Check Factur-X profile"]["main"][0][0]["node"] == MARK_ATTEMPT_START_NODE
+    assert data["connections"][MARK_ATTEMPT_START_NODE]["main"][0][0]["node"] == "03.1 Run DigiTax controls"
+
+
+def test_run_context_generates_secure_ids_with_no_weak_fallback():
+    code = _nodes_by_name(_load_workflow())[RUN_CONTEXT_NODE]["parameters"]["jsCode"]
+    assert 'require("crypto").randomUUID' in code
+    assert "correlationId" in code and "processInstanceId" in code
+    assert "Math.random()" not in code
+    assert "SECURE_UUID_UNAVAILABLE" in code
+
+
+def test_controls_call_sends_x_correlation_id_header():
+    node = _nodes_by_name(_load_workflow())["03.1 Run DigiTax controls"]
+    assert node["parameters"]["sendHeaders"] is True
+    headers = node["parameters"]["headerParameters"]["parameters"]
+    header = next(h for h in headers if h["name"] == "X-Correlation-ID")
+    assert RUN_CONTEXT_NODE in header["value"]
+
+
+def test_branch_nodes_emit_normalized_envelope_and_no_full_activity_execution():
+    data = _load_workflow()
+    nodes = _nodes_by_name(data)
+
+    capabilities_code = nodes["02.3 Handle capabilities failure"]["parameters"]["jsCode"]
+    assert '"PRE_FLIGHT_REJECTED"' in capabilities_code
+    assert "gateDecisionAt" in capabilities_code
+
+    controls_failure_code = nodes["03.2 Handle controls-call failure"]["parameters"]["jsCode"]
+    assert '"TRANSPORT_FAILURE"' in controls_failure_code
+    assert '"TIMEOUT"' in controls_failure_code
+    assert "ETIMEDOUT" in controls_failure_code
+
+    build_report_code = nodes[BUILD_REPORT_NODE]["parameters"]["jsCode"]
+    assert '"REPORT"' in build_report_code
+
+    for name in ("02.3 Handle capabilities failure", "03.2 Handle controls-call failure", BUILD_REPORT_NODE):
+        assert '"executionId"' not in nodes[name]["parameters"]["jsCode"]
+
+
+def test_all_three_branch_nodes_converge_on_shared_assembly():
+    data = _load_workflow()
+    for source in ("02.3 Handle capabilities failure", "03.2 Handle controls-call failure", BUILD_REPORT_NODE):
+        targets = {edge["node"] for branch in data["connections"][source]["main"] for edge in branch}
+        assert targets == {CALL_ASSEMBLE_NODE}, f"{source!r} must feed {CALL_ASSEMBLE_NODE!r}"
+    assert data["connections"][CALL_ASSEMBLE_NODE]["main"][0][0]["node"] == MERGE_NODE
+    assert data["connections"][MERGE_NODE]["main"][0][0]["node"] == STATUS_ROUTING_NODE
+
+
+def test_call_assemble_activity_execution_references_shared_subworkflow():
+    node = _nodes_by_name(_load_workflow())[CALL_ASSEMBLE_NODE]
+    assert node["type"] == "n8n-nodes-base.executeWorkflow"
+    assert (
+        node["parameters"]["workflowId"]["value"]
+        == "digitax-invoice-phase1-shared-assemble-activity-execution"
+    )

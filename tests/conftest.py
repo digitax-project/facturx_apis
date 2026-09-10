@@ -73,6 +73,18 @@ def minimum_profile_xml_bytes() -> bytes:
 
 
 @pytest.fixture
+def invalid_xsd_hybrid_pdf_bytes(invalid_xsd_xml_bytes) -> bytes:
+    """A hybrid PDF whose embedded XML is the same XSD-invalid fixture as
+    invalid_xsd_xml_bytes -- used to prove that invalid *structured* XML is
+    never silently replaced or supplemented by OCR/PDF extraction (pilot
+    routing rule 3: "Invalid existing XML is never replaced by OCR")."""
+    blank_pdf = make_blank_pdf_bytes()
+    return generate_from_binary(
+        blank_pdf, invalid_xsd_xml_bytes, flavor="factur-x", level="en16931", check_xsd=False
+    )
+
+
+@pytest.fixture
 def hybrid_pdf_without_accepted_embedded_xml_bytes(valid_en16931_xml_bytes) -> bytes:
     """A PDF carrying an XML attachment under a filename that is NOT one of
     the well-known Factur-X/ZUGFeRD/Order-X names (facturx.get_xml_from_pdf's

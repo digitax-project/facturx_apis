@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitax.de/schemas/a6a/result-bundle/1.0.0",
+  "title": "A6a Flow 1a Batch Item TCMS Result Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "resultBundleSchemaVersion",
+    "phase1ControlReport",
+    "activityExecution",
+    "riskReviewReport",
+    "routingStatus"
+  ],
+  "properties": {
+    "resultBundleSchemaVersion": { "const": "1.0.0" },
+    "phase1ControlReport": {
+      "type": ["object", "null"]
+    },
+    "activityExecution": {
+      "type": "object"
+    },
+    "riskReviewReport": {
+      "type": ["object", "null"]
+    },
+    "routingStatus": {
+      "enum": [
+        "NO_RISK_REVIEW_REQUIRED",
+        "RISK_REVIEW_PROPOSED",
+        "EVIDENCE_INSUFFICIENT",
+        "TECHNICAL_FAILURE",
+        "RISK_REVIEW_MISSING_TCMS_ORGANIZATION_ID"
+      ]
+    }
+  }
+}

@@ -1,7 +1,8 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "reportId": "REP-UX-2026-001",
   "runId": "RUN-UX-2026-001",
+  "correlationId": "CORR-DEMO-0001",
   "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "catalogVersion": "0.2.0",
   "controlProfileId": "inbound-starter-de-v1",
@@ -32,5 +33,6 @@
   ],
   "suggestions": [],
   "reqeli": { "invoked": false, "status": "not_required", "analysisRef": null },
+  "startedAt": "2026-08-07T08:59:57+02:00",
   "createdAt": "2026-08-07T09:00:00+02:00"
 }
