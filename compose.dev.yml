@@ -111,11 +111,32 @@ services:
       # exists in TCMS (the seed script prints it).
       - UNTERNEHMEN_X_TCMS_ORGANIZATION_ID=${UNTERNEHMEN_X_TCMS_ORGANIZATION_ID:-}
       # No default: must be explicitly "local-default" or "cloud-gemini"
-      # before Flow 0 will submit any PDF/OCR invoice to Flow 1b -- H1's
-      # local-AI-only decision (2026-09-02) means this should be
-      # local-default in practice; Flow 0's own "Check AI Execution Profile
-      # Configured" node fails closed if this is unset or unrecognized.
+      # before Flow 0 will submit any PDF/OCR invoice to Flow 1b. H1's
+      # original 2026-09-02 local-AI-only decision was superseded 2026-09-09
+      # -- Unternehmen X's real deployment now sets cloud-gemini (grounded in
+      # a real capacity study and a real local-vs-cloud accuracy comparison,
+      # see the project decision log); Flow 0's own "Check AI Execution
+      # Profile Configured" node still fails closed if this is unset.
       - UNTERNEHMEN_X_AI_EXECUTION_PROFILE=${UNTERNEHMEN_X_AI_EXECUTION_PROFILE:-}
+      # Same no-default, fail-closed pattern, for Flow 0's own two
+      # classification steps (body-level "has invoice?" and per-attachment
+      # is_invoice/is_issued_to_company) -- previously hardcoded
+      # local-AI-only with no cloud path at all; now explicitly
+      # "local-default" or "cloud-gemini" via "Check Flow 0 Classification
+      # Profile (Message/Attachment)". Unternehmen X's real deployment sets
+      # cloud-gemini (2026-09-09 decision, see the project decision log).
+      - UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE=${UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE:-}
+      # Which real Gemini model every cloud-gemini call in this stack uses
+      # (Flow 0's two classifiers + Flow 1b's own extraction node -- all
+      # three read this same var). Defaults to gemini-3.6-flash if unset
+      # (unchanged prior behavior). Real live-tested fallback pair, both
+      # confirmed working against Unternehmen X's real API key the same day:
+      # gemini-3.6-flash (primary) and gemini-3.5-flash (confirmed working
+      # fallback when 3.6 hits its free-tier quota). gemini-2.5-flash/
+      # gemini-2.5-pro were tried and confirmed REJECTED ("no longer
+      # available to new users") despite being listed by the provider's own
+      # ListModels call -- listing is not sufficient evidence a model works.
+      - UNTERNEHMEN_X_GEMINI_MODEL=${UNTERNEHMEN_X_GEMINI_MODEL:-}
       # Empty by default: the stack must start without AI credentials. Flow
       # 1b stays visible but inactive/unconfigured until you set these (see
       # .env.example) and select a real Google Gemini credential in the n8n

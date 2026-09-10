@@ -1,14 +1,14 @@
 {
   "id": "digitax-invoice-phase1-flow0-mailbox-intake",
   "name": "DigiTax | Invoice Phase 1 | Flow 0 | Mailbox Intake | v0.1.0",
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   },
   "nodes": [
     {
       "parameters": {
-        "content": "# Flow 0: Mailbox Intake (v0.1.0)\n\nWatches one Outlook mail folder, classifies which messages/attachments are\nreal invoices addressed to Unternehmen X, then routes each confirmed invoice\ninto the existing frozen Flow 1a (structured factur-X/XRechnung) or Flow 1b\n(PDF/OCR) webhook -- exactly the same webhooks TCMS's own browser-triggered\nroutes call -- and finally ingests the resulting resultBundle into TCMS\nthrough a dedicated service-to-service endpoint, since an email arriving on\nits own has no browser session to authenticate with.\n\nThis instance is single-tenant (one mailbox, one real TCMS organization,\nset via UNTERNEHMEN_X_TCMS_ORGANIZATION_ID) -- no per-company mailbox routing\nlogic exists here on purpose.\n\nLOCAL AI ONLY, no exceptions: both classification steps (body-level\n\"has invoice?\" and per-attachment is_invoice/is_issued_to_company) call\nLOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL exclusively -- never Gemini or any other\ncloud provider. This is a deliberate policy decision (H1, real-tenant\nsession, 2026-09-02), not a cost/latency choice: real invoice content must\nnever leave the local machine. If you are tempted to add a cloud fallback\nhere, don't -- ask first.\n\nImported inactive: fill in the REPLACE_WITH_YOUR_CREDENTIAL_ID Microsoft\nOutlook credential and the REPLACE_WITH_YOUR_INVOICE_FOLDER folder\nreference in the n8n UI, set LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL/\nLOCAL_PDF_RENDER_URL (same vars Flow 1b's local lane already uses) plus\nthe Flow 0 env vars documented in .env.example, and publish a real\nOrganizationBaseline for this organization in TCMS (Flow 0 fails closed\nwith no buyer master data to send) before activating.",
+        "content": "# Flow 0: Mailbox Intake (v0.1.0)\n\nWatches one Outlook mail folder, classifies which messages/attachments are\nreal invoices addressed to Unternehmen X, then routes each confirmed invoice\ninto the existing frozen Flow 1a (structured factur-X/XRechnung) or Flow 1b\n(PDF/OCR) webhook -- exactly the same webhooks TCMS's own browser-triggered\nroutes call -- and finally ingests the resulting resultBundle into TCMS\nthrough a dedicated service-to-service endpoint, since an email arriving on\nits own has no browser session to authenticate with.\n\nThis instance is single-tenant (one mailbox, one real TCMS organization,\nset via UNTERNEHMEN_X_TCMS_ORGANIZATION_ID) -- no per-company mailbox routing\nlogic exists here on purpose.\n\nAI EXECUTION PROFILE, no silent default: both classification steps\n(body-level \"has invoice?\" and per-attachment is_invoice/is_issued_to_company)\nrequire UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE to be explicitly\n\"local-default\" (LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL) or \"cloud-gemini\"\n(Google Gemini (PaLM) API credential, selected in the n8n UI) -- an unset\nor unrecognized value fails closed to \"...Profile Not Configured\" rather\nthan guessing. H1's original 2026-09-02 policy for this workflow was\nlocal-AI-only, no exceptions, for privacy (real invoice content never\nleaving the local machine); superseded 2026-09-09 by H1's decision that\nUnternehmen X goes full cloud-gemini, grounded in a real capacity study\n(a real capacity study (see the project decision log) -- real steady-state\nvolume is ~1000x under Gemini's free-tier daily quota) and consistent with\nthe same decision that already made Flow 1b's extraction lane cloud-first.\nUnternehmen X's real .env sets cloud-gemini. local-default remains a real,\nsupported option -- e.g. for a future tenant that has not consented to a\n3rd-party AI provider seeing its invoice content -- not a legacy leftover.\nSee the project decision log for the full record; do not change this\ndefault again without a fresh H1 decision logged there.\n\nImported inactive: fill in the REPLACE_WITH_YOUR_CREDENTIAL_ID Microsoft\nOutlook credential and the REPLACE_WITH_YOUR_INVOICE_FOLDER folder\nreference in the n8n UI, set LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL/\nLOCAL_PDF_RENDER_URL (same vars Flow 1b's local lane already uses) plus\nthe Flow 0 env vars documented in .env.example, select a real Google\nGemini (PaLM) API credential on the two \"...via Cloud (Gemini)\" nodes if\nusing cloud-gemini, and publish a real OrganizationBaseline for this\norganization in TCMS (Flow 0 fails closed with no buyer master data to\nsend) before activating.",
         "height": 560,
         "width": 900,
         "color": 4
@@ -30,6 +30,46 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "position": [-2016, 48],
       "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "jsCode": "// 2026-09-09, real live-test finding: n8n has no built-in \"prevent\n// overlapping executions\" setting. A real test session fired 5 separate\n// manual executions within 53 seconds (14:18:00-14:18:53) -- each one\n// independently made its own real Gemini call with zero coordination\n// between them, blowing straight through the free-tier quota regardless\n// of the per-execution batching/throttling fix added earlier the same day\n// (that fix only paces calls *within* one execution). This uses n8n's\n// workflow static data (persists across executions of the same workflow,\n// in n8n's own DB) as a real lock: acquire it here, skip the whole run if\n// another one is still active. STALE_MS is a safety net, not the primary\n// mechanism -- if a previous run crashed or was killed without a normal\n// end, the lock would otherwise never release; 10 minutes is generous\n// against this workflow's real worst case (8 attachments, 13s-spaced\n// classify + submit stages, observed ~3 minutes end to end) without\n// risking a permanently stuck lock. The lock is deliberately NOT released\n// at every terminal node (there are ~15 of them across this workflow;\n// missing even one would silently defeat the lock) -- staleness expiry is\n// the one release path that cannot be missed by a future edit here.\nconst staticData = $getWorkflowStaticData('global');\nconst now = Date.now();\nconst STALE_MS = 10 * 60 * 1000;\n\nif (staticData.flow0LockAcquiredAt && (now - staticData.flow0LockAcquiredAt) < STALE_MS) {\n  return [{\n    json: {\n      locked: true,\n      lockAgeSeconds: Math.round((now - staticData.flow0LockAcquiredAt) / 1000),\n    },\n  }];\n}\n\nstaticData.flow0LockAcquiredAt = now;\nreturn [{ json: { locked: false } }];\n"
+      },
+      "id": "f0-acquire-run-lock",
+      "name": "Acquire Flow 0 Run Lock",
+      "type": "n8n-nodes-base.code",
+      "position": [-1936, 48],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "f0-lock-check-cond",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "leftValue": "={{ $json.locked }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0-is-locked",
+      "name": "Is Flow 0 Already Running?",
+      "type": "n8n-nodes-base.if",
+      "position": [-1880, 48],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-1880, 224],
+      "id": "f0-skipped-already-running",
+      "name": "Flow 0 Skipped (Already Running)"
     },
     {
       "parameters": {
@@ -55,7 +95,7 @@
           "name": "Microsoft Outlook"
         }
       },
-      "notes": "Points at a dedicated test-invoice mail folder -- no subject-keyword pre-filter, since every message moved into this folder is already a real test invoice by construction; the two-stage classification gate downstream (local text classification, then per-attachment local vision classification) still runs unchanged. Credential id and folder value are placeholders -- pick your own Microsoft Outlook credential and folder live in the n8n UI after importing (n8n-init re-imports this file on every container restart, which resets these to whatever this file says, so a real deployment will re-pick them after a restart regardless)."
+      "notes": "Points at a dedicated test-invoice mail folder -- no subject-keyword pre-filter, since every message moved into this folder is already a real test invoice by construction; the two-stage classification gate downstream (local text classification, then per-attachment local vision classification, cloud-gemini as of 2026-09-09) still runs unchanged. Credential id and folder value are placeholders -- pick your own Microsoft Outlook credential and folder live in the n8n UI after importing (n8n-init re-imports this file on every container restart, which resets these to whatever this file says, so a real deployment will re-pick them after a restart regardless)."
     },
     {
       "parameters": {
@@ -71,13 +111,112 @@
     },
     {
       "parameters": {
-        "jsCode": "// Local-AI-only classification (H1 decision, 2026-09-02): plain text\n// completion, no vision needed at this stage -- the body/subject text is\n// enough to decide whether to even look at attachments.\nconst PROMPT_PREFIX = 'Classify the following email text into exactly one category: \"has invoice\" (there is at least one invoice in the message) or \"has no invoice\" (there is no invoice in the message). Output JSON only, no markdown fences, in the form {\"category\": \"has invoice\"} or {\"category\": \"has no invoice\"}.\\n\\nEmail text:\\n';\n\nreturn items.map(item => ({\n  json: {\n    localRequest: {\n      model: $env.LOCAL_LLM_MODEL,\n      temperature: 0,\n      messages: [\n        { role: 'user', content: PROMPT_PREFIX + (item.json.markdown || '') },\n      ],\n    },\n  },\n}));\n"
+        "jsCode": "// H1's original 2026-09-02 policy for this workflow was local-AI-only, no\n// exceptions. Superseded 2026-09-09: H1 decided Unternehmen X goes full\n// cloud-gemini, grounded in a real capacity study (see the project decision log)\n// (real steady-state volume is ~1000x under Gemini's free-tier daily quota,\n// even Flow 0's extra classification calls included) -- same decision that\n// already made Flow 1b's extraction lane cloud-first. No silent default\n// either way, though: UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE must be\n// explicitly \"local-default\" or \"cloud-gemini\" (see \"Check Flow 0\n// Classification Profile (Message)\"), same discipline as Flow 1b's\n// UNTERNEHMEN_X_AI_EXECUTION_PROFILE below -- Unternehmen X's real .env sets\n// cloud-gemini; local-default stays available (e.g. for a future tenant\n// that has not consented to a 3rd-party AI provider). Building both\n// request bodies here is free (no API call yet); the profile check\n// downstream decides which one actually gets sent.\n//\n// Prompt revised 2026-09-09 (real live-test finding, H1-reported): a real\n// test email with the word \"invoice\" three times in the subject/body\n// (\"invoice sammlung invoice ... invoice sammlungen\") and 8 real invoice\n// PDF attachments was still classified \"has no invoice\" by Gemini -- the\n// original prompt only ever saw body text and effectively required a real\n// invoice narrative, not just an invoice-related label. Since this\n// classifier is only a cheap pre-filter before the real detector\n// (per-attachment vision classification downstream), it must fail toward\n// \"has invoice\" under real uncertainty, not against it: a false \"has\n// invoice\" costs one extra (correctly filtered) attachment check: a false\n// \"has no invoice\" silently drops a real invoice with zero downstream\n// trace. hasAttachments (already present on the message object itself, no\n// extra API call needed) is now passed explicitly so the model knows\n// attachments exist even though it cannot see their content.\nfunction buildMessagePrompt(hasAttachments) {\n  var base = 'Classify the following email into exactly one category: \"has invoice\" or \"has no invoice\". This is a cheap pre-filter before a separate check looks at any attachments, so treat \"has invoice\" as the safe default whenever there is real uncertainty -- only answer \"has no invoice\" when you are confident this is clearly unrelated to invoices (e.g. spam, a newsletter, an out-of-office reply, internal chat with no billing content).';\n  var attachmentNote = hasAttachments\n    ? ' This email HAS file attachments -- you cannot see their content, but any real invoice is very likely inside one of them rather than narrated in the text below. Treat any invoice-related word anywhere in the subject/body (even just a label like \"invoice\" or \"Rechnung\" with no further narrative) as sufficient evidence to answer \"has invoice\".'\n    : ' This email has NO attachments, so an invoice can only exist if it is actually described in the text below.';\n  return base + attachmentNote + ' Output JSON only, no markdown fences, in the form {\"category\": \"has invoice\"} or {\"category\": \"has no invoice\"}.\\n\\nEmail text:\\n';\n}\n\nreturn items.map(item => {\n  const text = item.json.markdown || '';\n  const hasAttachments = item.json.hasAttachments === true;\n  const prompt = buildMessagePrompt(hasAttachments) + text;\n  return {\n    json: {\n      localRequest: {\n        model: $env.LOCAL_LLM_MODEL,\n        temperature: 0,\n        messages: [\n          { role: 'user', content: prompt },\n        ],\n      },\n      geminiRequest: {\n        contents: [\n          { parts: [{ text: prompt }] },\n        ],\n      },\n    },\n  };\n});\n"
       },
       "id": "f0-build-message-classification-request",
       "name": "Build Message Classification Request (Local)",
       "type": "n8n-nodes-base.code",
       "position": [-1408, 48],
       "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "f0-msg-profile-cond-cloud",
+                    "leftValue": "={{ $env.UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE }}",
+                    "rightValue": "cloud-gemini",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "outputKey": "cloud"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "f0-msg-profile-cond-local",
+                    "leftValue": "={{ $env.UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE }}",
+                    "rightValue": "local-default",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "outputKey": "local"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "f0-check-msg-profile",
+      "name": "Check Flow 0 Classification Profile (Message)",
+      "type": "n8n-nodes-base.switch",
+      "position": [-1344, 48],
+      "typeVersion": 3.4,
+      "notes": "No default: UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE must be explicitly \"local-default\" or \"cloud-gemini\" -- same fail-closed discipline as \"Check AI Execution Profile Configured\" downstream for Flow 1b. Unternehmen X's real .env sets cloud-gemini per H1's 2026-09-09 decision (the project decision log); local-default remains available for a future tenant that has not consented to a 3rd-party AI provider seeing its invoice content. Unset/typo'd values fall to the \"extra\" output, not silently to either provider."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.UNTERNEHMEN_X_GEMINI_MODEL || 'gemini-3.6-flash') + ':generateContent' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiRequest) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 13000
+            }
+          }
+        }
+      },
+      "id": "f0-classify-message-cloud",
+      "name": "Classify Message via Cloud (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [-1280, 224],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "notes": "Same Gemini credential pattern as Flow 1b's cloud lane -- select your own real credential in the n8n UI after importing. Only reached when UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE=cloud-gemini. maxTries:5/waitBetweenTries:2000 (2026-09-09, real stress-test finding): a live 2-email test run had 1/2 items fail here with Gemini's real 503 \"model currently experiencing high demand\" transient-overload error -- the original maxTries:3 with no delay retried too fast to let a transient overload clear. Matches Flow 1b's existing maxTries:5 precedent, plus an explicit delay Flow 1b's node doesn't have but should probably also get if this recurs there. UPDATE same day, real 8-attachment live test: options.batching (batchSize:1/batchInterval:13000) added after a real 429 came back verbatim as \"Quota exceeded ... limit: 5, model: gemini-3.6-flash\" -- the actual free-tier cap is 5 requests/minute, not the ~15 RPM the earlier capacity study (a real capacity study (see the project decision log)) assumed and explicitly flagged as unverified. Retries alone cannot fix a real quota exhaustion (Google's own suggested wait was 44s, far past maxTries:5 at 2s apart) -- spacing calls out up front is the real fix. See decision-log.md."
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractText(item) {\n  const j = item.json || {};\n  const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;\n  if (Array.isArray(parts) && parts[0] && typeof parts[0].text === 'string') {\n    return parts[0].text;\n  }\n  throw new Error('Could not find Gemini text output in expected candidates[0].content.parts[0].text field.');\n}\n\nfunction stripFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nreturn items.map((item, index) => {\n  const original = $('Get All Messages from one specific Mail-Folder').itemMatching(index).json;\n  const raw = extractText(item);\n  const cleaned = stripFences(raw);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Gemini message-classification output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  return {\n    json: {\n      ...original,\n      category: parsed.category === 'has invoice' ? 'has invoice' : 'has no invoice',\n    },\n  };\n});\n"
+      },
+      "id": "f0-parse-message-classification-cloud",
+      "name": "Parse Message Classification (Cloud)",
+      "type": "n8n-nodes-base.code",
+      "position": [-1152, 224],
+      "typeVersion": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-1344, 400],
+      "id": "f0-msg-profile-not-configured",
+      "name": "Message Classification Profile Not Configured"
     },
     {
       "parameters": {
@@ -329,13 +468,112 @@
     },
     {
       "parameters": {
-        "jsCode": "// Local-AI-only classification (H1 decision, 2026-09-02): never Gemini,\n// never any cloud vision provider, for real invoice content.\nconst PROMPT = 'You are an accounts receivable agent helping to identify whether an email attachment is an invoice. Look at the image and answer: (1) is_invoice: is this document an invoice? (2) is_issued_to_company: is this invoice addressed/issued to the buyer company (not some unrelated document)? Output JSON only, no markdown fences, exactly in the form {\"is_invoice\": true, \"is_issued_to_company\": true}.';\n\nreturn items.map(item => {\n  // Came from the render branch (PDF -> PNG) or the passthrough branch\n  // (already an image) -- either way, one image to classify.\n  const base64 = item.json.pngBase64 !== undefined ? item.json.pngBase64 : item.json.attachmentBase64;\n  const mimeType = item.json.pngBase64 !== undefined ? 'image/png' : item.json.attachmentMimeType;\n\n  return {\n    json: {\n      localRequest: {\n        model: $env.LOCAL_LLM_MODEL,\n        temperature: 0,\n        messages: [\n          {\n            role: 'user',\n            content: [\n              { type: 'text', text: PROMPT },\n              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },\n            ],\n          },\n        ],\n      },\n    },\n    binary: item.binary,\n  };\n});\n"
+        "jsCode": "// H1's original 2026-09-02 policy for this workflow was local-AI-only, no\n// exceptions. Superseded 2026-09-09: H1 decided Unternehmen X goes full\n// cloud-gemini (a real capacity study (see the project decision log), same\n// decision that already made Flow 1b's extraction lane cloud-first). No\n// silent default either way: UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE must be\n// explicitly \"local-default\" or \"cloud-gemini\" (see \"Check Flow 0\n// Classification Profile (Attachment)\"). Building both request bodies here\n// is free (no API call yet); the profile check downstream decides which\n// one actually gets sent.\nconst PROMPT = 'You are an accounts receivable agent helping to identify whether an email attachment is an invoice. Look at the image and answer: (1) is_invoice: is this document an invoice? (2) is_issued_to_company: is this invoice addressed/issued to the buyer company (not some unrelated document)? Output JSON only, no markdown fences, exactly in the form {\"is_invoice\": true, \"is_issued_to_company\": true}.';\n\nreturn items.map(item => {\n  // Came from the render branch (PDF -> PNG) or the passthrough branch\n  // (already an image) -- either way, one image to classify.\n  const base64 = item.json.pngBase64 !== undefined ? item.json.pngBase64 : item.json.attachmentBase64;\n  const mimeType = item.json.pngBase64 !== undefined ? 'image/png' : item.json.attachmentMimeType;\n\n  return {\n    json: {\n      localRequest: {\n        model: $env.LOCAL_LLM_MODEL,\n        temperature: 0,\n        messages: [\n          {\n            role: 'user',\n            content: [\n              { type: 'text', text: PROMPT },\n              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },\n            ],\n          },\n        ],\n      },\n      geminiRequest: {\n        contents: [\n          {\n            parts: [\n              { inline_data: { mime_type: mimeType, data: base64 } },\n              { text: PROMPT },\n            ],\n          },\n        ],\n      },\n    },\n    binary: item.binary,\n  };\n});\n"
       },
       "id": "f0-build-vision-classification-request",
       "name": "Build Vision Classification Request (Local)",
       "type": "n8n-nodes-base.code",
       "position": [352, -32],
       "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "f0-attach-profile-cond-cloud",
+                    "leftValue": "={{ $env.UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE }}",
+                    "rightValue": "cloud-gemini",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "outputKey": "cloud"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "f0-attach-profile-cond-local",
+                    "leftValue": "={{ $env.UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE }}",
+                    "rightValue": "local-default",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "outputKey": "local"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "f0-check-attach-profile",
+      "name": "Check Flow 0 Classification Profile (Attachment)",
+      "type": "n8n-nodes-base.switch",
+      "position": [480, 96],
+      "typeVersion": 3.4,
+      "notes": "Same explicit, fail-closed gate as the message-level check -- no silent default. Unternehmen X's real .env sets cloud-gemini per H1's 2026-09-09 decision (the project decision log); local-default remains available for a future tenant that has not consented to a 3rd-party AI provider. Unset/typo'd values fall to the \"extra\" output, not silently to either provider."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + ($env.UNTERNEHMEN_X_GEMINI_MODEL || 'gemini-3.6-flash') + ':generateContent' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiRequest) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 13000
+            }
+          }
+        }
+      },
+      "id": "f0-classify-attachment-cloud",
+      "name": "Classify Attachment via Cloud (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [480, -160],
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Gemini (PaLM) API"
+        }
+      },
+      "notes": "Same Gemini credential pattern as Flow 1b's cloud lane -- select your own real credential in the n8n UI after importing. Only reached when UNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE=cloud-gemini. Gemini accepts the image inline (inline_data), unlike most local vision endpoints which reject PDF and often need a rendered PNG -- the render branch upstream still runs unconditionally for the local lane's benefit, and its PNG output is reused here rather than re-rendering."
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractText(item) {\n  const j = item.json || {};\n  const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;\n  if (Array.isArray(parts) && parts[0] && typeof parts[0].text === 'string') {\n    return parts[0].text;\n  }\n  throw new Error('Could not find Gemini text output in expected candidates[0].content.parts[0].text field.');\n}\n\nfunction stripFences(text) {\n  return text\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n}\n\nreturn items.map(item => {\n  const raw = extractText(item);\n  const cleaned = stripFences(raw);\n\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(`Gemini attachment-classification output is not valid JSON. Raw output: ${cleaned}`);\n  }\n\n  return {\n    json: {\n      is_invoice: parsed.is_invoice === true,\n      is_issued_to_company: parsed.is_issued_to_company === true,\n    },\n  };\n});\n"
+      },
+      "id": "f0-parse-attachment-classification-cloud",
+      "name": "Parse Attachment Classification (Cloud)",
+      "type": "n8n-nodes-base.code",
+      "position": [608, -160],
+      "typeVersion": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [480, 272],
+      "id": "f0-attach-profile-not-configured",
+      "name": "Attachment Classification Profile Not Configured"
     },
     {
       "parameters": {
@@ -453,7 +691,7 @@
     },
     {
       "parameters": {
-        "content": "## Mail intake and per-attachment invoice classification (local AI only)\nBody-level \"has invoice?\" classifier, then per-attachment is_invoice/\nis_issued_to_company vision check -- both call LOCAL_LLM_BASE_URL/\nLOCAL_LLM_MODEL exclusively (H1 decision, 2026-09-02: real invoice content\nnever touches a cloud AI provider). PDFs are rendered to PNG first via\nLOCAL_PDF_RENDER_URL, same as Flow 1b's own local lane. Everything from\n\"Detect Invoice Format\" onward is new: Flow 0's own job is routing and TCMS\ningestion, not re-running the legacy K1/K2/BZSt/Excel/Reqeli chain (out of\nscope here).",
+        "content": "## Mail intake and per-attachment invoice classification (local or cloud-gemini, explicit)\nBody-level \"has invoice?\" classifier, then per-attachment is_invoice/\nis_issued_to_company vision check -- each routes through a fail-closed\nUNTERNEHMEN_X_FLOW0_CLASSIFICATION_PROFILE gate to either LOCAL_LLM_BASE_URL/\nLOCAL_LLM_MODEL or Gemini (2026-09-09 H1 decision: Unternehmen X's real .env\nsets cloud-gemini, see decision-log.md). PDFs are rendered to PNG first for\nthe local lane via LOCAL_PDF_RENDER_URL, same as Flow 1b's own local lane;\nthe cloud lane sends the image inline to Gemini directly. Everything from\n\"Detect Invoice Format\" onward is new: Flow 0's own job is routing and TCMS\ningestion, not re-running the legacy K1/K2/BZSt/Excel/Reqeli chain (out of\nscope here).",
         "height": 460,
         "width": 2700,
         "color": 4
@@ -653,6 +891,29 @@
       "notes": "Server-to-server ingestion: no browser session exists for an email that arrived on its own -- see server/api/organizations/[organizationId]/evidence/n8n-inbound-runs/index.post.ts in tcms-framework."
     },
     {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "f0-verify-ingest-structured-cond",
+              "operator": { "type": "number", "operation": "exists", "singleValue": true },
+              "leftValue": "={{ $json.activityExecutionId }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0-verify-ingest-structured",
+      "name": "Verify TCMS Ingestion Response (Structured)",
+      "type": "n8n-nodes-base.if",
+      "position": [2408, -384],
+      "typeVersion": 2.2,
+      "notes": "2026-09-09, real live-test finding: a real 8-attachment run had one \"Ingest Result to TCMS (OCR)\" call return HTTP 200 with TCMS's login-page HTML instead of real JSON (likely the TCMS dev server hot-reloading at that exact moment) -- n8n's httpRequest node treats any 2xx as success regardless of body shape, so this silently counted as a success with no real database write. This gate makes the same check for the structured lane: a genuine ingestion response always has a numeric activityExecutionId; anything else (including a 200 with the wrong body) now correctly routes to the failure branch instead of \"End Workflow\"."
+    },
+    {
       "parameters": {},
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
@@ -746,7 +1007,14 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 13000
+            }
+          }
+        }
       },
       "id": "f0-submit-flow1b",
       "name": "Submit to Flow 1b",
@@ -757,7 +1025,7 @@
       "maxTries": 3,
       "waitBetweenTries": 1000,
       "onError": "continueErrorOutput",
-      "notes": "Calls Flow 1b's own webhook (digitax-phase1-flow1b-pdf-upload) directly, on this same n8n instance -- the identical webhook TCMS's own n8n-flow1b-runs route calls. The multipart file field must be named \"data\" (matches Flow 1b's own OCR chain, not \"invoiceFile\" like Flow 1a). Returns {resultBundle: ...} on success (unified with Flow 1a's envelope since 2026-09-01)."
+      "notes": "Calls Flow 1b's own webhook (digitax-phase1-flow1b-pdf-upload) directly, on this same n8n instance -- the identical webhook TCMS's own n8n-flow1b-runs route calls. The multipart file field must be named \"data\" (matches Flow 1b's own OCR chain, not \"invoiceFile\" like Flow 1a). Returns {resultBundle: ...} on success (unified with Flow 1a's envelope since 2026-09-01). batchSize:1/batchInterval:13000 added 2026-09-09: each call here triggers a real Gemini extraction call inside Flow 1b when aiExecutionProfile=cloud-gemini, and a real live 8-attachment test found the true free-tier limit is 5 requests/minute (not the ~15 RPM the earlier capacity study assumed) -- without spacing, multiple invoices submitted back-to-back in one Flow 0 run burst past that limit. See decision-log.md."
     },
     {
       "parameters": {},
@@ -796,6 +1064,29 @@
       "notes": "Server-to-server ingestion: no browser session exists for an email that arrived on its own -- see server/api/organizations/[organizationId]/evidence/n8n-inbound-runs/index.post.ts in tcms-framework."
     },
     {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "f0-verify-ingest-ocr-cond",
+              "operator": { "type": "number", "operation": "exists", "singleValue": true },
+              "leftValue": "={{ $json.activityExecutionId }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0-verify-ingest-ocr",
+      "name": "Verify TCMS Ingestion Response (OCR)",
+      "type": "n8n-nodes-base.if",
+      "position": [2648, -128],
+      "typeVersion": 2.2,
+      "notes": "2026-09-09, real live-test finding: a real 8-attachment run had one of these calls return HTTP 200 with TCMS's login-page HTML instead of real JSON (likely the TCMS dev server hot-reloading at that exact moment) -- n8n's httpRequest node treats any 2xx as success regardless of body shape, so this silently counted as a success with no real database write (only 3 real DB rows existed against 4 apparent \"successes\"). A genuine ingestion response always has a numeric activityExecutionId; anything else (including a 200 with the wrong body) now correctly routes to the failure branch instead of \"End Workflow\"."
+    },
+    {
       "parameters": {},
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
@@ -828,6 +1119,17 @@
   "connections": {
     "Start Workflow": {
       "main": [
+        [{ "node": "Acquire Flow 0 Run Lock", "type": "main", "index": 0 }]
+      ]
+    },
+    "Acquire Flow 0 Run Lock": {
+      "main": [
+        [{ "node": "Is Flow 0 Already Running?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is Flow 0 Already Running?": {
+      "main": [
+        [{ "node": "Flow 0 Skipped (Already Running)", "type": "main", "index": 0 }],
         [{ "node": "Get All Messages from one specific Mail-Folder", "type": "main", "index": 0 }]
       ]
     },
@@ -843,7 +1145,26 @@
     },
     "Build Message Classification Request (Local)": {
       "main": [
-        [{ "node": "Classify Message Locally", "type": "main", "index": 0 }]
+        [{ "node": "Check Flow 0 Classification Profile (Message)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Flow 0 Classification Profile (Message)": {
+      "main": [
+        [{ "node": "Classify Message via Cloud (Gemini)", "type": "main", "index": 0 }],
+        [{ "node": "Classify Message Locally", "type": "main", "index": 0 }],
+        [{ "node": "Message Classification Profile Not Configured", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classify Message via Cloud (Gemini)": {
+      "main": [
+        [{ "node": "Parse Message Classification (Cloud)", "type": "main", "index": 0 }],
+        [{ "node": "Message Classification Unavailable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Message Classification (Cloud)": {
+      "main": [
+        [{ "node": "Has Invoice (Message Level)?", "type": "main", "index": 0 }],
+        [{ "node": "Message Classification Unavailable (Local AI)", "type": "main", "index": 0 }]
       ]
     },
     "Classify Message Locally": {
@@ -923,7 +1244,26 @@
     },
     "Build Vision Classification Request (Local)": {
       "main": [
-        [{ "node": "Classify Attachment Locally", "type": "main", "index": 0 }]
+        [{ "node": "Check Flow 0 Classification Profile (Attachment)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Flow 0 Classification Profile (Attachment)": {
+      "main": [
+        [{ "node": "Classify Attachment via Cloud (Gemini)", "type": "main", "index": 0 }],
+        [{ "node": "Classify Attachment Locally", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Classification Profile Not Configured", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classify Attachment via Cloud (Gemini)": {
+      "main": [
+        [{ "node": "Parse Attachment Classification (Cloud)", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Not Classifiable (Local AI)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Attachment Classification (Cloud)": {
+      "main": [
+        [{ "node": "Filter Invoices", "type": "main", "index": 0 }],
+        [{ "node": "Attachment Not Classifiable (Local AI)", "type": "main", "index": 0 }]
       ]
     },
     "Classify Attachment Locally": {
@@ -985,6 +1325,12 @@
     },
     "Ingest Result to TCMS (Structured)": {
       "main": [
+        [{ "node": "Verify TCMS Ingestion Response (Structured)", "type": "main", "index": 0 }],
+        [{ "node": "TCMS Ingestion Failed (Structured)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verify TCMS Ingestion Response (Structured)": {
+      "main": [
         [{ "node": "End Workflow", "type": "main", "index": 0 }],
         [{ "node": "TCMS Ingestion Failed (Structured)", "type": "main", "index": 0 }]
       ]
@@ -1007,6 +1353,12 @@
       ]
     },
     "Ingest Result to TCMS (OCR)": {
+      "main": [
+        [{ "node": "Verify TCMS Ingestion Response (OCR)", "type": "main", "index": 0 }],
+        [{ "node": "TCMS Ingestion Failed (OCR)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verify TCMS Ingestion Response (OCR)": {
       "main": [
         [{ "node": "End Workflow", "type": "main", "index": 0 }],
         [{ "node": "TCMS Ingestion Failed (OCR)", "type": "main", "index": 0 }]
